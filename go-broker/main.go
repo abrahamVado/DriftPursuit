@@ -1,20 +1,29 @@
 package main
 
 import (
+	"flag"
 	"fmt"
 	"log"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"sync"
 	"time"
 
 	"github.com/gorilla/websocket"
 )
 
-var upgrader = websocket.Upgrader{
-	CheckOrigin: func(r *http.Request) bool { return true },
+// Will be configured in main() after parsing flags/env.
+var upgrader = websocket.Upgrader{}
+
+// Always allow localhost for dev convenience.
+var localHosts = map[string]struct{}{
+	"127.0.0.1": {},
+	"localhost": {},
+	"::1":       {},
 }
 
 type Client struct {
@@ -54,6 +63,63 @@ func (b *Broker) broadcast(msg []byte) {
 	}
 }
 
+// --- Origin allowlist helpers ---
+
+func parseAllowedOrigins(raw string) []string {
+	parts := strings.Split(raw, ",")
+	origins := make([]string, 0, len(parts))
+	for _, part := range parts {
+		origin := strings.TrimSpace(part)
+		if origin == "" {
+			continue
+		}
+		origins = append(origins, origin)
+	}
+	return origins
+}
+
+func buildOriginChecker(allowlist []string) func(*http.Request) bool {
+	allowed := make(map[string]struct{}, len(allowlist))
+	for _, origin := range allowlist {
+		u, err := url.Parse(origin)
+		if err != nil || u.Scheme == "" || u.Host == "" {
+			log.Printf("ignoring invalid allowed origin %q: %v", origin, err)
+			continue
+		}
+		key := strings.ToLower(u.Scheme + "://" + u.Host)
+		allowed[key] = struct{}{}
+	}
+
+	return func(r *http.Request) bool {
+		originHeader := r.Header.Get("Origin")
+		if originHeader == "" {
+			// No Origin usually means non-browser client; reject by default.
+			return false
+		}
+
+		originURL, err := url.Parse(originHeader)
+		if err != nil || originURL.Host == "" {
+			log.Printf("rejecting request with invalid origin %q: %v", originHeader, err)
+			return false
+		}
+
+		// Always allow localhost for dev workflows.
+		if _, ok := localHosts[originURL.Hostname()]; ok {
+			return true
+		}
+
+		key := strings.ToLower(originURL.Scheme + "://" + originURL.Host)
+		if _, ok := allowed[key]; ok {
+			return true
+		}
+
+		log.Printf("rejecting request from disallowed origin %q", originHeader)
+		return false
+	}
+}
+
+// --- WS handler ---
+
 func (b *Broker) serveWS(w http.ResponseWriter, r *http.Request) {
 	conn, err := upgrader.Upgrade(w, r, nil)
 	if err != nil {
@@ -61,6 +127,7 @@ func (b *Broker) serveWS(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	client := &Client{conn: conn, send: make(chan []byte, 256), id: r.RemoteAddr}
+
 	b.lock.Lock()
 	b.clients[client] = true
 	b.lock.Unlock()
@@ -77,14 +144,13 @@ func (b *Broker) serveWS(w http.ResponseWriter, r *http.Request) {
 				log.Println("read error:", err)
 				break
 			}
-			// relay to all clients
 			b.broadcast(msg)
 		}
 	}()
 
 	// writer (handles errors + periodic ping)
 	go func() {
-		ticker := time.NewTicker(time.Second * 30)
+		ticker := time.NewTicker(30 * time.Second)
 		defer func() {
 			ticker.Stop()
 			_ = client.conn.Close()
@@ -112,10 +178,26 @@ func (b *Broker) serveWS(w http.ResponseWriter, r *http.Request) {
 	}()
 }
 
+// --- main / static viewer resolution ---
+
 func main() {
+	allowedOriginsDefault := os.Getenv("BROKER_ALLOWED_ORIGINS")
+	allowedOriginsFlag := flag.String("allowed-origins", allowedOriginsDefault, "Comma-separated list of allowed origins for WebSocket connections")
+	addr := flag.String("addr", ":8080", "address to listen on")
+	flag.Parse()
+
+	allowlist := parseAllowedOrigins(*allowedOriginsFlag)
+	upgrader.CheckOrigin = buildOriginChecker(allowlist)
+	if len(allowlist) > 0 {
+		log.Printf("allowing WebSocket origins: %s", strings.Join(allowlist, ", "))
+	} else {
+		log.Println("no allowed origins configured; permitting only local development origins")
+	}
+
 	b := NewBroker()
 	http.HandleFunc("/ws", b.serveWS)
-	// serve viewer static files
+
+	// serve viewer static files (resolve relative to this source file)
 	viewerDir, err := resolveViewerDir()
 	if err != nil {
 		log.Fatalf("resolve viewer directory: %v", err)
@@ -123,9 +205,8 @@ func main() {
 	fs := http.FileServer(http.Dir(viewerDir))
 	http.Handle("/viewer/", http.StripPrefix("/viewer/", fs))
 
-	addr := ":8080"
-	fmt.Println("Broker listening on", addr)
-	log.Fatal(http.ListenAndServe(addr, nil))
+	fmt.Println("Broker listening on", *addr)
+	log.Fatal(http.ListenAndServe(*addr, nil))
 }
 
 func resolveViewerDir() (string, error) {
