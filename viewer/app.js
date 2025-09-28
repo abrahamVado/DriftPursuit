@@ -51,6 +51,8 @@ function initThree(){
     renderer.setSize(window.innerWidth, window.innerHeight);
     document.body.appendChild(renderer.domElement);
 
+    window.addEventListener('resize', onWindowResize);
+
     // lights
     const hemi = new THREE.HemisphereLight(0xffffff, 0x444444, 1.0);
     hemi.position.set(0, 200, 0); scene.add(hemi);
@@ -62,6 +64,14 @@ function initThree(){
     scene.add(grid);
 
     animate();
+}
+
+function onWindowResize(){
+    const width = window.innerWidth;
+    const height = window.innerHeight;
+    camera.aspect = width / height;
+    camera.updateProjectionMatrix();
+    renderer.setSize(width, height);
 }
 
 function animate(){
