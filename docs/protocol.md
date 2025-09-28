@@ -52,6 +52,32 @@ At least one of the following fields must be supplied:
 * ``params.acceleration`` – acceleration magnitude applied while ramping up to
   ``max_speed``.
 
+### ``manual_override``
+
+Enables or disables manual flight overrides sourced from the viewer. The
+browser emits this command whenever keyboard or HUD inputs change so the
+simulator can suspend the autopilot and adopt the requested velocity/attitude.
+
+Required fields:
+
+* ``params.enabled`` – boolean flag indicating whether manual override should
+  be active.
+
+Conditional fields (required when ``params.enabled`` is ``true``):
+
+* ``params.velocity`` – desired ``[vx, vy, vz]`` velocity vector in simulation
+  units. Values follow the same coordinate system as telemetry payloads.
+
+Optional fields:
+
+* ``params.orientation`` – explicit ``[yaw, pitch, roll]`` Euler angles (in
+  radians). When omitted the simulator derives orientation from the velocity
+  vector for smoother blending.
+
+While an override is active the simulator adds the ``manual:override`` tag to
+its telemetry payloads so downstream consumers (like the viewer HUD) can render
+appropriate feedback.
+
 ## Command acknowledgements
 
 Every command elicits a ``command_status`` message. ``status`` is ``"ok"`` for
@@ -65,7 +91,9 @@ Example:
   "detail":"updated flight path", "result":{"waypoint_count":4,
   "loop":true, "arrival_tolerance":80.0} }
 
-The broker simply relays messages to all connected clients in this starter.
+The broker simply relays messages to all connected clients in this starter and
+forwards command payloads without modifying their JSON structure, preserving any
+application-specific fields the viewer includes.
 
 ## Broker liveness
 

@@ -53,7 +53,7 @@ def test_process_pending_commands_handles_drop_cake():
     plane, planner, cruise, ws, queue = _build_sim_context()
     queue.put({"type": "command", "cmd": "drop_cake", "from": "tester", "params": {}})
 
-    client.process_pending_commands(plane, planner, cruise, ws, queue)
+    client.process_pending_commands(plane, planner, cruise, ws, queue, None)
 
     assert len(ws.sent_messages) == 2
     cake = json.loads(ws.sent_messages[0])
@@ -75,7 +75,7 @@ def test_set_waypoints_command_updates_planner():
         }
     )
 
-    client.process_pending_commands(plane, planner, cruise, ws, queue)
+    client.process_pending_commands(plane, planner, cruise, ws, queue, None)
 
     target = planner.current_target()
     assert (target.x, target.y, target.z) == (10.0, 20.0, 30.0)
@@ -98,7 +98,7 @@ def test_set_speed_command_updates_cruise_controller():
         }
     )
 
-    client.process_pending_commands(plane, planner, cruise, ws, queue)
+    client.process_pending_commands(plane, planner, cruise, ws, queue, None)
 
     assert cruise.max_speed == 310
     assert cruise.acceleration == 25
