@@ -1,9 +1,12 @@
-# python-sim/client.py
-# Minimal simulation client that sends telemetry and occasional cake_drop messages to ws://localhost:8080/ws
+"""Minimal simulation client that sends telemetry to a DriftPursuit broker.
+
+The client can optionally persist every telemetry and cake_drop payload to a log
+file using ``--log-file`` (defaulting to JSON Lines output).
+"""
 
 import argparse
 import os
-from typing import Optional
+from typing import Callable, Optional
 import json
 import random
 import threading
@@ -19,6 +22,29 @@ from navigation import CruiseController, FlightPathPlanner, build_default_waypoi
 DEFAULT_WS_URL = "ws://localhost:8080/ws"
 TICK = 1.0 / 30.0
 ORIGIN_ENV_VAR = "SIM_ORIGIN"
+
+PayloadLogger = Callable[[str], None]
+
+
+def make_payload_logger(handle, log_format: str = "jsonl") -> PayloadLogger:
+    """Return a callable that appends payloads to ``handle`` using ``log_format``."""
+
+    normalized_format = (log_format or "jsonl").lower()
+
+    def _logger(payload: str) -> None:
+        if handle is None:
+            return
+
+        if normalized_format == "jsonl":
+            handle.write(payload.rstrip("\n") + "\n")
+        else:
+            if payload.endswith("\n"):
+                handle.write(payload)
+            else:
+                handle.write(payload + "\n")
+        handle.flush()
+
+    return _logger
 
 
 class Plane:
@@ -89,16 +115,18 @@ def receiver_loop(ws, command_queue, stop_event: threading.Event):
     stop_event.set()
 
 
-def process_pending_commands(plane, ws, command_queue: Queue):
+def process_pending_commands(
+    plane, ws, command_queue: Queue, payload_logger: Optional[PayloadLogger]
+):
     while True:
         try:
             command = command_queue.get_nowait()
         except Empty:
             break
-        handle_command(command, plane, ws)
+        handle_command(command, plane, ws, payload_logger)
 
 
-def handle_command(command, plane, ws):
+def handle_command(command, plane, ws, payload_logger: Optional[PayloadLogger]):
     cmd_name = command.get("cmd")
     cmd_from = command.get("from")
     print(f"Handling command '{cmd_name}' from '{cmd_from}' with payload: {command}")
@@ -106,7 +134,10 @@ def handle_command(command, plane, ws):
     if cmd_name == "drop_cake":
         landing_override = command.get("params", {}).get("landing_pos")
         try:
-            ws.send(mk_cake_drop(plane, landing_override))
+            payload = mk_cake_drop(plane, landing_override)
+            ws.send(payload)
+            if payload_logger:
+                payload_logger(payload)
             print("Handled drop_cake command: dispatched cake_drop message")
         except Exception as exc:
             print("Failed to send cake_drop in response to command:", exc)
@@ -114,7 +145,12 @@ def handle_command(command, plane, ws):
         print(f"No handler for command '{cmd_name}', ignoring")
 
 
-def run(ws_url: str, origin: Optional[str] = None):
+def run(
+    ws_url: str,
+    origin: Optional[str] = None,
+    log_file: Optional[str] = None,
+    log_format: str = "jsonl",
+):
     print("Connecting to", ws_url)
     p = Plane("plane-1", x=0, y=0, z=1200, speed=140.0)
     p.tags.append("pastel:turquoise")
@@ -131,92 +167,113 @@ def run(ws_url: str, origin: Optional[str] = None):
     max_backoff = 10.0
     should_stop = False
 
-    while not should_stop:
-        ws = None
-        stop_event = threading.Event()
-        command_queue: Queue = Queue()
-        receiver: Optional[threading.Thread] = None
+    log_handle = None
+    payload_logger: Optional[PayloadLogger] = None
 
-        try:
-            connect_kwargs = {}
-            if origin:
-                connect_kwargs["origin"] = origin
-                print("Using origin", origin)
+    try:
+        if log_file:
+            log_handle = open(log_file, "a", encoding="utf-8")
+            payload_logger = make_payload_logger(log_handle, log_format)
 
-            print("Connecting to", ws_url)
-            ws = create_connection(ws_url, **connect_kwargs)
-            print("Connected to", ws_url)
-            backoff = 1.0
+        while not should_stop:
+            ws = None
+            stop_event = threading.Event()
+            command_queue: Queue = Queue()
+            receiver: Optional[threading.Thread] = None
 
-            # Start background receiver
-            receiver = threading.Thread(target=receiver_loop, args=(ws, command_queue, stop_event), daemon=True)
-            receiver.start()
+            try:
+                connect_kwargs = {}
+                if origin:
+                    connect_kwargs["origin"] = origin
+                    print("Using origin", origin)
 
-            while not stop_event.is_set():
-                t = time.time() - t0
-                # Update the autopilot before moving the aircraft so the
-                # telemetry matches the controls shown in the viewer.
-                desired_direction = planner.tick(p.pos, TICK)
-                p.vel = cruise.apply(p.vel, desired_direction, TICK)
-                p.ori = list(CruiseController.orientation_from_velocity(p.vel))
-                p.step(TICK)
+                print("Connecting to", ws_url)
+                ws = create_connection(ws_url, **connect_kwargs)
+                print("Connected to", ws_url)
+                backoff = 1.0
 
-                # Handle incoming commands from broker
-                process_pending_commands(p, ws, command_queue)
+                # Start background receiver
+                receiver = threading.Thread(target=receiver_loop, args=(ws, command_queue, stop_event), daemon=True)
+                receiver.start()
 
-                # Send telemetry
-                try:
-                    ws.send(mk_telemetry(p, t))
-                except WebSocketConnectionClosedException:
-                    print("Connection closed while sending telemetry")
-                    raise
+                while not stop_event.is_set():
+                    t = time.time() - t0
+                    # Update the autopilot before moving the aircraft so the
+                    # telemetry matches the controls shown in the viewer.
+                    desired_direction = planner.tick(p.pos, TICK)
+                    p.vel = cruise.apply(p.vel, desired_direction, TICK)
+                    p.ori = list(CruiseController.orientation_from_velocity(p.vel))
+                    p.step(TICK)
 
-                # Occasional cake drop
-                if (t - last_cake) > 8.0 and random.random() < 0.02:
-                    last_cake = t
+                    # Handle incoming commands from broker
+                    process_pending_commands(p, ws, command_queue, payload_logger)
+
+                    # Send telemetry
                     try:
-                        cake_msg = mk_cake_drop(p)
-                        ws.send(cake_msg)
-                        print("Sent cake_drop", cake_msg)
+                        payload = mk_telemetry(p, t)
+                        ws.send(payload)
+                        if payload_logger:
+                            payload_logger(payload)
                     except WebSocketConnectionClosedException:
-                        print("Connection closed while sending cake_drop")
+                        print("Connection closed while sending telemetry")
                         raise
-                    except Exception as e:
-                        print("send cake err", e)
 
-                time.sleep(TICK)
+                    # Occasional cake drop
+                    if (t - last_cake) > 8.0 and random.random() < 0.02:
+                        last_cake = t
+                        try:
+                            cake_msg = mk_cake_drop(p)
+                            ws.send(cake_msg)
+                            if payload_logger:
+                                payload_logger(cake_msg)
+                            print("Sent cake_drop", cake_msg)
+                        except WebSocketConnectionClosedException:
+                            print("Connection closed while sending cake_drop")
+                            raise
+                        except Exception as e:
+                            print("send cake err", e)
 
-        except KeyboardInterrupt:
-            print("Stopping client")
-            should_stop = True
-        except WebSocketConnectionClosedException:
-            print("Lost connection to server")
-        except Exception as e:
-            print("Connection error:", e)
-        finally:
-            # Signal receiver to stop and close socket
-            stop_event.set()
-            if ws is not None:
-                try:
-                    ws.close()
-                except Exception:
-                    pass
-            if receiver is not None:
-                receiver.join(timeout=1.0)
+                    time.sleep(TICK)
 
-        if should_stop:
-            break
+            except KeyboardInterrupt:
+                print("Stopping client")
+                should_stop = True
+            except WebSocketConnectionClosedException:
+                print("Lost connection to server")
+            except Exception as e:
+                print("Connection error:", e)
+            finally:
+                # Signal receiver to stop and close socket
+                stop_event.set()
+                if ws is not None:
+                    try:
+                        ws.close()
+                    except Exception:
+                        pass
+                if receiver is not None:
+                    receiver.join(timeout=1.0)
 
-        print(f"Reconnecting in {backoff:.1f}s...")
-        time.sleep(backoff)
-        backoff = min(backoff * 2, max_backoff)
+            if should_stop:
+                break
+
+            print(f"Reconnecting in {backoff:.1f}s...")
+            time.sleep(backoff)
+            backoff = min(backoff * 2, max_backoff)
+
+    finally:
+        if log_handle is not None:
+            try:
+                log_handle.flush()
+            finally:
+                log_handle.close()
 
 
 def parse_args():
     parser = argparse.ArgumentParser(
         description=(
             "Minimal simulation client that sends telemetry and occasional "
-            "cake_drop messages to a DriftPursuit broker."
+            "cake_drop messages to a DriftPursuit broker, optionally logging "
+            "each payload to disk."
         )
     )
     parser.add_argument(
@@ -232,6 +289,21 @@ def parse_args():
         help=(
             "HTTP(S) origin to send during the WebSocket handshake. Overrides "
             "the SIM_ORIGIN environment variable."
+        ),
+    )
+    parser.add_argument(
+        "--log-file",
+        help=(
+            "Append every telemetry and cake_drop payload to this file for "
+            "later inspection."
+        ),
+    )
+    parser.add_argument(
+        "--log-format",
+        default="jsonl",
+        help=(
+            "Format to use for log entries when --log-file is provided. "
+            "Defaults to jsonl."
         ),
     )
     return parser.parse_args()
@@ -276,4 +348,4 @@ if __name__ == '__main__':
     args = parse_args()
     ws_url = get_ws_url(args.broker_url)
     origin = get_origin(args.origin, ws_url)
-    run(ws_url, origin)
+    run(ws_url, origin, args.log_file, args.log_format)
