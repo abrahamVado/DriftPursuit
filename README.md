@@ -26,6 +26,16 @@ Follow these steps to bring the entire stack up locally on one machine:
    The broker will start on port `8080` and serve both HTTP and WebSocket traffic.
    A JSON summary of the broker status is exposed at `http://localhost:8080/api/stats`.
 
+   To enable HTTPS/WSS, provide a certificate and key (CLI flags take precedence over the matching environment variables):
+   ```bash
+   go run main.go --tls-cert=/path/to/cert.pem --tls-key=/path/to/key.pem
+   # or
+   export BROKER_TLS_CERT=/path/to/cert.pem
+   export BROKER_TLS_KEY=/path/to/key.pem
+   go run main.go
+   ```
+   With TLS enabled the viewer is available at `https://localhost:8080/viewer/index.html` and WebSocket clients should connect to `wss://localhost:8080/ws`.
+
 2. **Configure allowed WebSocket origins (optional but recommended when deploying):**
    - By default the broker accepts local origins such as `http://localhost` and `http://127.0.0.1` so development "just works".
    - Supply a comma-separated allow list through the CLI flag or environment variable when you need additional origins:
@@ -37,11 +47,23 @@ Follow these steps to bring the entire stack up locally on one machine:
      ```
    - The CLI flag takes precedence over the environment variable. Requests from origins not in the allow list (and not local) are rejected during the WebSocket upgrade.
 
-### Broker options
+      ### Broker options
 
-- **Maximum clients:** Limit concurrent WebSocket sessions with `--max-clients` (or `BROKER_MAX_CLIENTS`). The default is `256`; set it to `0` to allow unlimited clients. When the broker is at capacity, new connection attempts receive an HTTP 503 response and a log entry is emitted so operators can adjust the limit if needed.
+   - **Maximum clients:** Limit concurrent WebSocket sessions with `--max-clients` (or `BROKER_MAX_CLIENTS`). The default is `256`; set it to `0` to allow unlimited clients. When the broker is at capacity, new connection attempts receive an HTTP 503 response and a log entry is emitted so operators can adjust the limit if needed.
 
-3. **Run the Python simulation client** (publishes telemetry messages):
+3. **Adjust the inbound payload limit (optional):**
+   - The broker rejects individual WebSocket messages larger than **1 MiB** by default to prevent runaway publishers from exhausting memory.
+   - Override the limit with the CLI flag or the `BROKER_MAX_PAYLOAD_BYTES` environment variable when your protocol needs larger payloads:
+     ```bash
+     go run main.go -max-payload-bytes=2097152
+     # or
+     export BROKER_MAX_PAYLOAD_BYTES=2097152
+     go run main.go
+     ```
+   - As with other settings, the CLI flag takes precedence when both are supplied.
+
+4. **Run the Python simulation client** (publishes telemetry messages):
+
    ```bash
    cd python-sim
    python -m venv .venv
@@ -58,7 +80,7 @@ Follow these steps to bring the entire stack up locally on one machine:
    python client.py
    ```
 
-4. **Open the viewer** to visualize entities streaming from the simulation:
+5. **Open the viewer** to visualize entities streaming from the simulation:
    - Navigate to `http://localhost:8080/viewer/index.html` in your browser.
    - You should see the 3D scene update in real time as telemetry arrives.
 
