@@ -3,7 +3,7 @@
 
 import argparse
 import os
-from typing import Optional
+from typing import List, Optional, Sequence
 import json
 import random
 import threading
@@ -14,7 +14,13 @@ from urllib.parse import urlparse
 import numpy as np
 from websocket import create_connection, WebSocketConnectionClosedException
 
-from navigation import CruiseController, FlightPathPlanner, build_default_waypoints
+from navigation import (
+    CruiseController,
+    FlightPathPlanner,
+    Waypoint,
+    build_default_waypoints,
+    load_waypoints_from_file,
+)
 
 DEFAULT_WS_URL = "ws://localhost:8080/ws"
 TICK = 1.0 / 30.0
@@ -114,7 +120,20 @@ def handle_command(command, plane, ws):
         print(f"No handler for command '{cmd_name}', ignoring")
 
 
-def run(ws_url: str, origin: Optional[str] = None):
+def resolve_waypoints(waypoints: Optional[Sequence[Waypoint]]) -> List[Waypoint]:
+    """Return the waypoint list used by the autopilot."""
+
+    if waypoints is None:
+        return list(build_default_waypoints())
+    return list(waypoints)
+
+
+def run(
+    ws_url: str,
+    origin: Optional[str] = None,
+    *,
+    waypoints: Optional[Sequence[Waypoint]] = None,
+):
     print("Connecting to", ws_url)
     p = Plane("plane-1", x=0, y=0, z=1200, speed=140.0)
     p.tags.append("pastel:turquoise")
@@ -122,7 +141,8 @@ def run(ws_url: str, origin: Optional[str] = None):
 
     # Build a deterministic loop around the new scenic environment so the
     # aircraft continuously showcases the parallax of the buildings and trees.
-    planner = FlightPathPlanner(build_default_waypoints(), loop=True, arrival_tolerance=80.0)
+    waypoint_list = resolve_waypoints(waypoints)
+    planner = FlightPathPlanner(waypoint_list, loop=True, arrival_tolerance=80.0)
     cruise = CruiseController(acceleration=18.0, max_speed=250.0)
 
     t0 = time.time()
@@ -234,6 +254,13 @@ def parse_args():
             "the SIM_ORIGIN environment variable."
         ),
     )
+    parser.add_argument(
+        "--waypoints-file",
+        help=(
+            "Path to a JSON or YAML file describing a custom waypoint loop for the "
+            "autopilot."
+        ),
+    )
     return parser.parse_args()
 
 
@@ -276,4 +303,7 @@ if __name__ == '__main__':
     args = parse_args()
     ws_url = get_ws_url(args.broker_url)
     origin = get_origin(args.origin, ws_url)
-    run(ws_url, origin)
+    waypoints = None
+    if args.waypoints_file:
+        waypoints = load_waypoints_from_file(args.waypoints_file)
+    run(ws_url, origin, waypoints=waypoints)

@@ -79,6 +79,10 @@ Follow these steps to bring the entire stack up locally on one machine:
    export SIM_ORIGIN=https://example.com
    python client.py
    ```
+   To supply a custom autopilot loop, pass a waypoint file (see `docs/waypoints-format.md` for details):
+   ```bash
+   python client.py --waypoints-file path/to/loop.yaml
+   ```
 
 5. **Open the viewer** to visualize entities streaming from the simulation:
    - Navigate to `http://localhost:8080/viewer/index.html` in your browser.
