@@ -15,8 +15,8 @@ Quickstart (all on one machine)
    Broker listens on http://localhost:8080
 
 2. Start the Python sim client (telemetry producer):
-   - Create a virtualenv, install requirements: pip install -r requirements.txt
    - cd python-sim
+   - Create a virtualenv, install requirements: pip install -r requirements.txt
    - python client.py
    This connects to ws://localhost:8080/ws and sends telemetry & occasional cake_drop messages.
 
@@ -26,5 +26,5 @@ Quickstart (all on one machine)
 
 Notes & next steps
 - The viewer includes a placeholder box model for the plane; replace viewer/assets/models/plane.gltf with a realistic glTF model.
-- This starter is intentionally minimal to get you running quickly. Expand sim/world.py and the viewer to add more gameplay features (abilities, radar overlays, cake physics).
+- This starter is intentionally minimal to get you running quickly. Expand python-sim/ and the viewer to add more gameplay features (abilities, radar overlays, cake physics).
 - The message protocol is JSON over WebSocket. See docs/protocol.md for details.
