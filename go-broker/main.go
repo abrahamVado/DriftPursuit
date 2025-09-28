@@ -7,6 +7,8 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"time"
@@ -14,8 +16,10 @@ import (
 	"github.com/gorilla/websocket"
 )
 
+// Will be configured in main() after parsing flags/env.
 var upgrader = websocket.Upgrader{}
 
+// Always allow localhost for dev convenience.
 var localHosts = map[string]struct{}{
 	"127.0.0.1": {},
 	"localhost": {},
@@ -36,6 +40,30 @@ type Broker struct {
 func NewBroker() *Broker {
 	return &Broker{clients: make(map[*Client]bool)}
 }
+
+func (b *Broker) deregisterClient(client *Client) {
+	b.lock.Lock()
+	if _, exists := b.clients[client]; exists {
+		delete(b.clients, client)
+		close(client.send)
+	}
+	b.lock.Unlock()
+}
+
+func (b *Broker) broadcast(msg []byte) {
+	b.lock.Lock()
+	defer b.lock.Unlock()
+	for c := range b.clients {
+		select {
+		case c.send <- msg:
+		default:
+			close(c.send)
+			delete(b.clients, c)
+		}
+	}
+}
+
+// --- Origin allowlist helpers ---
 
 func parseAllowedOrigins(raw string) []string {
 	parts := strings.Split(raw, ",")
@@ -65,6 +93,7 @@ func buildOriginChecker(allowlist []string) func(*http.Request) bool {
 	return func(r *http.Request) bool {
 		originHeader := r.Header.Get("Origin")
 		if originHeader == "" {
+			// No Origin usually means non-browser client; reject by default.
 			return false
 		}
 
@@ -74,6 +103,7 @@ func buildOriginChecker(allowlist []string) func(*http.Request) bool {
 			return false
 		}
 
+		// Always allow localhost for dev workflows.
 		if _, ok := localHosts[originURL.Hostname()]; ok {
 			return true
 		}
@@ -88,18 +118,7 @@ func buildOriginChecker(allowlist []string) func(*http.Request) bool {
 	}
 }
 
-func (b *Broker) broadcast(msg []byte) {
-	b.lock.Lock()
-	defer b.lock.Unlock()
-	for c := range b.clients {
-		select {
-		case c.send <- msg:
-		default:
-			close(c.send)
-			delete(b.clients, c)
-		}
-	}
-}
+// --- WS handler ---
 
 func (b *Broker) serveWS(w http.ResponseWriter, r *http.Request) {
 	conn, err := upgrader.Upgrade(w, r, nil)
@@ -108,6 +127,7 @@ func (b *Broker) serveWS(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	client := &Client{conn: conn, send: make(chan []byte, 256), id: r.RemoteAddr}
+
 	b.lock.Lock()
 	b.clients[client] = true
 	b.lock.Unlock()
@@ -115,10 +135,8 @@ func (b *Broker) serveWS(w http.ResponseWriter, r *http.Request) {
 	// reader
 	go func() {
 		defer func() {
-			b.lock.Lock()
-			delete(b.clients, client)
-			b.lock.Unlock()
-			client.conn.Close()
+			b.deregisterClient(client)
+			_ = client.conn.Close()
 		}()
 		for {
 			_, msg, err := client.conn.ReadMessage()
@@ -126,17 +144,16 @@ func (b *Broker) serveWS(w http.ResponseWriter, r *http.Request) {
 				log.Println("read error:", err)
 				break
 			}
-			// relay to all clients
 			b.broadcast(msg)
 		}
 	}()
 
-	// writer
+	// writer (handles errors + periodic ping)
 	go func() {
-		ticker := time.NewTicker(time.Second * 30)
+		ticker := time.NewTicker(30 * time.Second)
 		defer func() {
 			ticker.Stop()
-			client.conn.Close()
+			_ = client.conn.Close()
 		}()
 		for {
 			select {
@@ -145,13 +162,23 @@ func (b *Broker) serveWS(w http.ResponseWriter, r *http.Request) {
 					_ = client.conn.WriteMessage(websocket.CloseMessage, []byte{})
 					return
 				}
-				_ = client.conn.WriteMessage(websocket.TextMessage, msg)
+				if err := client.conn.WriteMessage(websocket.TextMessage, msg); err != nil {
+					log.Println("write error:", err)
+					b.deregisterClient(client)
+					return
+				}
 			case <-ticker.C:
-				_ = client.conn.WriteMessage(websocket.PingMessage, []byte{})
+				if err := client.conn.WriteMessage(websocket.PingMessage, []byte{}); err != nil {
+					log.Println("ping error:", err)
+					b.deregisterClient(client)
+					return
+				}
 			}
 		}
 	}()
 }
+
+// --- main / static viewer resolution ---
 
 func main() {
 	allowedOriginsDefault := os.Getenv("BROKER_ALLOWED_ORIGINS")
@@ -169,10 +196,31 @@ func main() {
 
 	b := NewBroker()
 	http.HandleFunc("/ws", b.serveWS)
-	// serve viewer static files
-	fs := http.FileServer(http.Dir("./viewer"))
+
+	// serve viewer static files (resolve relative to this source file)
+	viewerDir, err := resolveViewerDir()
+	if err != nil {
+		log.Fatalf("resolve viewer directory: %v", err)
+	}
+	fs := http.FileServer(http.Dir(viewerDir))
 	http.Handle("/viewer/", http.StripPrefix("/viewer/", fs))
 
 	fmt.Println("Broker listening on", *addr)
 	log.Fatal(http.ListenAndServe(*addr, nil))
+}
+
+func resolveViewerDir() (string, error) {
+	_, currentFile, _, ok := runtime.Caller(0)
+	if !ok {
+		return "", fmt.Errorf("unable to determine current file path")
+	}
+	viewerDir := filepath.Join(filepath.Dir(currentFile), "..", "viewer")
+	viewerDir, err := filepath.Abs(viewerDir)
+	if err != nil {
+		return "", err
+	}
+	if _, err := os.Stat(viewerDir); err != nil {
+		return "", err
+	}
+	return viewerDir, nil
 }
