@@ -31,7 +31,7 @@ Follow these steps to bring the entire stack up locally on one machine:
    ```bash
    cd go-broker
    go mod tidy
-   go run main.go
+   go run .
    ```
    The broker will start on port `8080` and serve both HTTP and WebSocket traffic.
    A JSON summary of the broker status is exposed at `http://localhost:8080/api/stats`.
@@ -39,11 +39,11 @@ Follow these steps to bring the entire stack up locally on one machine:
 
    To enable HTTPS/WSS, provide a certificate and key (CLI flags take precedence over the matching environment variables):
    ```bash
-   go run main.go --tls-cert=/path/to/cert.pem --tls-key=/path/to/key.pem
+   go run . --tls-cert=/path/to/cert.pem --tls-key=/path/to/key.pem
    # or
    export BROKER_TLS_CERT=/path/to/cert.pem
    export BROKER_TLS_KEY=/path/to/key.pem
-   go run main.go
+   go run .
    ```
    With TLS enabled the viewer is available at `https://localhost:8080/viewer/index.html` and WebSocket clients should connect to `wss://localhost:8080/ws`.
 
@@ -51,10 +51,10 @@ Follow these steps to bring the entire stack up locally on one machine:
    - By default the broker accepts local origins such as `http://localhost` and `http://127.0.0.1` so development "just works".
    - Supply a comma-separated allow list through the CLI flag or environment variable when you need additional origins:
      ```bash
-     go run main.go -allowed-origins="http://localhost:5173,https://viewer.example.com"
+     go run . -allowed-origins="http://localhost:5173,https://viewer.example.com"
      # or
      export BROKER_ALLOWED_ORIGINS="https://viewer.example.com,https://tools.example.com"
-     go run main.go
+     go run .
      ```
    - The CLI flag takes precedence over the environment variable. Requests from origins not in the allow list (and not local) are rejected during the WebSocket upgrade.
 
@@ -66,10 +66,10 @@ Follow these steps to bring the entire stack up locally on one machine:
    - The broker rejects individual WebSocket messages larger than **1 MiB** by default to prevent runaway publishers from exhausting memory.
    - Override the limit with the CLI flag or the `BROKER_MAX_PAYLOAD_BYTES` environment variable when your protocol needs larger payloads:
      ```bash
-     go run main.go -max-payload-bytes=2097152
+     go run . -max-payload-bytes=2097152
      # or
      export BROKER_MAX_PAYLOAD_BYTES=2097152
-     go run main.go
+     go run .
      ```
    - As with other settings, the CLI flag takes precedence when both are supplied.
 
