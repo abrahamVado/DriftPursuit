@@ -126,6 +126,12 @@ Once everything is running locally, you can visit these URLs:
 | Broker statistics API | `http://localhost:8080/api/stats` |
 | Protocol documentation | `docs/protocol.md` (local file) |
 
+## Viewer connection banner
+
+The viewer now surfaces connection health directly in the HUD and exposes a **Reconnect** action when the WebSocket is interrupted. Error and disconnect states render a prominent banner across the top of the screen so operators can recover quickly without reloading the page.
+
+To document the feature for operators, capture an updated screenshot from a local build and attach it to your release notes or runbook as needed. The project intentionally avoids tracking large binary assets in Git, so add any reference imagery outside the repository (for example in your deployment docs wiki).
+
 ## Next Steps
 
 - Swap out `viewer/assets/models/plane.gltf` with a high-fidelity model or add additional assets.

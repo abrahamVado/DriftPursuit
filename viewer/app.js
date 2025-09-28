@@ -4,6 +4,9 @@ const MANUAL_BUTTON = document.getElementById('manual-toggle');
 const ACCELERATE_BUTTON = document.getElementById('accelerate-forward');
 const REROUTE_BUTTON = document.getElementById('reroute-waypoints');
 const CONTROL_INSTRUCTIONS_LIST = document.getElementById('control-instructions');
+const CONNECTION_BANNER = document.getElementById('connection-banner');
+const CONNECTION_BANNER_MESSAGE = document.getElementById('connection-banner-message');
+const CONNECTION_RECONNECT_BUTTON = document.getElementById('connection-reconnect');
 const WS_URL = (location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + '/ws';
 
 const PLANE_STALE_TIMEOUT_MS = 5000;
@@ -45,6 +48,42 @@ const NATURAL_DECEL = 35; // drag applied when thrust released
 const SCENE_TO_SIM_SCALE = { x: 2, y: 2, z: 50 };
 const MANUAL_VELOCITY_EPSILON = 0.5;
 const MANUAL_ORIENTATION_EPSILON = 0.005;
+
+const CONNECTION_STATUS_KEYS = {
+  CONNECTING: 'connecting',
+  CONNECTED: 'connected',
+  DISCONNECTED: 'disconnected',
+  ERROR: 'error',
+  RECONNECTING: 'reconnecting',
+};
+
+const UI_STRINGS = {
+  connectionStatus: {
+    connecting: {
+      label: 'Connecting…',
+      banner: 'Attempting to reach the broker.',
+    },
+    connected: {
+      label: 'Connected to broker',
+      banner: '',
+    },
+    disconnected: {
+      label: 'Connection lost',
+      banner: 'The viewer lost contact with the broker. Try reconnecting.',
+    },
+    error: {
+      label: 'Connection error',
+      banner: 'The broker connection encountered an error. Retry when ready.',
+    },
+    reconnecting: {
+      label: 'Reconnecting…',
+      banner: 'Trying to restore the connection.',
+    },
+  },
+  buttons: {
+    reconnect: 'Reconnect',
+  },
+};
 
 const manualOverrideStateByPlane = new Map();
 const DEFAULT_CONTROL_DOCS = [
@@ -101,7 +140,8 @@ const planeResources = new Map();
 const pressedKeys = new Set();
 let manualControlEnabled = false;
 let manualMovementActive = false;
-let connectionStatus = 'Connecting…';
+let connectionStatusKey = CONNECTION_STATUS_KEYS.CONNECTING;
+let connectionStatus = getConnectionStatusLabel(connectionStatusKey);
 let lastFrameTime = null;
 let accelerationEngaged = false;
 let forwardSpeed = 0;
@@ -144,6 +184,13 @@ const AUTOPILOT_PRESETS = [
   },
 ];
 
+if (CONNECTION_RECONNECT_BUTTON){
+  CONNECTION_RECONNECT_BUTTON.textContent = UI_STRINGS.buttons.reconnect;
+  CONNECTION_RECONNECT_BUTTON.addEventListener('click', () => {
+    reconnectToBroker();
+  });
+}
+
 updateHudStatus();
 wireButtonHandlers();
 loadControlDocs();
@@ -154,18 +201,71 @@ window.addEventListener('keyup', handleKeyUp);
 initThree();
 if (SELECTED_MODEL_SET.type === 'procedural' || gltfLoader) beginAircraftLoad();
 
-let socket = new WebSocket(WS_URL);
-socket.addEventListener('open', ()=>{
-  connectionStatus = 'Connected to broker';
-  updateHudStatus();
+let socket = null;
+establishSocketConnection();
+
+function establishSocketConnection(options = {}){
+  const previous = socket;
+  const ws = new WebSocket(WS_URL);
+  bindSocketEvents(ws);
+  socket = ws;
+
+  const nextStatus = options.isReconnect
+    ? CONNECTION_STATUS_KEYS.RECONNECTING
+    : CONNECTION_STATUS_KEYS.CONNECTING;
+  setConnectionStatus(nextStatus);
+
+  if (previous && previous !== ws && previous.readyState !== WebSocket.CLOSING && previous.readyState !== WebSocket.CLOSED){
+    try {
+      previous.close(1000, 'replaced-by-new-connection');
+    } catch (err) {
+      console.warn('Failed to close previous socket', err);
+    }
+  }
+
+  return ws;
+}
+
+function reconnectToBroker(){
+  establishSocketConnection({ isReconnect: true });
+}
+
+function bindSocketEvents(ws){
+  if (!ws) return;
+  ws.addEventListener('open', handleSocketOpen);
+  ws.addEventListener('message', handleSocketMessage);
+  ws.addEventListener('close', handleSocketClose);
+  ws.addEventListener('error', handleSocketError);
+}
+
+function handleSocketOpen(){
+  if (this !== socket) return;
+  setConnectionStatus(CONNECTION_STATUS_KEYS.CONNECTED);
   syncCruiseControllerTarget({ forceBaseline: true });
-});
-socket.addEventListener('message', (ev)=>{
-  try{
+}
+
+function handleSocketMessage(ev){
+  if (this !== socket) return;
+  try {
     const msg = JSON.parse(ev.data);
     handleMsg(msg);
-  }catch(e){ console.warn('bad msg', e); }
-});
+  } catch (err) {
+    console.warn('bad msg', err);
+  }
+}
+
+function handleSocketClose(){
+  if (this !== socket) return;
+  const nextStatus = connectionStatusKey === CONNECTION_STATUS_KEYS.ERROR
+    ? CONNECTION_STATUS_KEYS.ERROR
+    : CONNECTION_STATUS_KEYS.DISCONNECTED;
+  setConnectionStatus(nextStatus);
+}
+
+function handleSocketError(){
+  if (this !== socket) return;
+  setConnectionStatus(CONNECTION_STATUS_KEYS.ERROR);
+}
 
 function handleMsg(msg){
   if (msg.type === 'telemetry'){
@@ -1036,17 +1136,68 @@ function clamp(value, min, max){
 }
 
 function updateHudStatus(){
-  if (!HUD) return;
-  const controlMode = manualControlEnabled
-    ? `Manual ${manualMovementActive ? '(active)' : '(idle)'}`
-    : 'Telemetry';
-  const accelLabel = accelerationEngaged
-    ? `Forward acceleration: ON (${forwardSpeed.toFixed(0)} u/s)`
-    : 'Forward acceleration: off';
-  const simOverrideLabel = simManualOverrideActive
-    ? 'Simulator override: MANUAL'
-    : 'Simulator override: autopilot';
-  HUD.innerText = `${connectionStatus}\nMode: ${controlMode}\nModel set: ${MODEL_SET_LABEL}\n${accelLabel}\n${simOverrideLabel}\n[M] toggle manual · [T] toggle thrust · WASD/RF move · QE yaw · arrows pitch/roll`;
+  if (HUD){
+    const controlMode = manualControlEnabled
+      ? `Manual ${manualMovementActive ? '(active)' : '(idle)'}`
+      : 'Telemetry';
+    const accelLabel = accelerationEngaged
+      ? `Forward acceleration: ON (${forwardSpeed.toFixed(0)} u/s)`
+      : 'Forward acceleration: off';
+    const simOverrideLabel = simManualOverrideActive
+      ? 'Simulator override: MANUAL'
+      : 'Simulator override: autopilot';
+    HUD.innerText = `${connectionStatus}\nMode: ${controlMode}\nModel set: ${MODEL_SET_LABEL}\n${accelLabel}\n${simOverrideLabel}\n[M] toggle manual · [T] toggle thrust · WASD/RF move · QE yaw · arrows pitch/roll`;
+  }
+  updateConnectionBanner();
+}
+
+function updateConnectionBanner(){
+  if (!CONNECTION_BANNER) return;
+  const shouldShow = connectionStatusKey === CONNECTION_STATUS_KEYS.ERROR
+    || connectionStatusKey === CONNECTION_STATUS_KEYS.DISCONNECTED
+    || connectionStatusKey === CONNECTION_STATUS_KEYS.RECONNECTING;
+
+  if (shouldShow){
+    CONNECTION_BANNER.removeAttribute('hidden');
+  } else {
+    CONNECTION_BANNER.setAttribute('hidden', '');
+  }
+
+  if (CONNECTION_BANNER_MESSAGE){
+    const bannerCopy = getConnectionStatusBanner(connectionStatusKey) || connectionStatus;
+    CONNECTION_BANNER_MESSAGE.textContent = bannerCopy || connectionStatus;
+  }
+
+  if (CONNECTION_RECONNECT_BUTTON){
+    CONNECTION_RECONNECT_BUTTON.textContent = UI_STRINGS.buttons.reconnect;
+    CONNECTION_RECONNECT_BUTTON.disabled = connectionStatusKey === CONNECTION_STATUS_KEYS.RECONNECTING;
+  }
+
+  CONNECTION_BANNER.dataset.status = connectionStatusKey;
+}
+
+function setConnectionStatus(statusKey){
+  if (!statusKey) return;
+  connectionStatusKey = statusKey;
+  connectionStatus = getConnectionStatusLabel(statusKey);
+  updateHudStatus();
+}
+
+function getConnectionStatusCopy(statusKey, field){
+  const fallback = UI_STRINGS.connectionStatus[CONNECTION_STATUS_KEYS.CONNECTING] || {};
+  const entry = UI_STRINGS.connectionStatus[statusKey] || fallback;
+  const value = entry && field ? entry[field] : null;
+  if (typeof value === 'string' && value.length) return value;
+  const fallbackValue = fallback && field ? fallback[field] : null;
+  return typeof fallbackValue === 'string' ? fallbackValue : '';
+}
+
+function getConnectionStatusLabel(statusKey){
+  return getConnectionStatusCopy(statusKey, 'label');
+}
+
+function getConnectionStatusBanner(statusKey){
+  return getConnectionStatusCopy(statusKey, 'banner');
 }
 
 function wireButtonHandlers(){
