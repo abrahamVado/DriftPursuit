@@ -3,35 +3,66 @@ const HUD = document.getElementById('hud');
 const WS_URL = (location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + '/ws';
 
 const PLANE_STALE_TIMEOUT_MS = 5000;
+const MOVEMENT_KEY_CODES = new Set([
+  'KeyW','KeyA','KeyS','KeyD',      // planar translation
+  'KeyR','KeyF',                    // altitude adjustments
+  'Space','ShiftLeft','ShiftRight', // optional vertical control keys
+  'KeyQ','KeyE',                    // yaw
+  'ArrowUp','ArrowDown',            // pitch
+  'ArrowLeft','ArrowRight'          // roll
+]);
+const TRANSLATION_SPEED = 80; // units/sec (scene coords)
+const ALTITUDE_SPEED = 60;
+const ROTATION_SPEED = Math.PI / 3; // rad/sec
+const MIN_ALTITUDE = 0;
+const MAX_ALTITUDE = 400;
+const MAX_DISTANCE = 1000;
+const MAX_ROLL = Math.PI * 0.75;
+const MAX_PITCH = Math.PI * 0.5;
 
 let scene, camera, renderer;
 const planeMeshes = new Map();   // id -> THREE.Object3D
 const planeLastSeen = new Map(); // id -> timestamp
 let currentFollowId = null;
 let cakes = {};
+
+// ----- Aircraft model (optional GLTF) -----
 const MODEL_PATH = 'assets/models/high_fidelity_aircraft.gltf';
 let gltfLoader = null;
 let aircraftLoadError = false;
 try {
-  if (typeof THREE !== 'undefined' && typeof THREE.GLTFLoader === 'function'){
+  if (typeof THREE !== 'undefined' && typeof THREE.GLTFLoader === 'function') {
     gltfLoader = new THREE.GLTFLoader();
   } else {
-    console.warn('GLTFLoader helper unavailable; falling back to primitive aircraft mesh.');
+    console.warn('GLTFLoader not found; will use fallback mesh.');
     aircraftLoadError = true;
   }
-} catch (err){
-  console.warn('Failed to initialize GLTFLoader; using fallback mesh.', err);
+} catch (err) {
+  console.warn('Failed to init GLTFLoader; using fallback mesh.', err);
   aircraftLoadError = true;
 }
 let aircraftTemplate = null;
 let aircraftLoadPromise = null;
 const pendingTelemetry = [];
 const planeResources = new Map();
+
+// ----- Manual control / HUD state -----
+const pressedKeys = new Set();
+let manualControlEnabled = false;
+let manualMovementActive = false;
+let connectionStatus = 'Connecting…';
+let lastFrameTime = null;
+
+updateHudStatus();
+
+window.addEventListener('keydown', handleKeyDown);
+window.addEventListener('keyup', handleKeyUp);
+
 initThree();
 if (gltfLoader) beginAircraftLoad();
 
 let socket = new WebSocket(WS_URL);
-socket.addEventListener('open', ()=>{ if (HUD) HUD.innerText = 'Connected to broker'; });
+socket.addEventListener('open', ()=>{ connectionStatus = 'Connected to broker'; updateHudStatus(); });
 socket.addEventListener('message', (ev)=>{
   try{
     const msg = JSON.parse(ev.data);
@@ -57,24 +88,31 @@ function handleMsg(msg){
       planeMeshes.set(id, mesh);
       planeResources.set(id, { geometries, materials, textures });
       scene.add(mesh);
-      if (!currentFollowId) currentFollowId = id; // follow first seen plane by default
+      if (!currentFollowId) currentFollowId = id; // follow first seen plane
     }
-    // update position (map sim coords to scene; z up)
-    mesh.position.set(p[0]/2, p[1]/2, p[2]/50);
+
+    const targetPosition = new THREE.Vector3(p[0]/2, p[1]/2, p[2]/50);
 
     // optional orientation: [yaw, pitch, roll]
     const o = msg.ori;
-    if (Array.isArray(o) && o.length === 3){
-      const [yaw, pitch, roll] = o;
-      // Using ZYX order: yaw (Z), pitch (Y), roll (X)
-      const euler = new THREE.Euler(roll, pitch, yaw, 'ZYX');
-      mesh.setRotationFromEuler(euler);
+    const shouldApplyTelemetry = !(manualControlEnabled && currentFollowId === id);
+
+    if (shouldApplyTelemetry){
+      // update position (map sim coords to scene; z up)
+      mesh.position.copy(targetPosition);
+
+      if (Array.isArray(o) && o.length === 3){
+        const [yaw, pitch, roll] = o;
+        // Using ZYX order: yaw (Z), pitch (Y), roll (X)
+        const euler = new THREE.Euler(roll, pitch, yaw, 'ZYX');
+        mesh.setRotationFromEuler(euler);
+      }
     }
 
     planeLastSeen.set(id, performance.now());
 
-    // update camera only if we're following this plane
-    if (currentFollowId === id) updateCameraTarget(mesh);
+    // update camera only if we're following this plane and telemetry was applied
+    if (currentFollowId === id && shouldApplyTelemetry) updateCameraTarget(mesh);
 
   } else if (msg.type === 'cake_drop'){
     // create simple sphere at landing_pos and remove after a while
@@ -93,13 +131,9 @@ function handleMsg(msg){
 function beginAircraftLoad(){
   if (!gltfLoader){
     aircraftLoadError = true;
-    if (pendingTelemetry.length){
-      const queued = pendingTelemetry.splice(0, pendingTelemetry.length);
-      queued.forEach((queuedMsg) => handleMsg(queuedMsg));
-    }
+    flushPendingTelemetry();
     return null;
   }
-
   if (aircraftTemplate || aircraftLoadPromise || aircraftLoadError) return aircraftLoadPromise;
 
   aircraftLoadPromise = new Promise((resolve, reject) => {
@@ -112,33 +146,30 @@ function beginAircraftLoad(){
         }
       });
       resolve(aircraftTemplate);
-    }, undefined, (err) => {
-      reject(err);
-    });
+    }, undefined, (err) => reject(err));
   });
 
   aircraftLoadPromise.then(() => {
-    if (pendingTelemetry.length){
-      const queued = pendingTelemetry.splice(0, pendingTelemetry.length);
-      queued.forEach((queuedMsg) => handleMsg(queuedMsg));
-    }
+    flushPendingTelemetry();
   }).catch((err) => {
     aircraftLoadError = true;
     console.error('Failed to load aircraft model', err);
-    if (pendingTelemetry.length){
-      const queued = pendingTelemetry.splice(0, pendingTelemetry.length);
-      queued.forEach((queuedMsg) => handleMsg(queuedMsg));
-    }
+    flushPendingTelemetry();
   });
 
   return aircraftLoadPromise;
+}
+
+function flushPendingTelemetry(){
+  if (!pendingTelemetry.length) return;
+  const queued = pendingTelemetry.splice(0, pendingTelemetry.length);
+  queued.forEach((queuedMsg) => handleMsg(queuedMsg));
 }
 
 function createAircraftInstance(){
   if (!aircraftTemplate){
     return createFallbackInstance();
   }
-
   const clone = aircraftTemplate.clone(true);
   const geometries = [];
   const materials = [];
@@ -182,7 +213,6 @@ function createAircraftInstance(){
 
   clone.scale.set(0.25, 0.25, 0.25);
   clone.name = 'AircraftInstance';
-
   return { object: clone, geometries, materials, textures };
 }
 
@@ -201,26 +231,17 @@ function disposePlaneResources(id){
   const resources = planeResources.get(id);
   if (resources){
     if (Array.isArray(resources.geometries)){
-      resources.geometries.forEach((geom) => {
-        if (geom && geom.dispose){ geom.dispose(); }
-      });
+      resources.geometries.forEach((g) => g?.dispose && g.dispose());
     }
     if (Array.isArray(resources.materials)){
-      resources.materials.forEach((mat) => {
-        if (!mat) return;
-        if (Array.isArray(mat)){
-          mat.forEach((inner) => inner && inner.dispose && inner.dispose());
-        } else if (mat.dispose){
-          mat.dispose();
-        }
+      resources.materials.forEach((m) => {
+        if (!m) return;
+        if (Array.isArray(m)) m.forEach((mm)=>mm?.dispose && mm.dispose());
+        else if (m.dispose) m.dispose();
       });
     }
     if (Array.isArray(resources.textures)){
-      resources.textures.forEach((tex) => {
-        if (tex && typeof tex.dispose === 'function'){
-          tex.dispose();
-        }
-      });
+      resources.textures.forEach((t) => t?.dispose && t.dispose());
     }
   }
   planeResources.delete(id);
@@ -228,26 +249,18 @@ function disposePlaneResources(id){
 
 function captureMaterialTextures(material, textures){
   if (!material) return;
-  const textureKeys = [
-    'map',
-    'normalMap',
-    'metalnessMap',
-    'roughnessMap',
-    'aoMap',
-    'emissiveMap',
-    'alphaMap',
-    'envMap'
-  ];
-  textureKeys.forEach((key) => {
+  const keys = ['map','normalMap','metalnessMap','roughnessMap','aoMap','emissiveMap','alphaMap','envMap'];
+  keys.forEach((key) => {
     const tex = material[key];
     if (tex){
-      const clonedTexture = (typeof tex.clone === 'function') ? tex.clone() : tex;
-      material[key] = clonedTexture;
-      textures.push(clonedTexture);
+      const cloned = (typeof tex.clone === 'function') ? tex.clone() : tex;
+      material[key] = cloned;
+      textures.push(cloned);
     }
   });
 }
 
+// ---- Three.js init & loop ----
 function initThree(){
   scene = new THREE.Scene();
   scene.background = new THREE.Color(0xeef3ff);
@@ -270,19 +283,22 @@ function initThree(){
 
   setInterval(removeStalePlanes, 1000);
 
-  animate();
+  requestAnimationFrame(animate);
 }
 
 function onWindowResize(){
-  const width = window.innerWidth;
-  const height = window.innerHeight;
-  camera.aspect = width / height;
+  const w = window.innerWidth, h = window.innerHeight;
+  camera.aspect = w / h;
   camera.updateProjectionMatrix();
-  renderer.setSize(width, height);
+  renderer.setSize(w, h);
 }
 
-function animate(){
+function animate(now){
   requestAnimationFrame(animate);
+  const delta = (lastFrameTime === null || now === undefined) ? 0 : (now - lastFrameTime) / 1000;
+  lastFrameTime = now;
+
+  updateManualControl(delta);
   renderer.render(scene, camera);
 }
 
@@ -291,15 +307,11 @@ function removeStalePlanes(){
   for (const [id, last] of planeLastSeen.entries()){
     if ((now - last) > PLANE_STALE_TIMEOUT_MS){
       const mesh = planeMeshes.get(id);
-      if (mesh){
-        scene.remove(mesh);
-      }
+      if (mesh) scene.remove(mesh);
       disposePlaneResources(id);
       planeMeshes.delete(id);
       planeLastSeen.delete(id);
-      if (currentFollowId === id){
-        currentFollowId = null;
-      }
+      if (currentFollowId === id) currentFollowId = null;
     }
   }
 
@@ -316,4 +328,102 @@ function removeStalePlanes(){
 function updateCameraTarget(mesh){
   camera.position.set(mesh.position.x - 40, mesh.position.y + 0, mesh.position.z + 20);
   camera.lookAt(mesh.position);
+}
+
+// ---- Manual control (viewer-side only; sim is still source of truth when telemetry is applied) ----
+function handleKeyDown(event){
+  const { code } = event;
+
+  if (code === 'KeyM'){
+    manualControlEnabled = !manualControlEnabled;
+    if (!manualControlEnabled){
+      pressedKeys.clear();
+      setManualMovementActive(false);
+    }
+    updateHudStatus();
+    return;
+  }
+
+  if (!MOVEMENT_KEY_CODES.has(code)) return;
+
+  if (['ArrowUp','ArrowDown','ArrowLeft','ArrowRight','Space'].includes(code)){
+    event.preventDefault();
+  }
+
+  pressedKeys.add(code);
+  if (manualControlEnabled) setManualMovementActive(true);
+}
+
+function handleKeyUp(event){
+  const { code } = event;
+  if (!MOVEMENT_KEY_CODES.has(code)) return;
+
+  pressedKeys.delete(code);
+  if (manualControlEnabled && !isAnyMovementKeyActive()){
+    setManualMovementActive(false);
+  }
+}
+
+function isAnyMovementKeyActive(){
+  for (const code of MOVEMENT_KEY_CODES){
+    if (pressedKeys.has(code)) return true;
+  }
+  return false;
+}
+
+function setManualMovementActive(active){
+  if (manualMovementActive === active) return;
+  manualMovementActive = active;
+  updateHudStatus();
+}
+
+function updateManualControl(delta){
+  if (!manualControlEnabled) return;
+  const mesh = planeMeshes.get(currentFollowId);
+  const movementActive = isAnyMovementKeyActive();
+  setManualMovementActive(movementActive);
+
+  if (!mesh || !movementActive) return;
+
+  const d = Number.isFinite(delta) ? Math.max(delta, 0) : 0;
+  const pos = mesh.position;
+  let moved = false;
+
+  if (pressedKeys.has('KeyW')){ pos.y += TRANSLATION_SPEED * d; moved = true; }
+  if (pressedKeys.has('KeyS')){ pos.y -= TRANSLATION_SPEED * d; moved = true; }
+  if (pressedKeys.has('KeyA')){ pos.x -= TRANSLATION_SPEED * d; moved = true; }
+  if (pressedKeys.has('KeyD')){ pos.x += TRANSLATION_SPEED * d; moved = true; }
+  if (pressedKeys.has('KeyR') || pressedKeys.has('Space')){ pos.z += ALTITUDE_SPEED * d; moved = true; }
+  if (pressedKeys.has('KeyF') || pressedKeys.has('ShiftLeft') || pressedKeys.has('ShiftRight')){ pos.z -= ALTITUDE_SPEED * d; moved = true; }
+
+  pos.x = clamp(pos.x, -MAX_DISTANCE, MAX_DISTANCE);
+  pos.y = clamp(pos.y, -MAX_DISTANCE, MAX_DISTANCE);
+  pos.z = clamp(pos.z, MIN_ALTITUDE, MAX_ALTITUDE);
+
+  const rot = mesh.rotation;
+  let rotated = false;
+
+  if (pressedKeys.has('KeyQ')){ rot.z += ROTATION_SPEED * d; rotated = true; }
+  if (pressedKeys.has('KeyE')){ rot.z -= ROTATION_SPEED * d; rotated = true; }
+  if (pressedKeys.has('ArrowUp')){ rot.y += ROTATION_SPEED * d; rotated = true; }
+  if (pressedKeys.has('ArrowDown')){ rot.y -= ROTATION_SPEED * d; rotated = true; }
+  if (pressedKeys.has('ArrowLeft')){ rot.x += ROTATION_SPEED * d; rotated = true; }
+  if (pressedKeys.has('ArrowRight')){ rot.x -= ROTATION_SPEED * d; rotated = true; }
+
+  rot.x = clamp(rot.x, -MAX_ROLL, MAX_ROLL);
+  rot.y = clamp(rot.y, -MAX_PITCH, MAX_PITCH);
+
+  if (moved || rotated) updateCameraTarget(mesh);
+}
+
+function clamp(value, min, max){
+  return Math.min(Math.max(value, min), max);
+}
+
+function updateHudStatus(){
+  if (!HUD) return;
+  const controlMode = manualControlEnabled
+    ? `Manual ${manualMovementActive ? '(active)' : '(idle)'}`
+    : 'Telemetry';
+  HUD.innerText = `${connectionStatus}\nMode: ${controlMode}\n[M] toggle manual · WASD/RF move · QE yaw · arrows pitch/roll`;
 }
