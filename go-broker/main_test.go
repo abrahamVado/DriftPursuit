@@ -4,8 +4,12 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"sync"
 	"testing"
+	"time"
+
+	websockettest "github.com/gorilla/websocket/websockettest"
 )
 
 type fakeBroker struct {
@@ -103,4 +107,38 @@ func TestStatsHandlerHonorsLocking(t *testing.T) {
 	if calls != 1 {
 		t.Fatalf("expected Stats to be called once, got %d", calls)
 	}
+}
+
+func TestClientTimeoutRemovesClient(t *testing.T) {
+	originalInterval := pingInterval
+	pingInterval = 50 * time.Millisecond
+	defer func() { pingInterval = originalInterval }()
+
+	b := NewBroker()
+	server := httptest.NewServer(http.HandlerFunc(b.serveWS))
+	defer server.Close()
+
+	u, err := url.Parse(server.URL)
+	if err != nil {
+		t.Fatalf("parse server URL: %v", err)
+	}
+	u.Scheme = "ws"
+	u.Path = "/ws"
+
+	conn, _, err := websockettest.DialIgnoringPongs(u.String(), nil)
+	if err != nil {
+		t.Fatalf("dial websocket: %v", err)
+	}
+	defer conn.Close()
+
+	const multiplier = 5
+	deadline := time.Now().Add(multiplier * pingInterval)
+	for time.Now().Before(deadline) {
+		if stats := b.Stats(); stats.Clients == 0 {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	t.Fatalf("broker did not remove unresponsive client within %v", multiplier*pingInterval)
 }

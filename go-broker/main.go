@@ -5,6 +5,7 @@ import (
 	"flag"
 	"fmt"
 	"log"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -19,6 +20,14 @@ import (
 
 // Will be configured in main() after parsing flags/env.
 var upgrader = websocket.Upgrader{}
+
+const (
+	maxMessageSize     = 1 << 20
+	writeWait          = 10 * time.Second
+	pongWaitMultiplier = 2
+)
+
+var pingInterval = 30 * time.Second
 
 // Always allow localhost for dev convenience.
 var localHosts = map[string]struct{}{
@@ -152,6 +161,17 @@ func (b *Broker) serveWS(w http.ResponseWriter, r *http.Request) {
 	}
 	client := &Client{conn: conn, send: make(chan []byte, 256), id: r.RemoteAddr}
 
+	waitDuration := time.Duration(pongWaitMultiplier) * pingInterval
+	client.conn.SetReadLimit(maxMessageSize)
+	if err := client.conn.SetReadDeadline(time.Now().Add(waitDuration)); err != nil {
+		log.Printf("set initial read deadline for %s: %v", client.id, err)
+		_ = client.conn.Close()
+		return
+	}
+	client.conn.SetPongHandler(func(string) error {
+		return client.conn.SetReadDeadline(time.Now().Add(waitDuration))
+	})
+
 	b.lock.Lock()
 	b.clients[client] = true
 	b.stats.Clients++
@@ -166,7 +186,15 @@ func (b *Broker) serveWS(w http.ResponseWriter, r *http.Request) {
 		for {
 			_, msg, err := client.conn.ReadMessage()
 			if err != nil {
-				log.Println("read error:", err)
+				if ne, ok := err.(net.Error); ok && ne.Timeout() {
+					log.Printf("read deadline exceeded for %s: %v", client.id, err)
+				} else if websocket.IsUnexpectedCloseError(err, websocket.CloseGoingAway, websocket.CloseNormalClosure) {
+					log.Printf("read error for %s: %v", client.id, err)
+				}
+				break
+			}
+			if err := client.conn.SetReadDeadline(time.Now().Add(waitDuration)); err != nil {
+				log.Printf("failed to extend read deadline for %s: %v", client.id, err)
 				break
 			}
 			b.broadcast(msg)
@@ -175,7 +203,7 @@ func (b *Broker) serveWS(w http.ResponseWriter, r *http.Request) {
 
 	// writer (handles errors + periodic ping)
 	go func() {
-		ticker := time.NewTicker(30 * time.Second)
+		ticker := time.NewTicker(pingInterval)
 		defer func() {
 			ticker.Stop()
 			_ = client.conn.Close()
@@ -187,14 +215,19 @@ func (b *Broker) serveWS(w http.ResponseWriter, r *http.Request) {
 					_ = client.conn.WriteMessage(websocket.CloseMessage, []byte{})
 					return
 				}
+				if err := client.conn.SetWriteDeadline(time.Now().Add(writeWait)); err != nil {
+					log.Printf("set write deadline for %s: %v", client.id, err)
+					b.deregisterClient(client)
+					return
+				}
 				if err := client.conn.WriteMessage(websocket.TextMessage, msg); err != nil {
-					log.Println("write error:", err)
+					log.Printf("write error for %s: %v", client.id, err)
 					b.deregisterClient(client)
 					return
 				}
 			case <-ticker.C:
-				if err := client.conn.WriteMessage(websocket.PingMessage, []byte{}); err != nil {
-					log.Println("ping error:", err)
+				if err := client.conn.WriteControl(websocket.PingMessage, []byte{}, time.Now().Add(writeWait)); err != nil {
+					log.Printf("ping failure for %s: %v", client.id, err)
 					b.deregisterClient(client)
 					return
 				}
@@ -221,7 +254,13 @@ func main() {
 	allowedOriginsDefault := os.Getenv("BROKER_ALLOWED_ORIGINS")
 	allowedOriginsFlag := flag.String("allowed-origins", allowedOriginsDefault, "Comma-separated list of allowed origins for WebSocket connections")
 	addr := flag.String("addr", ":8080", "address to listen on")
+	pingFlag := flag.Duration("ping-interval", pingInterval, "interval between WebSocket ping frames for connection liveness")
 	flag.Parse()
+
+	if *pingFlag <= 0 {
+		log.Fatalf("ping interval must be positive, got %v", *pingFlag)
+	}
+	pingInterval = *pingFlag
 
 	allowlist := parseAllowedOrigins(*allowedOriginsFlag)
 	upgrader.CheckOrigin = buildOriginChecker(allowlist)
