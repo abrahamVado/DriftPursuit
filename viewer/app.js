@@ -114,6 +114,18 @@ let lastManualOverridePayload = null;
 let lastKnownManualVelocity = [0, 0, 0];
 let lastKnownManualOrientation = [0, 0, 0];
 
+const RECONNECT_BASE_DELAY_MS = 1000;
+const RECONNECT_MAX_DELAY_MS = 12000;
+const RECONNECT_SPINNER_INTERVAL_MS = 250;
+const RECONNECT_SPINNER_FRAMES = ['⠋','⠙','⠹','⠸','⠼','⠴','⠦','⠧','⠇','⠏'];
+
+let socket = null;
+let reconnectAttempt = 0;
+let reconnectTimerId = null;
+let reconnectCountdownTimerId = null;
+let reconnectTargetTimestamp = null;
+let reconnectSpinnerIndex = 0;
+
 const CRUISE_SPEED_PRESETS = {
   cruise: { max_speed: 250, acceleration: 18 },
   boost: { max_speed: 290, acceleration: 26 },
@@ -154,18 +166,131 @@ window.addEventListener('keyup', handleKeyUp);
 initThree();
 if (SELECTED_MODEL_SET.type === 'procedural' || gltfLoader) beginAircraftLoad();
 
-let socket = new WebSocket(WS_URL);
-socket.addEventListener('open', ()=>{
-  connectionStatus = 'Connected to broker';
+connect();
+
+function connect(){
+  clearReconnectScheduling();
+  const socketInstance = new WebSocket(WS_URL);
+  socket = socketInstance;
+  const isReconnect = reconnectAttempt > 0;
+  connectionStatus = isReconnect ? 'Reconnecting…' : 'Connecting…';
+  reconnectSpinnerIndex = 0;
   updateHudStatus();
-  syncCruiseControllerTarget({ forceBaseline: true });
-});
-socket.addEventListener('message', (ev)=>{
-  try{
-    const msg = JSON.parse(ev.data);
+
+  socketInstance.addEventListener('open', () => {
+    if (socket !== socketInstance) return;
+    clearReconnectScheduling();
+    reconnectAttempt = 0;
+    connectionStatus = 'Connected to broker';
+    updateHudStatus();
+    syncCruiseControllerTarget({ forceBaseline: true });
+    emitManualOverrideSnapshot({ force: true });
+  });
+
+  socketInstance.addEventListener('message', (event) => {
+    if (socket !== socketInstance) return;
+    onSocketMessage(event);
+  });
+
+  socketInstance.addEventListener('close', () => {
+    if (socket !== socketInstance) return;
+    handleSocketInterrupted({ reason: 'closed' });
+  });
+
+  socketInstance.addEventListener('error', () => {
+    if (socket !== socketInstance) return;
+    handleSocketInterrupted({ reason: 'error' });
+  });
+}
+
+function onSocketMessage(event){
+  try {
+    const msg = JSON.parse(event.data);
     handleMsg(msg);
-  }catch(e){ console.warn('bad msg', e); }
-});
+  } catch (err) {
+    console.warn('bad msg', err);
+  }
+}
+
+function handleSocketInterrupted(options = {}){
+  const wasAlreadyScheduled = Boolean(reconnectTimerId);
+  socket = null;
+  const reason = options.reason === 'error' ? 'Connection error' : 'Connection lost';
+  connectionStatus = `${reason}. Reconnecting…`;
+  updateHudStatus();
+  resetManualStateForReconnect();
+  if (!wasAlreadyScheduled){
+    scheduleReconnect();
+  }
+}
+
+function resetManualStateForReconnect(){
+  pressedKeys.clear();
+  setManualMovementActive(false);
+  if (accelerationEngaged){
+    setAccelerationEngaged(false, { skipManualEnforce: true, skipCruiseSync: true });
+  }
+  forwardSpeed = 0;
+  lastManualOverridePayload = null;
+  lastKnownManualVelocity = [0, 0, 0];
+  updateHudStatus();
+}
+
+function scheduleReconnect(){
+  if (reconnectTimerId) return;
+  reconnectAttempt += 1;
+  const delay = computeReconnectDelay(reconnectAttempt);
+  reconnectTargetTimestamp = Date.now() + delay;
+  updateReconnectCountdownStatus(true);
+  reconnectTimerId = window.setTimeout(() => {
+    clearReconnectScheduling();
+    connect();
+  }, delay);
+  reconnectCountdownTimerId = window.setInterval(() => {
+    updateReconnectCountdownStatus();
+  }, RECONNECT_SPINNER_INTERVAL_MS);
+}
+
+function clearReconnectScheduling(){
+  if (reconnectTimerId){
+    window.clearTimeout(reconnectTimerId);
+    reconnectTimerId = null;
+  }
+  if (reconnectCountdownTimerId){
+    window.clearInterval(reconnectCountdownTimerId);
+    reconnectCountdownTimerId = null;
+  }
+  reconnectTargetTimestamp = null;
+}
+
+function updateReconnectCountdownStatus(force){
+  if (force){
+    reconnectSpinnerIndex = 0;
+  }
+
+  if (!reconnectTargetTimestamp){
+    connectionStatus = 'Reconnecting…';
+  } else {
+    const now = Date.now();
+    const remainingMs = Math.max(0, reconnectTargetTimestamp - now);
+    const spinner = RECONNECT_SPINNER_FRAMES[reconnectSpinnerIndex % RECONNECT_SPINNER_FRAMES.length];
+    reconnectSpinnerIndex = (reconnectSpinnerIndex + 1) % RECONNECT_SPINNER_FRAMES.length;
+    if (remainingMs <= 0){
+      connectionStatus = `${spinner} Reconnecting…`;
+    } else {
+      const remainingSeconds = Math.ceil(remainingMs / 1000);
+      connectionStatus = `${spinner} Reconnecting in ${remainingSeconds}s (attempt ${reconnectAttempt})…`;
+    }
+  }
+
+  updateHudStatus();
+}
+
+function computeReconnectDelay(attempt){
+  const exponent = Math.max(0, attempt - 1);
+  const delay = RECONNECT_BASE_DELAY_MS * Math.pow(1.5, exponent);
+  return Math.min(RECONNECT_MAX_DELAY_MS, Math.round(delay));
+}
 
 function handleMsg(msg){
   if (msg.type === 'telemetry'){
@@ -818,7 +943,9 @@ function setAccelerationEngaged(enabled, options = {}){
 
   updateAccelerationButtonState();
   updateHudStatus();
-  syncCruiseControllerTarget();
+  if (!options.skipCruiseSync){
+    syncCruiseControllerTarget();
+  }
 }
 
 function handleKeyDown(event){
