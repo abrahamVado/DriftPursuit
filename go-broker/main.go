@@ -19,7 +19,7 @@ import (
 	"github.com/gorilla/websocket"
 )
 
-const defaultMaxPayloadBytes int64 = 1 << 20
+const defaultMaxPayloadBytes int64 = 1 << 20 // 1 MiB
 
 // Will be configured in main() after parsing flags/env.
 var upgrader = websocket.Upgrader{}
@@ -260,11 +260,13 @@ func statsHandler(provider statsProvider) http.HandlerFunc {
 // --- main / static viewer resolution ---
 
 func main() {
+	// allowed origins
 	allowedOriginsDefault := os.Getenv("BROKER_ALLOWED_ORIGINS")
+
+	// max payload: env -> default, can be overridden by flag
 	maxPayloadDefault := defaultMaxPayloadBytes
 	if envMax := os.Getenv("BROKER_MAX_PAYLOAD_BYTES"); envMax != "" {
-		parsed, err := strconv.ParseInt(envMax, 10, 64)
-		if err != nil {
+		if parsed, err := strconv.ParseInt(envMax, 10, 64); err != nil {
 			log.Printf("invalid BROKER_MAX_PAYLOAD_BYTES %q: %v", envMax, err)
 		} else if parsed <= 0 {
 			log.Printf("BROKER_MAX_PAYLOAD_BYTES must be positive, got %d", parsed)
@@ -272,11 +274,22 @@ func main() {
 			maxPayloadDefault = parsed
 		}
 	}
+
 	allowedOriginsFlag := flag.String("allowed-origins", allowedOriginsDefault, "Comma-separated list of allowed origins for WebSocket connections")
-	addr := flag.String("addr", ":8080", "address to listen on")
+	addr := flag.String("addr", ":43127", "address to listen on") // default to match python client
+
+	// TLS flags
+	tlsCertDefault := os.Getenv("BROKER_TLS_CERT")
+	tlsKeyDefault := os.Getenv("BROKER_TLS_KEY")
+	tlsCert := flag.String("tls-cert", tlsCertDefault, "Path to the TLS certificate file")
+	tlsKey := flag.String("tls-key", tlsKeyDefault, "Path to the TLS private key file")
+
+	// payload flag
 	maxPayloadFlag := flag.Int64("max-payload-bytes", maxPayloadDefault, "Maximum size in bytes for inbound WebSocket messages")
+
 	flag.Parse()
 
+	// origin policy
 	allowlist := parseAllowedOrigins(*allowedOriginsFlag)
 	upgrader.CheckOrigin = buildOriginChecker(allowlist)
 	if len(allowlist) > 0 {
@@ -285,6 +298,7 @@ func main() {
 		log.Println("no allowed origins configured; permitting only local development origins")
 	}
 
+	// payload policy
 	maxPayloadBytes := *maxPayloadFlag
 	if maxPayloadBytes <= 0 {
 		log.Printf("invalid max-payload-bytes value %d; using default %d", maxPayloadBytes, defaultMaxPayloadBytes)
@@ -292,21 +306,49 @@ func main() {
 	}
 	log.Printf("maximum WebSocket payload set to %d bytes", maxPayloadBytes)
 
+	// TLS config sanity
+	certProvided := strings.TrimSpace(*tlsCert) != ""
+	keyProvided := strings.TrimSpace(*tlsKey) != ""
+	if certProvided != keyProvided {
+		log.Fatalf("TLS configuration error: both --tls-cert and --tls-key (or BROKER_TLS_CERT/BROKER_TLS_KEY) must be provided together")
+	}
+
+	// build handler with consistent mux
+	handler, err := buildHandler(maxPayloadBytes)
+	if err != nil {
+		log.Fatalf("failed to build HTTP handler: %v", err)
+	}
+
+	server := &http.Server{Addr: *addr, Handler: handler}
+
+	if certProvided {
+		fmt.Println("Broker listening with TLS on", *addr)
+		log.Fatal(server.ListenAndServeTLS(*tlsCert, *tlsKey))
+	}
+
+	fmt.Println("Broker listening on", *addr)
+	log.Fatal(server.ListenAndServe())
+}
+
+func buildHandler(maxPayloadBytes int64) (http.Handler, error) {
+	mux := http.NewServeMux()
+
 	b := NewBroker(maxPayloadBytes)
-	http.HandleFunc("/ws", b.serveWS)
-	http.HandleFunc("/api/stats", statsHandler(b))
-	registerControlDocEndpoints()
+
+	// Register everything on the same mux
+	mux.HandleFunc("/ws", b.serveWS)
+	mux.HandleFunc("/api/stats", statsHandler(b))
+	registerControlDocEndpoints(mux) // no-op stub below; replace when adding control endpoints
 
 	// serve viewer static files (resolve relative to this source file)
 	viewerDir, err := resolveViewerDir()
 	if err != nil {
-		log.Fatalf("resolve viewer directory: %v", err)
+		return nil, err
 	}
 	fs := http.FileServer(http.Dir(viewerDir))
-	http.Handle("/viewer/", http.StripPrefix("/viewer/", fs))
+	mux.Handle("/viewer/", http.StripPrefix("/viewer/", fs))
 
-	fmt.Println("Broker listening on", *addr)
-	log.Fatal(http.ListenAndServe(*addr, nil))
+	return mux, nil
 }
 
 func resolveViewerDir() (string, error) {
@@ -323,4 +365,9 @@ func resolveViewerDir() (string, error) {
 		return "", err
 	}
 	return viewerDir, nil
+}
+
+// --- Optional: keep this stub if that function isn't implemented elsewhere.
+func registerControlDocEndpoints(mux *http.ServeMux) {
+	// no-op for now; add your handlers here later
 }

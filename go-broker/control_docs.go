@@ -45,8 +45,8 @@ var defaultControlDocs = []ControlDoc{
 // registerControlDocEndpoints registers the HTTP handlers used by the viewer to
 // fetch button documentation.  The data is served as JSON so it can be reused by
 // other tooling without additional parsing work.
-func registerControlDocEndpoints() {
-	http.HandleFunc("/api/controls", func(w http.ResponseWriter, r *http.Request) {
+func registerControlDocEndpoints(mux *http.ServeMux) {
+	mux.HandleFunc("/api/controls", func(w http.ResponseWriter, r *http.Request) {
 		// Always work on a copy so that concurrent requests cannot
 		// mutate the global slice by accident.
 		docs := append([]ControlDoc(nil), defaultControlDocs...)
