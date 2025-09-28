@@ -26,6 +26,16 @@ Follow these steps to bring the entire stack up locally on one machine:
    The broker will start on port `8080` and serve both HTTP and WebSocket traffic.
    A JSON summary of the broker status is exposed at `http://localhost:8080/api/stats`.
 
+   To enable HTTPS/WSS, provide a certificate and key (CLI flags take precedence over the matching environment variables):
+   ```bash
+   go run main.go --tls-cert=/path/to/cert.pem --tls-key=/path/to/key.pem
+   # or
+   export BROKER_TLS_CERT=/path/to/cert.pem
+   export BROKER_TLS_KEY=/path/to/key.pem
+   go run main.go
+   ```
+   With TLS enabled the viewer is available at `https://localhost:8080/viewer/index.html` and WebSocket clients should connect to `wss://localhost:8080/ws`.
+
 2. **Configure allowed WebSocket origins (optional but recommended when deploying):**
    - By default the broker accepts local origins such as `http://localhost` and `http://127.0.0.1` so development "just works".
    - Supply a comma-separated allow list through the CLI flag or environment variable when you need additional origins:

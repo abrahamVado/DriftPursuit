@@ -220,7 +220,12 @@ func statsHandler(provider statsProvider) http.HandlerFunc {
 func main() {
 	allowedOriginsDefault := os.Getenv("BROKER_ALLOWED_ORIGINS")
 	allowedOriginsFlag := flag.String("allowed-origins", allowedOriginsDefault, "Comma-separated list of allowed origins for WebSocket connections")
-	addr := flag.String("addr", ":8080", "address to listen on")
+	// Default to :43127 to match your python client
+	addr := flag.String("addr", ":43127", "address to listen on")
+	tlsCertDefault := os.Getenv("BROKER_TLS_CERT")
+	tlsKeyDefault := os.Getenv("BROKER_TLS_KEY")
+	tlsCert := flag.String("tls-cert", tlsCertDefault, "Path to the TLS certificate file")
+	tlsKey := flag.String("tls-key", tlsKeyDefault, "Path to the TLS private key file")
 	flag.Parse()
 
 	allowlist := parseAllowedOrigins(*allowedOriginsFlag)
@@ -231,21 +236,47 @@ func main() {
 		log.Println("no allowed origins configured; permitting only local development origins")
 	}
 
+	certProvided := strings.TrimSpace(*tlsCert) != ""
+	keyProvided := strings.TrimSpace(*tlsKey) != ""
+	if certProvided != keyProvided {
+		log.Fatalf("TLS configuration error: both --tls-cert and --tls-key (or BROKER_TLS_CERT/BROKER_TLS_KEY) must be provided together")
+	}
+
+	handler, err := buildHandler()
+	if err != nil {
+		log.Fatalf("failed to build HTTP handler: %v", err)
+	}
+
+	server := &http.Server{Addr: *addr, Handler: handler}
+
+	if certProvided {
+		fmt.Println("Broker listening with TLS on", *addr)
+		log.Fatal(server.ListenAndServeTLS(*tlsCert, *tlsKey))
+	}
+
+	fmt.Println("Broker listening on", *addr)
+	log.Fatal(server.ListenAndServe())
+}
+
+func buildHandler() (http.Handler, error) {
+	mux := http.NewServeMux()
+
 	b := NewBroker()
-	http.HandleFunc("/ws", b.serveWS)
-	http.HandleFunc("/api/stats", statsHandler(b))
-	registerControlDocEndpoints()
+
+	// ✅ Register everything on the same mux
+	mux.HandleFunc("/ws", b.serveWS)
+	mux.HandleFunc("/api/stats", statsHandler(b))
+	registerControlDocEndpoints(mux) // if you don't have this yet, keep a no-op stub (see below)
 
 	// serve viewer static files (resolve relative to this source file)
 	viewerDir, err := resolveViewerDir()
 	if err != nil {
-		log.Fatalf("resolve viewer directory: %v", err)
+		return nil, err
 	}
 	fs := http.FileServer(http.Dir(viewerDir))
-	http.Handle("/viewer/", http.StripPrefix("/viewer/", fs))
+	mux.Handle("/viewer/", http.StripPrefix("/viewer/", fs))
 
-	fmt.Println("Broker listening on", *addr)
-	log.Fatal(http.ListenAndServe(*addr, nil))
+	return mux, nil
 }
 
 func resolveViewerDir() (string, error) {
@@ -262,4 +293,9 @@ func resolveViewerDir() (string, error) {
 		return "", err
 	}
 	return viewerDir, nil
+}
+
+// --- Optional: keep this stub if that function isn't implemented elsewhere.
+func registerControlDocEndpoints(mux *http.ServeMux) {
+	// no-op for now; add your handlers here later
 }
