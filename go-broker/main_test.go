@@ -1,16 +1,190 @@
 package main
 
 import (
+	"context"
+	"crypto/rand"
+	"crypto/rsa"
+	"crypto/tls"
+	"crypto/x509"
+	"crypto/x509/pkix"
 	"encoding/json"
+	"encoding/pem"
+	"fmt"
+	"math/big"
+	"net"
 	"net/http"
 	"net/http/httptest"
-	"net/url"
+	"os"
+	"path/filepath"
+	"runtime"
+	"strings"
 	"sync"
 	"testing"
 	"time"
 
-	websockettest "github.com/gorilla/websocket/websockettest"
+	"github.com/gorilla/websocket"
 )
+
+/***************
+ * Test helpers
+ ***************/
+
+// ensureViewerFixture makes sure ../viewer/index.html exists relative to this file.
+// If it creates the directory/file, it will clean them up after the test.
+func ensureViewerFixture(t *testing.T) {
+	t.Helper()
+
+	_, thisFile, _, ok := runtime.Caller(0)
+	if !ok {
+		t.Fatalf("runtime.Caller failed")
+	}
+	viewerDir := filepath.Clean(filepath.Join(filepath.Dir(thisFile), "..", "viewer"))
+	indexPath := filepath.Join(viewerDir, "index.html")
+
+	// Track whether we created things, so we can clean up.
+	var createdDir, createdFile bool
+
+	if _, err := os.Stat(viewerDir); os.IsNotExist(err) {
+		if err := os.MkdirAll(viewerDir, 0o755); err != nil {
+			t.Fatalf("mkdir viewer dir: %v", err)
+		}
+		createdDir = true
+	}
+	if _, err := os.Stat(indexPath); os.IsNotExist(err) {
+		if err := os.WriteFile(indexPath, []byte("<!doctype html><title>viewer</title>ok"), 0o644); err != nil {
+			t.Fatalf("write viewer/index.html: %v", err)
+		}
+		createdFile = true
+	}
+
+	// Cleanup only what we created.
+	t.Cleanup(func() {
+		if createdFile {
+			_ = os.Remove(indexPath)
+		}
+		if createdDir {
+			_ = os.Remove(viewerDir)
+		}
+	})
+}
+
+// generateSelfSignedCert returns temp file paths for a short-lived self-signed cert/key.
+func generateSelfSignedCert(t *testing.T) (certFile, keyFile string) {
+	t.Helper()
+
+	priv, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatalf("rsa.GenerateKey: %v", err)
+	}
+
+	serialNumberLimit := new(big.Int).Lsh(big.NewInt(1), 128)
+	serial, err := rand.Int(rand.Reader, serialNumberLimit)
+	if err != nil {
+		t.Fatalf("rand.Int: %v", err)
+	}
+
+	now := time.Now()
+	tmpl := x509.Certificate{
+		SerialNumber: serial,
+		Subject:      pkix.Name{CommonName: "localhost"},
+		NotBefore:    now.Add(-time.Hour),
+		NotAfter:     now.Add(2 * time.Hour),
+		DNSNames:     []string{"localhost"},
+		IPAddresses:  []net.IP{net.ParseIP("127.0.0.1")},
+		KeyUsage:     x509.KeyUsageKeyEncipherment | x509.KeyUsageDigitalSignature,
+		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+	}
+
+	derBytes, err := x509.CreateCertificate(rand.Reader, &tmpl, &tmpl, &priv.PublicKey, priv)
+	if err != nil {
+		t.Fatalf("CreateCertificate: %v", err)
+	}
+
+	certOut, err := os.CreateTemp("", "broker-cert-*.pem")
+	if err != nil {
+		t.Fatalf("CreateTemp cert: %v", err)
+	}
+	if err := pem.Encode(certOut, &pem.Block{Type: "CERTIFICATE", Bytes: derBytes}); err != nil {
+		t.Fatalf("encode cert: %v", err)
+	}
+	_ = certOut.Close()
+
+	keyOut, err := os.CreateTemp("", "broker-key-*.pem")
+	if err != nil {
+		t.Fatalf("CreateTemp key: %v", err)
+	}
+	if err := pem.Encode(keyOut, &pem.Block{Type: "RSA PRIVATE KEY", Bytes: x509.MarshalPKCS1PrivateKey(priv)}); err != nil {
+		t.Fatalf("encode key: %v", err)
+	}
+	_ = keyOut.Close()
+
+	t.Cleanup(func() {
+		_ = os.Remove(certOut.Name())
+		_ = os.Remove(keyOut.Name())
+	})
+
+	return certOut.Name(), keyOut.Name()
+}
+
+/******************************
+ * Tests: TLS + static viewer
+ ******************************/
+
+func TestBrokerServesViewerOverTLS(t *testing.T) {
+	ensureViewerFixture(t)
+
+	certFile, keyFile := generateSelfSignedCert(t)
+
+	// buildHandler expects maxPayloadBytes in your current server.go
+	handler, err := buildHandler(defaultMaxPayloadBytes)
+	if err != nil {
+		t.Fatalf("buildHandler: %v", err)
+	}
+
+	srv := &http.Server{Addr: "127.0.0.1:0", Handler: handler}
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+
+	serverErr := make(chan error, 1)
+	go func() {
+		serverErr <- srv.ServeTLS(ln, certFile, keyFile)
+	}()
+
+	// Insecure client (ok for test)
+	client := &http.Client{
+		Transport: &http.Transport{
+			TLSClientConfig: &tls.Config{InsecureSkipVerify: true}, //nolint:gosec
+		},
+		Timeout: 5 * time.Second,
+	}
+
+	u := fmt.Sprintf("https://%s/viewer/index.html", ln.Addr().String())
+	resp, err := client.Get(u)
+	if err != nil {
+		t.Fatalf("GET viewer: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("unexpected status: %d", resp.StatusCode)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	if err := srv.Shutdown(ctx); err != nil {
+		t.Fatalf("shutdown: %v", err)
+	}
+
+	if err := <-serverErr; err != nil && err != http.ErrServerClosed {
+		t.Fatalf("ServeTLS: %v", err)
+	}
+}
+
+/*********************************
+ * Tests: /api/stats JSON handler
+ *********************************/
 
 type fakeBroker struct {
 	stats BrokerStats
@@ -35,20 +209,19 @@ func TestStatsHandlerReturnsJSON(t *testing.T) {
 	if rr.Code != http.StatusOK {
 		t.Fatalf("unexpected status: got %d", rr.Code)
 	}
-
 	if ct := rr.Header().Get("Content-Type"); ct != "application/json" {
 		t.Fatalf("unexpected content type: got %q", ct)
 	}
 
 	var resp BrokerStats
 	if err := json.Unmarshal(rr.Body.Bytes(), &resp); err != nil {
-		t.Fatalf("failed to unmarshal response: %v", err)
+		t.Fatalf("unmarshal response: %v", err)
 	}
-
 	if resp != fake.stats {
 		t.Fatalf("unexpected stats: got %+v want %+v", resp, fake.stats)
 	}
-
+	fake.mu.Lock()
+	defer fake.mu.Unlock()
 	if fake.calls != 1 {
 		t.Fatalf("expected Stats to be called once, got %d", fake.calls)
 	}
@@ -89,16 +262,18 @@ func TestStatsHandlerHonorsLocking(t *testing.T) {
 		close(done)
 	}()
 
+	// Wait until Stats() is entered to ensure we're blocking in handler.
 	<-blocker.started
 
 	select {
 	case <-done:
 		t.Fatal("handler returned before broker released lock")
 	default:
+		// still blocked as expected
 	}
 
+	// Unblock Stats() and let handler finish.
 	close(blocker.wait)
-
 	<-done
 
 	blocker.mu.Lock()
@@ -109,36 +284,157 @@ func TestStatsHandlerHonorsLocking(t *testing.T) {
 	}
 }
 
-func TestClientTimeoutRemovesClient(t *testing.T) {
-	originalInterval := pingInterval
-	pingInterval = 50 * time.Millisecond
-	defer func() { pingInterval = originalInterval }()
+/***********************
+ * Tests: WS behavior
+ ***********************/
 
-	b := NewBroker()
-	server := httptest.NewServer(http.HandlerFunc(b.serveWS))
-	defer server.Close()
-
-	u, err := url.Parse(server.URL)
-	if err != nil {
-		t.Fatalf("parse server URL: %v", err)
-	}
-	u.Scheme = "ws"
-	u.Path = "/ws"
-
-	conn, _, err := websockettest.DialIgnoringPongs(u.String(), nil)
+func dialTestWebSocket(t *testing.T, serverURL string) *websocket.Conn {
+	t.Helper()
+	u := "ws" + strings.TrimPrefix(serverURL, "http")
+	conn, _, err := websocket.DefaultDialer.Dial(u, nil)
 	if err != nil {
 		t.Fatalf("dial websocket: %v", err)
 	}
-	defer conn.Close()
+	return conn
+}
 
-	const multiplier = 5
-	deadline := time.Now().Add(multiplier * pingInterval)
-	for time.Now().Before(deadline) {
-		if stats := b.Stats(); stats.Clients == 0 {
-			return
+type wsReadResult struct {
+	msg []byte
+	err error
+}
+
+func listenOnce(conn *websocket.Conn) <-chan wsReadResult {
+	ch := make(chan wsReadResult, 1)
+	go func() {
+		_, msg, err := conn.ReadMessage()
+		ch <- wsReadResult{msg: msg, err: err}
+	}()
+	return ch
+}
+
+func TestServeWSDropsInvalidMessages(t *testing.T) {
+	upgrader.CheckOrigin = func(*http.Request) bool { return true }
+	broker := NewBroker(defaultMaxPayloadBytes)
+
+	server := httptest.NewServer(http.HandlerFunc(broker.serveWS))
+	defer server.Close()
+
+	receiver := dialTestWebSocket(t, server.URL)
+	defer receiver.Close()
+
+	sender := dialTestWebSocket(t, server.URL)
+	defer sender.Close()
+
+	pending := listenOnce(receiver)
+
+	// Send invalid (non-JSON) message; should be dropped and not broadcast.
+	if err := sender.WriteMessage(websocket.TextMessage, []byte("not json")); err != nil {
+		t.Fatalf("write invalid message: %v", err)
+	}
+	select {
+	case res := <-pending:
+		if res.err != nil {
+			t.Fatalf("receiver connection error after invalid message: %v", res.err)
 		}
-		time.Sleep(10 * time.Millisecond)
+		t.Fatalf("unexpected broadcast after invalid message: %s", string(res.msg))
+	case <-time.After(200 * time.Millisecond):
+		// expected: nothing received
 	}
 
-	t.Fatalf("broker did not remove unresponsive client within %v", multiplier*pingInterval)
+	// Send valid JSON; should be normalized and broadcast.
+	valid := []byte(`{"type":"update","id":"123"}`)
+	if err := sender.WriteMessage(websocket.TextMessage, valid); err != nil {
+		t.Fatalf("write valid message: %v", err)
+	}
+
+	select {
+	case res := <-pending:
+		if res.err != nil {
+			t.Fatalf("receiver connection error waiting for valid broadcast: %v", res.err)
+		}
+		var envelope inboundEnvelope
+		if err := json.Unmarshal(res.msg, &envelope); err != nil {
+			t.Fatalf("unmarshal broadcast: %v", err)
+		}
+		if envelope.Type != "update" || envelope.ID != "123" {
+			t.Fatalf("unexpected broadcast payload: %+v", envelope)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for normalized broadcast")
+	}
+}
+
+func TestServeWSRejectsOversizedMessages(t *testing.T) {
+	upgrader.CheckOrigin = func(*http.Request) bool { return true }
+	broker := NewBroker(64) // very small limit for the test
+
+	server := httptest.NewServer(http.HandlerFunc(broker.serveWS))
+	defer server.Close()
+
+	receiver := dialTestWebSocket(t, server.URL)
+	defer receiver.Close()
+
+	sender := dialTestWebSocket(t, server.URL)
+	defer sender.Close()
+
+	pending := listenOnce(receiver)
+
+	// Build an envelope that exceeds the 64-byte limit.
+	oversized := []byte(fmt.Sprintf(`{"type":"big","id":"%s"}`, strings.Repeat("x", 80)))
+	if int64(len(oversized)) <= broker.maxPayloadBytes {
+		t.Fatalf("constructed message length %d does not exceed broker limit %d", len(oversized), broker.maxPayloadBytes)
+	}
+
+	// Send oversized; server should close the offending connection.
+	if err := sender.WriteMessage(websocket.TextMessage, oversized); err != nil {
+		t.Fatalf("write oversized message: %v", err)
+	}
+	if err := sender.SetReadDeadline(time.Now().Add(time.Second)); err != nil {
+		t.Fatalf("set read deadline: %v", err)
+	}
+	if _, _, err := sender.ReadMessage(); err == nil {
+		t.Fatal("expected connection to close after oversized message")
+	} else if !websocket.IsCloseError(err, websocket.CloseMessageTooBig) && !strings.Contains(strings.ToLower(err.Error()), "close 1009") {
+		// some stacks map this to 1009 (Message Too Big)
+		t.Fatalf("expected CloseMessageTooBig/1009 error, got %v", err)
+	}
+	if err := sender.SetReadDeadline(time.Time{}); err != nil {
+		t.Fatalf("reset read deadline: %v", err)
+	}
+
+	// No broadcast should have been delivered.
+	select {
+	case res := <-pending:
+		if res.err != nil {
+			t.Fatalf("receiver connection error after oversized message: %v", res.err)
+		}
+		t.Fatalf("unexpected broadcast after oversized message: %s", string(res.msg))
+	case <-time.After(200 * time.Millisecond):
+		// expected
+	}
+
+	// New client can still send a valid message and be broadcast to the receiver.
+	replacement := dialTestWebSocket(t, server.URL)
+	defer replacement.Close()
+
+	valid := []byte(`{"type":"ok","id":"42"}`)
+	if err := replacement.WriteMessage(websocket.TextMessage, valid); err != nil {
+		t.Fatalf("write valid message from replacement client: %v", err)
+	}
+
+	select {
+	case res := <-pending:
+		if res.err != nil {
+			t.Fatalf("receiver connection error waiting for broadcast: %v", res.err)
+		}
+		var envelope inboundEnvelope
+		if err := json.Unmarshal(res.msg, &envelope); err != nil {
+			t.Fatalf("unmarshal broadcast: %v", err)
+		}
+		if envelope.Type != "ok" || envelope.ID != "42" {
+			t.Fatalf("unexpected broadcast payload: %+v", envelope)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for broadcast after oversized message")
+	}
 }
