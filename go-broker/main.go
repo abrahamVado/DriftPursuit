@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"flag"
 	"fmt"
 	"log"
@@ -35,10 +36,20 @@ type Client struct {
 type Broker struct {
 	clients map[*Client]bool
 	lock    sync.Mutex
+	stats   BrokerStats
 }
 
 func NewBroker() *Broker {
 	return &Broker{clients: make(map[*Client]bool)}
+}
+
+type BrokerStats struct {
+	Broadcasts int `json:"broadcasts"`
+	Clients    int `json:"clients"`
+}
+
+type statsProvider interface {
+	Stats() BrokerStats
 }
 
 func (b *Broker) deregisterClient(client *Client) {
@@ -46,12 +57,16 @@ func (b *Broker) deregisterClient(client *Client) {
 	if _, exists := b.clients[client]; exists {
 		delete(b.clients, client)
 		close(client.send)
+		if b.stats.Clients > 0 {
+			b.stats.Clients--
+		}
 	}
 	b.lock.Unlock()
 }
 
 func (b *Broker) broadcast(msg []byte) {
 	b.lock.Lock()
+	b.stats.Broadcasts++
 	defer b.lock.Unlock()
 	for c := range b.clients {
 		select {
@@ -59,8 +74,17 @@ func (b *Broker) broadcast(msg []byte) {
 		default:
 			close(c.send)
 			delete(b.clients, c)
+			if b.stats.Clients > 0 {
+				b.stats.Clients--
+			}
 		}
 	}
+}
+
+func (b *Broker) Stats() BrokerStats {
+	b.lock.Lock()
+	defer b.lock.Unlock()
+	return b.stats
 }
 
 // --- Origin allowlist helpers ---
@@ -130,6 +154,7 @@ func (b *Broker) serveWS(w http.ResponseWriter, r *http.Request) {
 
 	b.lock.Lock()
 	b.clients[client] = true
+	b.stats.Clients++
 	b.lock.Unlock()
 
 	// reader
@@ -178,12 +203,25 @@ func (b *Broker) serveWS(w http.ResponseWriter, r *http.Request) {
 	}()
 }
 
+func statsHandler(provider statsProvider) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		stats := provider.Stats()
+		w.Header().Set("Content-Type", "application/json")
+		if err := json.NewEncoder(w).Encode(stats); err != nil {
+			log.Printf("encode stats: %v", err)
+			http.Error(w, "internal server error", http.StatusInternalServerError)
+			return
+		}
+	}
+}
+
 // --- main / static viewer resolution ---
 
 func main() {
 	allowedOriginsDefault := os.Getenv("BROKER_ALLOWED_ORIGINS")
 	allowedOriginsFlag := flag.String("allowed-origins", allowedOriginsDefault, "Comma-separated list of allowed origins for WebSocket connections")
-	addr := flag.String("addr", ":8080", "address to listen on")
+	// Default to :43127 to match your python client
+	addr := flag.String("addr", ":43127", "address to listen on")
 	tlsCertDefault := os.Getenv("BROKER_TLS_CERT")
 	tlsKeyDefault := os.Getenv("BROKER_TLS_KEY")
 	tlsCert := flag.String("tls-cert", tlsCertDefault, "Path to the TLS certificate file")
@@ -224,8 +262,11 @@ func buildHandler() (http.Handler, error) {
 	mux := http.NewServeMux()
 
 	b := NewBroker()
+
+	// ✅ Register everything on the same mux
 	mux.HandleFunc("/ws", b.serveWS)
-	registerControlDocEndpoints(mux)
+	mux.HandleFunc("/api/stats", statsHandler(b))
+	registerControlDocEndpoints(mux) // if you don't have this yet, keep a no-op stub (see below)
 
 	// serve viewer static files (resolve relative to this source file)
 	viewerDir, err := resolveViewerDir()
@@ -252,4 +293,9 @@ func resolveViewerDir() (string, error) {
 		return "", err
 	}
 	return viewerDir, nil
+}
+
+// --- Optional: keep this stub if that function isn't implemented elsewhere.
+func registerControlDocEndpoints(mux *http.ServeMux) {
+	// no-op for now; add your handlers here later
 }

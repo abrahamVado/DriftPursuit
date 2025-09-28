@@ -24,6 +24,7 @@ Follow these steps to bring the entire stack up locally on one machine:
    go run main.go
    ```
    The broker will start on port `8080` and serve both HTTP and WebSocket traffic.
+   A JSON summary of the broker status is exposed at `http://localhost:8080/api/stats`.
 
    To enable HTTPS/WSS, provide a certificate and key (CLI flags take precedence over the matching environment variables):
    ```bash
@@ -76,6 +77,7 @@ Once everything is running locally, you can visit these URLs:
 | Broker health/root | `http://localhost:8080/` |
 | Viewer web app | `http://localhost:8080/viewer/index.html` |
 | WebSocket endpoint | `ws://localhost:8080/ws` |
+| Broker statistics API | `http://localhost:8080/api/stats` |
 | Protocol documentation | `docs/protocol.md` (local file) |
 
 ## Next Steps
