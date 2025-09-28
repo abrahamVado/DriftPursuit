@@ -6,6 +6,9 @@ const REROUTE_BUTTON = document.getElementById('reroute-waypoints');
 const MODEL_SET_SELECT = document.getElementById('model-set-select');
 const MODEL_SET_STATUS = document.getElementById('model-set-status');
 const CONTROL_INSTRUCTIONS_LIST = document.getElementById('control-instructions');
+const CONNECTION_BANNER = document.getElementById('connection-banner');
+const CONNECTION_BANNER_MESSAGE = document.getElementById('connection-banner-message');
+const CONNECTION_RECONNECT_BUTTON = document.getElementById('connection-reconnect');
 const WS_URL = (location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + '/ws';
 
 const PLANE_STALE_TIMEOUT_MS = 5000;
@@ -56,6 +59,42 @@ const SCENE_TO_SIM_SCALE = { x: 2, y: 2, z: 50 };
 const MANUAL_VELOCITY_EPSILON = 0.5;
 const MANUAL_ORIENTATION_EPSILON = 0.005;
 
+const CONNECTION_STATUS_KEYS = {
+  CONNECTING: 'connecting',
+  CONNECTED: 'connected',
+  DISCONNECTED: 'disconnected',
+  ERROR: 'error',
+  RECONNECTING: 'reconnecting',
+};
+
+const UI_STRINGS = {
+  connectionStatus: {
+    connecting: {
+      label: 'Connecting…',
+      banner: 'Attempting to reach the broker.',
+    },
+    connected: {
+      label: 'Connected to broker',
+      banner: '',
+    },
+    disconnected: {
+      label: 'Connection lost',
+      banner: 'The viewer lost contact with the broker. Try reconnecting.',
+    },
+    error: {
+      label: 'Connection error',
+      banner: 'The broker connection encountered an error. Retry when ready.',
+    },
+    reconnecting: {
+      label: 'Reconnecting…',
+      banner: 'Trying to restore the connection.',
+    },
+  },
+  buttons: {
+    reconnect: 'Reconnect',
+  },
+};
+
 const manualOverrideStateByPlane = new Map();
 const DEFAULT_CONTROL_DOCS = [
   {
@@ -99,7 +138,8 @@ const planeResources = new Map();
 const pressedKeys = new Set();
 let manualControlEnabled = false;
 let manualMovementActive = false;
-let connectionStatus = 'Connecting…';
+let connectionStatusKey = CONNECTION_STATUS_KEYS.CONNECTING;
+let connectionStatus = getConnectionStatusLabel(connectionStatusKey);
 let lastFrameTime = null;
 let accelerationEngaged = false;
 let forwardSpeed = 0;
@@ -154,6 +194,13 @@ const AUTOPILOT_PRESETS = [
   },
 ];
 
+if (CONNECTION_RECONNECT_BUTTON){
+  CONNECTION_RECONNECT_BUTTON.textContent = UI_STRINGS.buttons.reconnect;
+  CONNECTION_RECONNECT_BUTTON.addEventListener('click', () => {
+    reconnectToBroker();
+  });
+}
+
 updateHudStatus();
 wireButtonHandlers();
 setupModelSetPicker();
@@ -166,6 +213,7 @@ initThree();
 beginAircraftLoad();
 
 connect();
+
 
 function connect(){
   clearReconnectScheduling();
@@ -205,6 +253,18 @@ function connect(){
 function onSocketMessage(event){
   try {
     const msg = JSON.parse(event.data);
+    handleMsg(msg);
+  } catch (err) {
+    console.warn('bad msg', err);
+  }
+}
+
+// Small shim so the UI "Reconnect" button still works.
+function reconnectToBroker(){
+  clearReconnectScheduling();
+  connect();
+}
+
     handleMsg(msg);
   } catch (err) {
     console.warn('bad msg', err);
@@ -290,6 +350,7 @@ function computeReconnectDelay(attempt){
   const delay = RECONNECT_BASE_DELAY_MS * Math.pow(1.5, exponent);
   return Math.min(RECONNECT_MAX_DELAY_MS, Math.round(delay));
 }
+
 
 function handleMsg(msg){
   if (msg.type === 'telemetry'){
@@ -1272,11 +1333,20 @@ function updateHudStatus(){
   const modelLine = modelStatus.note
     ? `${modelStatus.label} ${modelStatus.note}`.trim()
     : modelStatus.label;
-  HUD.innerText = `${connectionStatus}\nMode: ${controlMode}\nModel set: ${modelLine}\n${accelLabel}\n${simOverrideLabel}\n[M] toggle manual · [T] toggle thrust · WASD/RF move · QE yaw · arrows pitch/roll`;
+
+  HUD.innerText =
+    `${connectionStatus}\n` +
+    `Mode: ${controlMode}\n` +
+    `Model set: ${modelLine}\n` +
+    `${accelLabel}\n` +
+    `${simOverrideLabel}\n` +
+    `[M] toggle manual · [T] toggle thrust · WASD/RF move · QE yaw · arrows pitch/roll`;
+
   if (MODEL_SET_STATUS){
     MODEL_SET_STATUS.textContent = `Active aircraft: ${modelLine}`.trim();
   }
   syncModelSetPicker();
+  updateConnectionBanner(); // keep the banner in sync with connectionStatus
 }
 
 function computeModelSetStatus(){
@@ -1303,6 +1373,42 @@ function syncModelSetPicker(){
     MODEL_SET_SELECT.value = currentModelSetKey;
   }
 }
+
+// Minimal banner updater driven by the plain `connectionStatus` string.
+function updateConnectionBanner(){
+  if (!CONNECTION_BANNER) return;
+
+  // Show the banner when we’re not cleanly connected.
+  const shouldShow = /Reconnecting|Connection lost|Connection error|Connecting…/i.test(connectionStatus);
+  if (shouldShow){
+    CONNECTION_BANNER.removeAttribute('hidden');
+  } else {
+    CONNECTION_BANNER.setAttribute('hidden', '');
+  }
+
+  if (CONNECTION_BANNER_MESSAGE){
+    CONNECTION_BANNER_MESSAGE.textContent = connectionStatus;
+  }
+
+  if (CONNECTION_RECONNECT_BUTTON){
+    // Disable during the automatic countdown phase (user sees remaining seconds)
+    const disabled = /Reconnecting in \d+s/.test(connectionStatus);
+    CONNECTION_RECONNECT_BUTTON.textContent = UI_STRINGS?.buttons?.reconnect || 'Reconnect';
+    CONNECTION_RECONNECT_BUTTON.disabled = disabled;
+  }
+
+  // Optional: reflect status as a data-attribute for CSS hooks
+  // (maps to coarse states based on text)
+  const statusKey =
+    /Connected/.test(connectionStatus) ? 'connected' :
+    /Reconnecting/.test(connectionStatus) ? 'reconnecting' :
+    /Connecting/.test(connectionStatus) ? 'connecting' :
+    /error/i.test(connectionStatus) ? 'error' :
+    /lost/i.test(connectionStatus) ? 'disconnected' :
+    'unknown';
+  CONNECTION_BANNER.dataset.status = statusKey;
+}
+
 
 function wireButtonHandlers(){
   // Bind UI buttons to the same logic used by the keyboard shortcuts so the
