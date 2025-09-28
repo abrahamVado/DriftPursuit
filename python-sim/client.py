@@ -6,11 +6,11 @@ file using ``--log-file`` (defaulting to JSON Lines output).
 
 import argparse
 import os
-from typing import Callable, Optional
 import json
 import random
 import threading
 import time
+from typing import Callable, Optional, Tuple
 from queue import Empty, Queue
 from urllib.parse import urlparse
 
@@ -19,7 +19,7 @@ from websocket import create_connection, WebSocketConnectionClosedException
 
 from navigation import CruiseController, FlightPathPlanner, build_default_waypoints
 
-DEFAULT_WS_URL = "ws://localhost:8080/ws"
+DEFAULT_WS_URL = "ws://localhost:43127/ws"  # match Go broker default
 TICK = 1.0 / 30.0
 ORIGIN_ENV_VAR = "SIM_ORIGIN"
 
@@ -28,20 +28,15 @@ PayloadLogger = Callable[[str], None]
 
 def make_payload_logger(handle, log_format: str = "jsonl") -> PayloadLogger:
     """Return a callable that appends payloads to ``handle`` using ``log_format``."""
-
     normalized_format = (log_format or "jsonl").lower()
 
     def _logger(payload: str) -> None:
         if handle is None:
             return
-
         if normalized_format == "jsonl":
             handle.write(payload.rstrip("\n") + "\n")
         else:
-            if payload.endswith("\n"):
-                handle.write(payload)
-            else:
-                handle.write(payload + "\n")
+            handle.write(payload if payload.endswith("\n") else payload + "\n")
         handle.flush()
 
     return _logger
@@ -70,6 +65,31 @@ def mk_telemetry(plane, t):
         "ori": plane.ori,
         "tags": plane.tags,
     })
+
+
+def apply_noise(
+    plane, rng: np.random.Generator, pos_noise: float, vel_noise: float
+) -> Tuple[Optional[np.ndarray], Optional[np.ndarray]]:
+    """Apply bounded uniform noise to the plane's position and velocity.
+
+    Returns the generated deltas so callers can restore the original state
+    after emitting telemetry.
+    """
+    if (pos_noise <= 0 and vel_noise <= 0) or rng is None:
+        return None, None
+
+    pos_delta: Optional[np.ndarray] = None
+    vel_delta: Optional[np.ndarray] = None
+
+    if pos_noise > 0:
+        pos_delta = rng.uniform(-pos_noise, pos_noise, size=plane.pos.shape)
+        plane.pos += pos_delta
+
+    if vel_noise > 0:
+        vel_delta = rng.uniform(-vel_noise, vel_noise, size=plane.vel.shape)
+        plane.vel += vel_delta
+
+    return pos_delta, vel_delta
 
 
 def mk_cake_drop(plane, landing_pos=None, status="in_flight"):
@@ -148,18 +168,24 @@ def handle_command(command, plane, ws, payload_logger: Optional[PayloadLogger]):
 def run(
     ws_url: str,
     origin: Optional[str] = None,
+    *,
     log_file: Optional[str] = None,
     log_format: str = "jsonl",
+    pos_noise: float = 0.0,
+    vel_noise: float = 0.0,
+    random_seed: Optional[int] = None,
 ):
     print("Connecting to", ws_url)
     p = Plane("plane-1", x=0, y=0, z=1200, speed=140.0)
     p.tags.append("pastel:turquoise")
     p.tags.append("autopilot:cruise")
 
-    # Build a deterministic loop around the new scenic environment so the
-    # aircraft continuously showcases the parallax of the buildings and trees.
+    # Build a deterministic loop around the scenic environment so the
+    # aircraft continuously showcases parallax.
     planner = FlightPathPlanner(build_default_waypoints(), loop=True, arrival_tolerance=80.0)
     cruise = CruiseController(acceleration=18.0, max_speed=250.0)
+
+    rng = np.random.default_rng(random_seed)
 
     t0 = time.time()
     last_cake = -10.0
@@ -193,22 +219,25 @@ def run(
                 backoff = 1.0
 
                 # Start background receiver
-                receiver = threading.Thread(target=receiver_loop, args=(ws, command_queue, stop_event), daemon=True)
+                receiver = threading.Thread(
+                    target=receiver_loop, args=(ws, command_queue, stop_event), daemon=True
+                )
                 receiver.start()
 
                 while not stop_event.is_set():
                     t = time.time() - t0
-                    # Update the autopilot before moving the aircraft so the
-                    # telemetry matches the controls shown in the viewer.
+
+                    # Update autopilot first so telemetry mirrors controls.
                     desired_direction = planner.tick(p.pos, TICK)
                     p.vel = cruise.apply(p.vel, desired_direction, TICK)
                     p.ori = list(CruiseController.orientation_from_velocity(p.vel))
                     p.step(TICK)
 
-                    # Handle incoming commands from broker
+                    # Handle incoming commands
                     process_pending_commands(p, ws, command_queue, payload_logger)
 
-                    # Send telemetry
+                    # Send telemetry (with optional noise)
+                    pos_delta, vel_delta = apply_noise(p, rng, pos_noise, vel_noise)
                     try:
                         payload = mk_telemetry(p, t)
                         ws.send(payload)
@@ -217,6 +246,12 @@ def run(
                     except WebSocketConnectionClosedException:
                         print("Connection closed while sending telemetry")
                         raise
+                    finally:
+                        # Restore state after noise
+                        if pos_delta is not None:
+                            p.pos -= pos_delta
+                        if vel_delta is not None:
+                            p.vel -= vel_delta
 
                     # Occasional cake drop
                     if (t - last_cake) > 8.0 and random.random() < 0.02:
@@ -268,6 +303,16 @@ def run(
                 log_handle.close()
 
 
+def non_negative_float(value: str) -> float:
+    try:
+        parsed = float(value)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(f"'{value}' is not a valid number") from exc
+    if parsed < 0:
+        raise argparse.ArgumentTypeError("Noise values must be non-negative")
+    return parsed
+
+
 def parse_args():
     parser = argparse.ArgumentParser(
         description=(
@@ -277,34 +322,43 @@ def parse_args():
         )
     )
     parser.add_argument(
-        "--broker-url",
-        "-b",
-        help=(
-            "WebSocket URL of the broker to connect to. Overrides the "
-            "SIM_BROKER_URL environment variable."
-        ),
+        "--broker-url", "-b",
+        help="WebSocket URL of the broker (overrides SIM_BROKER_URL).",
     )
     parser.add_argument(
         "--origin",
-        help=(
-            "HTTP(S) origin to send during the WebSocket handshake. Overrides "
-            "the SIM_ORIGIN environment variable."
-        ),
+        help="HTTP(S) Origin to send during the WebSocket handshake (overrides SIM_ORIGIN).",
     )
+    # Logging options
     parser.add_argument(
         "--log-file",
-        help=(
-            "Append every telemetry and cake_drop payload to this file for "
-            "later inspection."
-        ),
+        help="Append every telemetry and cake_drop payload to this file.",
     )
     parser.add_argument(
         "--log-format",
         default="jsonl",
-        help=(
-            "Format to use for log entries when --log-file is provided. "
-            "Defaults to jsonl."
-        ),
+        help="Format to use for log entries when --log-file is provided (default: jsonl).",
+    )
+    # Noise + RNG
+    parser.add_argument(
+        "--pos-noise",
+        type=non_negative_float,
+        default=0.0,
+        metavar="METERS",
+        help="Maximum absolute positional noise in meters (default: 0.0).",
+    )
+    parser.add_argument(
+        "--vel-noise",
+        type=non_negative_float,
+        default=0.0,
+        metavar="MPS",
+        help="Maximum absolute velocity noise in m/s (default: 0.0).",
+    )
+    parser.add_argument(
+        "--random-seed",
+        type=int,
+        default=None,
+        help="Seed for the telemetry noise RNG (default: random).",
     )
     return parser.parse_args()
 
@@ -325,22 +379,16 @@ def derive_origin(ws_url: str) -> str:
     if parsed.hostname is None:
         raise ValueError("Broker URL must include a host")
 
-    if parsed.scheme == "wss":
-        origin_scheme = "https"
-    else:
-        origin_scheme = "http"
-
+    origin_scheme = "https" if parsed.scheme == "wss" else "http"
     return f"{origin_scheme}://{parsed.hostname}"
 
 
 def get_origin(cli_origin: Optional[str], ws_url: str) -> str:
     if cli_origin:
         return cli_origin
-
     env_origin = os.getenv(ORIGIN_ENV_VAR)
     if env_origin:
         return env_origin
-
     return derive_origin(ws_url)
 
 
@@ -348,4 +396,12 @@ if __name__ == '__main__':
     args = parse_args()
     ws_url = get_ws_url(args.broker_url)
     origin = get_origin(args.origin, ws_url)
-    run(ws_url, origin, args.log_file, args.log_format)
+    run(
+        ws_url,
+        origin,
+        log_file=args.log_file,
+        log_format=args.log_format,
+        pos_noise=args.pos_noise,
+        vel_noise=args.vel_noise,
+        random_seed=args.random_seed,
+    )
