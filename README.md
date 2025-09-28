@@ -29,6 +29,8 @@ The broker enforces an allowlist for incoming WebSocket connections. By default,
    This connects to ws://localhost:8080/ws by default and sends telemetry & occasional cake_drop messages.
    - To target a different broker, run `python client.py --broker-url ws://example.com:8080/ws` or set the
      `SIM_BROKER_URL` environment variable before running the client.
+   - The client now derives an HTTP(S) origin from the broker URL automatically. To override it explicitly,
+     pass `--origin https://your-site.example` or export `SIM_ORIGIN` before launching the client.
 
 3. Open the viewer in your browser:
    - Browse to http://localhost:8080/viewer/index.html
