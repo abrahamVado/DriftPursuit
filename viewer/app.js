@@ -3,6 +3,22 @@ const HUD = document.getElementById('hud');
 const WS_URL = (location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + '/ws';
 
 const PLANE_STALE_TIMEOUT_MS = 5000;
+const MODEL_SETS = {
+  high_fidelity: {
+    label: 'High fidelity glTF',
+    type: 'gltf',
+    path: 'assets/models/high_fidelity_aircraft.gltf',
+  },
+  stylized_lowpoly: {
+    label: 'Stylized low-poly kit',
+    type: 'procedural',
+    builder: createStylizedLowpolyTemplate,
+  },
+};
+const DEFAULT_MODEL_SET_KEY = 'high_fidelity';
+const SELECTED_MODEL_SET_KEY = resolveModelSetKey();
+const SELECTED_MODEL_SET = MODEL_SETS[SELECTED_MODEL_SET_KEY] || MODEL_SETS[DEFAULT_MODEL_SET_KEY];
+const MODEL_SET_LABEL = SELECTED_MODEL_SET.label;
 const MOVEMENT_KEY_CODES = new Set([
   'KeyW','KeyA','KeyS','KeyD',      // planar translation
   'KeyR','KeyF',                    // altitude adjustments
@@ -26,20 +42,21 @@ const planeLastSeen = new Map(); // id -> timestamp
 let currentFollowId = null;
 let cakes = {};
 
-// ----- Aircraft model (optional GLTF) -----
-const MODEL_PATH = 'assets/models/high_fidelity_aircraft.gltf';
+// ----- Aircraft model (optional GLTF or procedural set) -----
 let gltfLoader = null;
 let aircraftLoadError = false;
-try {
-  if (typeof THREE !== 'undefined' && typeof THREE.GLTFLoader === 'function') {
-    gltfLoader = new THREE.GLTFLoader();
-  } else {
-    console.warn('GLTFLoader not found; will use fallback mesh.');
+if (SELECTED_MODEL_SET.type === 'gltf') {
+  try {
+    if (typeof THREE !== 'undefined' && typeof THREE.GLTFLoader === 'function') {
+      gltfLoader = new THREE.GLTFLoader();
+    } else {
+      console.warn('GLTFLoader not found; will use fallback mesh.');
+      aircraftLoadError = true;
+    }
+  } catch (err) {
+    console.warn('Failed to init GLTFLoader; using fallback mesh.', err);
     aircraftLoadError = true;
   }
-} catch (err) {
-  console.warn('Failed to init GLTFLoader; using fallback mesh.', err);
-  aircraftLoadError = true;
 }
 let aircraftTemplate = null;
 let aircraftLoadPromise = null;
@@ -59,7 +76,7 @@ window.addEventListener('keydown', handleKeyDown);
 window.addEventListener('keyup', handleKeyUp);
 
 initThree();
-if (gltfLoader) beginAircraftLoad();
+if (SELECTED_MODEL_SET.type === 'procedural' || gltfLoader) beginAircraftLoad();
 
 let socket = new WebSocket(WS_URL);
 socket.addEventListener('open', ()=>{ connectionStatus = 'Connected to broker'; updateHudStatus(); });
@@ -129,25 +146,34 @@ function handleMsg(msg){
 }
 
 function beginAircraftLoad(){
-  if (!gltfLoader){
+  if (aircraftTemplate || aircraftLoadPromise || aircraftLoadError) return aircraftLoadPromise;
+
+  if (SELECTED_MODEL_SET.type === 'gltf') {
+    if (!gltfLoader){
+      aircraftLoadError = true;
+      flushPendingTelemetry();
+      return null;
+    }
+    aircraftLoadPromise = new Promise((resolve, reject) => {
+      gltfLoader.load(SELECTED_MODEL_SET.path, (gltf) => {
+        aircraftTemplate = prepareAircraftTemplate(gltf.scene);
+        resolve(aircraftTemplate);
+      }, undefined, (err) => reject(err));
+    });
+  } else if (SELECTED_MODEL_SET.type === 'procedural') {
+    aircraftLoadPromise = new Promise((resolve, reject) => {
+      try {
+        aircraftTemplate = prepareAircraftTemplate(SELECTED_MODEL_SET.builder());
+        resolve(aircraftTemplate);
+      } catch (builderErr) {
+        reject(builderErr);
+      }
+    });
+  } else {
     aircraftLoadError = true;
     flushPendingTelemetry();
     return null;
   }
-  if (aircraftTemplate || aircraftLoadPromise || aircraftLoadError) return aircraftLoadPromise;
-
-  aircraftLoadPromise = new Promise((resolve, reject) => {
-    gltfLoader.load(MODEL_PATH, (gltf) => {
-      aircraftTemplate = gltf.scene;
-      aircraftTemplate.traverse((node) => {
-        if (node.isMesh){
-          node.castShadow = true;
-          node.receiveShadow = true;
-        }
-      });
-      resolve(aircraftTemplate);
-    }, undefined, (err) => reject(err));
-  });
 
   aircraftLoadPromise.then(() => {
     flushPendingTelemetry();
@@ -164,6 +190,17 @@ function flushPendingTelemetry(){
   if (!pendingTelemetry.length) return;
   const queued = pendingTelemetry.splice(0, pendingTelemetry.length);
   queued.forEach((queuedMsg) => handleMsg(queuedMsg));
+}
+
+function prepareAircraftTemplate(root){
+  if (!root) throw new Error('Invalid aircraft template root');
+  root.traverse?.((node) => {
+    if (node.isMesh){
+      node.castShadow = true;
+      node.receiveShadow = true;
+    }
+  });
+  return root;
 }
 
 function createAircraftInstance(){
@@ -425,5 +462,53 @@ function updateHudStatus(){
   const controlMode = manualControlEnabled
     ? `Manual ${manualMovementActive ? '(active)' : '(idle)'}`
     : 'Telemetry';
-  HUD.innerText = `${connectionStatus}\nMode: ${controlMode}\n[M] toggle manual · WASD/RF move · QE yaw · arrows pitch/roll`;
+  HUD.innerText = `${connectionStatus}\nMode: ${controlMode}\nModel set: ${MODEL_SET_LABEL}\n[M] toggle manual · WASD/RF move · QE yaw · arrows pitch/roll`;
+}
+
+function resolveModelSetKey(){
+  try {
+    const params = new URLSearchParams(window.location.search);
+    const key = params.get('modelSet') || params.get('modelset');
+    if (key && MODEL_SETS[key]) return key;
+  } catch (err) {
+    console.warn('Unable to parse modelSet parameter', err);
+  }
+  return DEFAULT_MODEL_SET_KEY;
+}
+
+function createStylizedLowpolyTemplate(){
+  const group = new THREE.Group();
+
+  const fuselageMaterial = new THREE.MeshStandardMaterial({ color: 0x314e92, metalness: 0.15, roughness: 0.55 });
+  const CapsuleCtor = typeof THREE.CapsuleGeometry === 'function' ? THREE.CapsuleGeometry : null;
+  const fuselageGeometry = CapsuleCtor
+    ? new CapsuleCtor(4, 14, 6, 12)
+    : new THREE.CylinderGeometry(4, 4, 18, 12, 1, false);
+  const fuselage = new THREE.Mesh(fuselageGeometry, fuselageMaterial);
+  fuselage.rotation.z = Math.PI / 2;
+  group.add(fuselage);
+
+  const wingMaterial = new THREE.MeshStandardMaterial({ color: 0xffc857, metalness: 0.1, roughness: 0.5 });
+  const mainWing = new THREE.Mesh(new THREE.BoxGeometry(18, 2, 0.6), wingMaterial);
+  mainWing.position.set(0, 0, 0);
+  group.add(mainWing);
+
+  const tailWing = new THREE.Mesh(new THREE.BoxGeometry(6, 1.4, 0.4), wingMaterial);
+  tailWing.position.set(-5.5, 0, 1.6);
+  group.add(tailWing);
+
+  const verticalStabMaterial = new THREE.MeshStandardMaterial({ color: 0xff8c42, metalness: 0.1, roughness: 0.5 });
+  const verticalStab = new THREE.Mesh(new THREE.BoxGeometry(0.8, 2.2, 2.6), verticalStabMaterial);
+  verticalStab.position.set(-6.0, 0, 2.6);
+  group.add(verticalStab);
+
+  const canopyMaterial = new THREE.MeshStandardMaterial({ color: 0x7fb7f3, metalness: 0.4, roughness: 0.2, transparent: true, opacity: 0.8 });
+  const canopy = new THREE.Mesh(new THREE.CylinderGeometry(2.2, 1.2, 3.6, 12), canopyMaterial);
+  canopy.rotation.z = Math.PI / 2;
+  canopy.position.set(1.0, 0, 1.6);
+  group.add(canopy);
+
+  group.scale.set(0.25, 0.25, 0.25);
+  group.name = 'StylizedLowpolyAircraft';
+  return group;
 }
