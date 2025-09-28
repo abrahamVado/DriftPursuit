@@ -14,6 +14,8 @@ from urllib.parse import urlparse
 import numpy as np
 from websocket import create_connection, WebSocketConnectionClosedException
 
+from navigation import CruiseController, FlightPathPlanner, build_default_waypoints
+
 DEFAULT_WS_URL = "ws://localhost:8080/ws"
 TICK = 1.0 / 30.0
 ORIGIN_ENV_VAR = "SIM_ORIGIN"
@@ -28,6 +30,7 @@ class Plane:
         self.tags = []
 
     def step(self, dt):
+        """Advance the position using the current velocity vector."""
         self.pos += self.vel * dt
 
 
@@ -115,6 +118,12 @@ def run(ws_url: str, origin: Optional[str] = None):
     print("Connecting to", ws_url)
     p = Plane("plane-1", x=0, y=0, z=1200, speed=140.0)
     p.tags.append("pastel:turquoise")
+    p.tags.append("autopilot:cruise")
+
+    # Build a deterministic loop around the new scenic environment so the
+    # aircraft continuously showcases the parallax of the buildings and trees.
+    planner = FlightPathPlanner(build_default_waypoints(), loop=True, arrival_tolerance=80.0)
+    cruise = CruiseController(acceleration=18.0, max_speed=250.0)
 
     t0 = time.time()
     last_cake = -10.0
@@ -145,6 +154,11 @@ def run(ws_url: str, origin: Optional[str] = None):
 
             while not stop_event.is_set():
                 t = time.time() - t0
+                # Update the autopilot before moving the aircraft so the
+                # telemetry matches the controls shown in the viewer.
+                desired_direction = planner.tick(p.pos, TICK)
+                p.vel = cruise.apply(p.vel, desired_direction, TICK)
+                p.ori = list(CruiseController.orientation_from_velocity(p.vel))
                 p.step(TICK)
 
                 # Handle incoming commands from broker

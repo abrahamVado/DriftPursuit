@@ -196,6 +196,7 @@ func main() {
 
 	b := NewBroker()
 	http.HandleFunc("/ws", b.serveWS)
+	registerControlDocEndpoints()
 
 	// serve viewer static files (resolve relative to this source file)
 	viewerDir, err := resolveViewerDir()

@@ -1,5 +1,8 @@
 // viewer/app.js - minimal three.js viewer that connects to ws://localhost:8080/ws
 const HUD = document.getElementById('hud');
+const MANUAL_BUTTON = document.getElementById('manual-toggle');
+const ACCELERATE_BUTTON = document.getElementById('accelerate-forward');
+const CONTROL_INSTRUCTIONS_LIST = document.getElementById('control-instructions');
 const WS_URL = (location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + '/ws';
 
 const PLANE_STALE_TIMEOUT_MS = 5000;
@@ -35,6 +38,26 @@ const MAX_ALTITUDE = 400;
 const MAX_DISTANCE = 1000;
 const MAX_ROLL = Math.PI * 0.75;
 const MAX_PITCH = Math.PI * 0.5;
+const ACCELERATION_RATE = 90; // units/sec^2 for forward thrust button
+const MAX_FORWARD_SPEED = 260; // max forward velocity when thrust engaged
+const NATURAL_DECEL = 35; // drag applied when thrust released
+const DEFAULT_CONTROL_DOCS = [
+  {
+    id: 'manual-toggle',
+    label: 'Manual Control',
+    description: 'Engage viewer-driven control. Keyboard shortcut: press M.'
+  },
+  {
+    id: 'accelerate-forward',
+    label: 'Forward Acceleration',
+    description: 'Toggle gradual thrust down the runway. Keyboard shortcut: press T.'
+  },
+  {
+    id: 'keyboard',
+    label: 'Flight Keys',
+    description: 'Use WASD to strafe, RF/Space/Shift to climb or descend, QE for yaw, and arrow keys for pitch/roll.'
+  }
+];
 
 let scene, camera, renderer;
 const planeMeshes = new Map();   // id -> THREE.Object3D
@@ -69,8 +92,12 @@ let manualControlEnabled = false;
 let manualMovementActive = false;
 let connectionStatus = 'Connecting…';
 let lastFrameTime = null;
+let accelerationEngaged = false;
+let forwardSpeed = 0;
 
 updateHudStatus();
+wireButtonHandlers();
+loadControlDocs();
 
 window.addEventListener('keydown', handleKeyDown);
 window.addEventListener('keyup', handleKeyUp);
@@ -254,14 +281,81 @@ function createAircraftInstance(){
 }
 
 function createFallbackInstance(){
-  const geom = new THREE.BoxGeometry(12,4,4);
-  const mat = new THREE.MeshStandardMaterial({color:0x3366ff});
-  const mesh = new THREE.Mesh(geom, mat);
-  mesh.castShadow = true;
-  mesh.receiveShadow = true;
-  mesh.scale.set(0.25, 0.25, 0.25);
-  mesh.name = 'FallbackAircraft';
-  return { object: mesh, geometries: [geom], materials: [mat], textures: [] };
+  const group = new THREE.Group();
+  const geometries = [];
+  const materials = [];
+
+  const CapsuleCtor = typeof THREE.CapsuleGeometry === 'function' ? THREE.CapsuleGeometry : null;
+  const fuselageGeometry = CapsuleCtor
+    ? new CapsuleCtor(3, 16, 8, 16)
+    : new THREE.CylinderGeometry(3.2, 3.2, 22, 16);
+  const fuselageMaterial = new THREE.MeshStandardMaterial({ color: 0x3a60f4, metalness: 0.35, roughness: 0.45 });
+  const fuselage = new THREE.Mesh(fuselageGeometry, fuselageMaterial);
+  fuselage.rotation.z = Math.PI / 2;
+  fuselage.castShadow = true;
+  fuselage.receiveShadow = true;
+  group.add(fuselage);
+  geometries.push(fuselageGeometry);
+  materials.push(fuselageMaterial);
+
+  const canopyGeometry = new THREE.CylinderGeometry(2.4, 1.6, 6, 16);
+  const canopyMaterial = new THREE.MeshStandardMaterial({ color: 0x7fbef5, transparent: true, opacity: 0.7, metalness: 0.2, roughness: 0.1 });
+  const canopy = new THREE.Mesh(canopyGeometry, canopyMaterial);
+  canopy.rotation.z = Math.PI / 2;
+  canopy.position.set(3, 0, 1.2);
+  canopy.castShadow = true;
+  group.add(canopy);
+  geometries.push(canopyGeometry);
+  materials.push(canopyMaterial);
+
+  const wingMaterial = new THREE.MeshStandardMaterial({ color: 0xf2cf63, roughness: 0.55, metalness: 0.12 });
+  const mainWingGeometry = new THREE.BoxGeometry(20, 2, 0.8);
+  const mainWing = new THREE.Mesh(mainWingGeometry, wingMaterial);
+  mainWing.position.set(0, 0, -0.6);
+  mainWing.castShadow = true;
+  mainWing.receiveShadow = true;
+  group.add(mainWing);
+  geometries.push(mainWingGeometry);
+  materials.push(wingMaterial);
+
+  const tailWingGeometry = new THREE.BoxGeometry(8, 1.8, 0.5);
+  const tailWing = new THREE.Mesh(tailWingGeometry, wingMaterial);
+  tailWing.position.set(-6.5, 0, -0.2);
+  tailWing.castShadow = true;
+  tailWing.receiveShadow = true;
+  group.add(tailWing);
+  geometries.push(tailWingGeometry);
+
+  const verticalStabGeometry = new THREE.BoxGeometry(0.8, 2.6, 3.2);
+  const verticalStabMaterial = new THREE.MeshStandardMaterial({ color: 0xff8e4d, roughness: 0.5, metalness: 0.1 });
+  const verticalStab = new THREE.Mesh(verticalStabGeometry, verticalStabMaterial);
+  verticalStab.position.set(-7.2, 0, 2.0);
+  verticalStab.castShadow = true;
+  verticalStab.receiveShadow = true;
+  group.add(verticalStab);
+  geometries.push(verticalStabGeometry);
+  materials.push(verticalStabMaterial);
+
+  const propellerGeometry = new THREE.BoxGeometry(0.6, 12, 0.4);
+  const propellerMaterial = new THREE.MeshStandardMaterial({ color: 0x1f1f1f, roughness: 0.4, metalness: 0.3 });
+  const propeller = new THREE.Mesh(propellerGeometry, propellerMaterial);
+  propeller.position.set(11.5, 0, 0);
+  propeller.castShadow = true;
+  group.add(propeller);
+  geometries.push(propellerGeometry);
+  materials.push(propellerMaterial);
+
+  group.scale.set(0.25, 0.25, 0.25);
+  group.name = 'FallbackAircraft';
+
+  group.traverse((node) => {
+    if (node.isMesh){
+      node.castShadow = true;
+      node.receiveShadow = true;
+    }
+  });
+
+  return { object: group, geometries, materials, textures: [] };
 }
 
 function disposePlaneResources(id){
@@ -297,26 +391,146 @@ function captureMaterialTextures(material, textures){
   });
 }
 
+function buildEnvironment(targetScene){
+  // Procedural environment intentionally lightweight so it renders smoothly
+  // while still providing parallax cues (buildings, trees, runway lines).
+  const environment = new THREE.Group();
+  environment.name = 'ProceduralEnvironment';
+
+  // Primary grass field.
+  const groundMaterial = new THREE.MeshStandardMaterial({ color: 0x7ac87f, roughness: 0.85, metalness: 0.05 });
+  const ground = new THREE.Mesh(new THREE.PlaneGeometry(4200, 4200, 1, 1), groundMaterial);
+  ground.rotation.x = -Math.PI / 2;
+  ground.receiveShadow = true;
+  environment.add(ground);
+
+  // Runway strip to emphasize forward motion.
+  const runwayMaterial = new THREE.MeshStandardMaterial({ color: 0x2b2b30, roughness: 0.7 });
+  const runway = new THREE.Mesh(new THREE.PlaneGeometry(1400, 180, 1, 1), runwayMaterial);
+  runway.rotation.x = -Math.PI / 2;
+  runway.position.set(0, 0, 0.2);
+  runway.receiveShadow = true;
+  environment.add(runway);
+
+  // Center line markers on the runway.
+  const markerMaterial = new THREE.MeshStandardMaterial({ color: 0xf7f7f7, roughness: 0.3 });
+  for (let i = -6; i <= 6; i++){
+    const marker = new THREE.Mesh(new THREE.PlaneGeometry(50, 6), markerMaterial);
+    marker.rotation.x = -Math.PI / 2;
+    marker.position.set(i * 110, 0, 0.25);
+    marker.receiveShadow = true;
+    environment.add(marker);
+  }
+
+  // Sidewalk / taxiway stripes.
+  const shoulderMaterial = new THREE.MeshStandardMaterial({ color: 0x515865, roughness: 0.6 });
+  ['left', 'right'].forEach((side) => {
+    const offset = side === 'left' ? -110 : 110;
+    const shoulder = new THREE.Mesh(new THREE.PlaneGeometry(1400, 20), shoulderMaterial);
+    shoulder.rotation.x = -Math.PI / 2;
+    shoulder.position.set(0, offset, 0.22);
+    shoulder.receiveShadow = true;
+    environment.add(shoulder);
+  });
+
+  // Populate the outskirts with a blend of buildings and trees.
+  const blockSpacing = 260;
+  const blockRows = 3;
+  const blockCols = 4;
+  const structures = new THREE.Group();
+  structures.name = 'Structures';
+
+  for (let row = -blockRows; row <= blockRows; row++){
+    for (let col = -blockCols; col <= blockCols; col++){
+      if (Math.abs(row) <= 1 && Math.abs(col) <= 1) continue; // keep runway surroundings open
+      const worldX = col * blockSpacing;
+      const worldY = row * blockSpacing;
+      if ((row + col) % 2 === 0){
+        structures.add(createBuilding(worldX, worldY));
+      } else {
+        structures.add(createTree(worldX, worldY));
+      }
+    }
+  }
+
+  environment.add(structures);
+
+  targetScene.add(environment);
+}
+
+function createBuilding(x, y){
+  const buildingGroup = new THREE.Group();
+  buildingGroup.position.set(x, y, 0);
+
+  const baseHeight = 30 + Math.random() * 40;
+  const palette = [0xb1c6ff, 0xd6e4ff, 0xf2bb66, 0x9fc0a8, 0xf7d6c1];
+  const wallMaterial = new THREE.MeshStandardMaterial({ color: palette[Math.floor(Math.random() * palette.length)], roughness: 0.65, metalness: 0.1 });
+  const base = new THREE.Mesh(new THREE.BoxGeometry(60, 60, baseHeight), wallMaterial);
+  base.position.set(0, 0, baseHeight / 2);
+  base.castShadow = true;
+  base.receiveShadow = true;
+  buildingGroup.add(base);
+
+  const roofMaterial = new THREE.MeshStandardMaterial({ color: 0x36393f, roughness: 0.5, metalness: 0.2 });
+  const roof = new THREE.Mesh(new THREE.ConeGeometry(32, 18, 4), roofMaterial);
+  roof.rotation.y = Math.PI / 4;
+  roof.position.set(0, 0, baseHeight + 9);
+  roof.castShadow = true;
+  buildingGroup.add(roof);
+
+  return buildingGroup;
+}
+
+function createTree(x, y){
+  const tree = new THREE.Group();
+  tree.position.set(x + (Math.random() * 30 - 15), y + (Math.random() * 30 - 15), 0);
+
+  const trunkMaterial = new THREE.MeshStandardMaterial({ color: 0x8c5a2b, roughness: 0.8 });
+  const trunk = new THREE.Mesh(new THREE.CylinderGeometry(4, 4, 20, 8), trunkMaterial);
+  trunk.position.set(0, 0, 10);
+  trunk.castShadow = true;
+  trunk.receiveShadow = true;
+  tree.add(trunk);
+
+  const foliageMaterial = new THREE.MeshStandardMaterial({ color: 0x2f7d32, roughness: 0.6 });
+  const foliage = new THREE.Mesh(new THREE.ConeGeometry(20, 40, 10), foliageMaterial);
+  foliage.position.set(0, 0, 35);
+  foliage.castShadow = true;
+  tree.add(foliage);
+
+  return tree;
+}
+
 // ---- Three.js init & loop ----
 function initThree(){
   scene = new THREE.Scene();
-  scene.background = new THREE.Color(0xeef3ff);
+  scene.background = new THREE.Color(0xbfd3ff);
   camera = new THREE.PerspectiveCamera(60, window.innerWidth/window.innerHeight, 0.1, 10000);
   renderer = new THREE.WebGLRenderer({antialias:true});
   renderer.setSize(window.innerWidth, window.innerHeight);
+  renderer.shadowMap.enabled = true;
+  renderer.shadowMap.type = THREE.PCFSoftShadowMap;
   document.body.appendChild(renderer.domElement);
 
   window.addEventListener('resize', onWindowResize);
 
-  // lights
-  const hemi = new THREE.HemisphereLight(0xffffff, 0x444444, 1.0);
-  hemi.position.set(0, 200, 0); scene.add(hemi);
-  const dir = new THREE.DirectionalLight(0xffffff, 0.8); dir.position.set(-100,100,100); scene.add(dir);
+  // Layered light rig: hemisphere for ambient mood and a sun-style directional light.
+  const hemi = new THREE.HemisphereLight(0xe4f1ff, 0x3a5d2f, 0.8);
+  hemi.position.set(0, 200, 0);
+  scene.add(hemi);
 
-  // ground grid
-  const grid = new THREE.GridHelper(2000, 40, 0x888888, 0xcccccc);
-  grid.rotation.x = Math.PI/2;
-  scene.add(grid);
+  const dir = new THREE.DirectionalLight(0xffffff, 0.85);
+  dir.position.set(-180, 220, 260);
+  dir.castShadow = true;
+  dir.shadow.mapSize.set(2048, 2048);
+  dir.shadow.camera.left = -400;
+  dir.shadow.camera.right = 400;
+  dir.shadow.camera.top = 400;
+  dir.shadow.camera.bottom = -400;
+  dir.shadow.camera.far = 1200;
+  scene.add(dir);
+
+  buildEnvironment(scene);
 
   setInterval(removeStalePlanes, 1000);
 
@@ -368,16 +582,50 @@ function updateCameraTarget(mesh){
 }
 
 // ---- Manual control (viewer-side only; sim is still source of truth when telemetry is applied) ----
+function setManualControlEnabled(enabled){
+  const shouldEnable = Boolean(enabled);
+  if (manualControlEnabled === shouldEnable) return;
+  manualControlEnabled = shouldEnable;
+
+  if (!manualControlEnabled){
+    pressedKeys.clear();
+    setManualMovementActive(false);
+    // Disable thrust quietly while avoiding recursive manual re-enabling.
+    setAccelerationEngaged(false, { skipManualEnforce: true });
+  }
+
+  updateManualButtonState();
+  updateHudStatus();
+}
+
+function setAccelerationEngaged(enabled, options = {}){
+  const shouldEnable = Boolean(enabled);
+  if (accelerationEngaged === shouldEnable) return;
+
+  if (shouldEnable && !manualControlEnabled && !options.skipManualEnforce){
+    setManualControlEnabled(true);
+    if (!manualControlEnabled) return;
+  }
+
+  accelerationEngaged = shouldEnable;
+  if (!shouldEnable){
+    forwardSpeed = 0;
+  }
+
+  updateAccelerationButtonState();
+  updateHudStatus();
+}
+
 function handleKeyDown(event){
   const { code } = event;
 
   if (code === 'KeyM'){
-    manualControlEnabled = !manualControlEnabled;
-    if (!manualControlEnabled){
-      pressedKeys.clear();
-      setManualMovementActive(false);
-    }
-    updateHudStatus();
+    setManualControlEnabled(!manualControlEnabled);
+    return;
+  }
+
+  if (code === 'KeyT'){
+    setAccelerationEngaged(!accelerationEngaged);
     return;
   }
 
@@ -417,7 +665,7 @@ function setManualMovementActive(active){
 function updateManualControl(delta){
   if (!manualControlEnabled) return;
   const mesh = planeMeshes.get(currentFollowId);
-  const movementActive = isAnyMovementKeyActive();
+  const movementActive = isAnyMovementKeyActive() || (accelerationEngaged && forwardSpeed > 0.1);
   setManualMovementActive(movementActive);
 
   if (!mesh || !movementActive) return;
@@ -432,6 +680,17 @@ function updateManualControl(delta){
   if (pressedKeys.has('KeyD')){ pos.x += TRANSLATION_SPEED * d; moved = true; }
   if (pressedKeys.has('KeyR') || pressedKeys.has('Space')){ pos.z += ALTITUDE_SPEED * d; moved = true; }
   if (pressedKeys.has('KeyF') || pressedKeys.has('ShiftLeft') || pressedKeys.has('ShiftRight')){ pos.z -= ALTITUDE_SPEED * d; moved = true; }
+
+  if (accelerationEngaged){
+    forwardSpeed = clamp(forwardSpeed + ACCELERATION_RATE * d, 0, MAX_FORWARD_SPEED);
+  } else {
+    forwardSpeed = Math.max(0, forwardSpeed - NATURAL_DECEL * d);
+  }
+
+  if (forwardSpeed > 0){
+    pos.y += forwardSpeed * d;
+    moved = true;
+  }
 
   pos.x = clamp(pos.x, -MAX_DISTANCE, MAX_DISTANCE);
   pos.y = clamp(pos.y, -MAX_DISTANCE, MAX_DISTANCE);
@@ -451,6 +710,10 @@ function updateManualControl(delta){
   rot.y = clamp(rot.y, -MAX_PITCH, MAX_PITCH);
 
   if (moved || rotated) updateCameraTarget(mesh);
+
+  if (accelerationEngaged || forwardSpeed > 0.1){
+    updateHudStatus();
+  }
 }
 
 function clamp(value, min, max){
@@ -462,7 +725,67 @@ function updateHudStatus(){
   const controlMode = manualControlEnabled
     ? `Manual ${manualMovementActive ? '(active)' : '(idle)'}`
     : 'Telemetry';
-  HUD.innerText = `${connectionStatus}\nMode: ${controlMode}\nModel set: ${MODEL_SET_LABEL}\n[M] toggle manual · WASD/RF move · QE yaw · arrows pitch/roll`;
+  const accelLabel = accelerationEngaged
+    ? `Forward acceleration: ON (${forwardSpeed.toFixed(0)} u/s)`
+    : 'Forward acceleration: off';
+  HUD.innerText = `${connectionStatus}\nMode: ${controlMode}\nModel set: ${MODEL_SET_LABEL}\n${accelLabel}\n[M] toggle manual · [T] toggle thrust · WASD/RF move · QE yaw · arrows pitch/roll`;
+}
+
+function wireButtonHandlers(){
+  // Bind UI buttons to the same logic used by the keyboard shortcuts so the
+  // behaviour is always synchronized no matter how the pilot interacts.
+  if (MANUAL_BUTTON){
+    MANUAL_BUTTON.addEventListener('click', () => {
+      setManualControlEnabled(!manualControlEnabled);
+    });
+  }
+
+  if (ACCELERATE_BUTTON){
+    ACCELERATE_BUTTON.addEventListener('click', () => {
+      setAccelerationEngaged(!accelerationEngaged);
+    });
+  }
+
+  updateManualButtonState();
+  updateAccelerationButtonState();
+}
+
+function loadControlDocs(){
+  if (!CONTROL_INSTRUCTIONS_LIST) return;
+
+  // Attempt to fetch descriptive metadata from the Go broker; fall back to
+  // the static defaults if the endpoint is unavailable (e.g. when served
+  // from a static file system or older broker build).
+  fetch('/api/controls', { cache: 'no-store' })
+    .then((response) => {
+      if (!response.ok) throw new Error(`Unexpected status ${response.status}`);
+      return response.json();
+    })
+    .then((docs) => renderControlDocs(Array.isArray(docs) ? docs : DEFAULT_CONTROL_DOCS))
+    .catch(() => renderControlDocs(DEFAULT_CONTROL_DOCS));
+}
+
+function renderControlDocs(docs){
+  if (!CONTROL_INSTRUCTIONS_LIST) return;
+  CONTROL_INSTRUCTIONS_LIST.innerHTML = '';
+  docs.forEach((doc) => {
+    const li = document.createElement('li');
+    li.textContent = `${doc.label}: ${doc.description}`;
+    CONTROL_INSTRUCTIONS_LIST.appendChild(li);
+  });
+}
+
+function updateManualButtonState(){
+  if (!MANUAL_BUTTON) return;
+  MANUAL_BUTTON.textContent = manualControlEnabled ? 'Disable Manual Control' : 'Enable Manual Control';
+  MANUAL_BUTTON.classList.toggle('is-active', manualControlEnabled);
+}
+
+function updateAccelerationButtonState(){
+  if (!ACCELERATE_BUTTON) return;
+  const label = accelerationEngaged ? 'Stop Forward Acceleration' : 'Start Forward Acceleration';
+  ACCELERATE_BUTTON.textContent = label;
+  ACCELERATE_BUTTON.classList.toggle('is-active', accelerationEngaged);
 }
 
 function resolveModelSetKey(){
