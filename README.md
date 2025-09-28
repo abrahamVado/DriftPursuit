@@ -5,6 +5,7 @@ This starter project wires together three pieces so you can focus on gameplay an
 - `go-broker/`: Simple Go WebSocket broker that relays messages and serves the static viewer.
 - `python-sim/`: Python simulation client that publishes telemetry and cake drops.
 - `viewer/`: A minimal three.js web client that subscribes to the broker feed.
+  - Pass `?modelSet=stylized_lowpoly` in the viewer URL to try the built-in procedural low-poly kit without needing a GLTF file.
 
 ## Prerequisites
 
