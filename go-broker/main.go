@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"log"
@@ -10,12 +11,15 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/gorilla/websocket"
 )
+
+const defaultMaxPayloadBytes int64 = 1 << 20
 
 // Will be configured in main() after parsing flags/env.
 var upgrader = websocket.Upgrader{}
@@ -34,13 +38,17 @@ type Client struct {
 }
 
 type Broker struct {
-	clients map[*Client]bool
-	lock    sync.Mutex
-	stats   BrokerStats
+	clients         map[*Client]bool
+	lock            sync.Mutex
+	stats           BrokerStats
+	maxPayloadBytes int64
 }
 
-func NewBroker() *Broker {
-	return &Broker{clients: make(map[*Client]bool)}
+func NewBroker(maxPayloadBytes int64) *Broker {
+	if maxPayloadBytes <= 0 {
+		maxPayloadBytes = defaultMaxPayloadBytes
+	}
+	return &Broker{clients: make(map[*Client]bool), maxPayloadBytes: maxPayloadBytes}
 }
 
 type BrokerStats struct {
@@ -144,6 +152,11 @@ func buildOriginChecker(allowlist []string) func(*http.Request) bool {
 
 // --- WS handler ---
 
+type inboundEnvelope struct {
+	Type string `json:"type"`
+	ID   string `json:"id"`
+}
+
 func (b *Broker) serveWS(w http.ResponseWriter, r *http.Request) {
 	conn, err := upgrader.Upgrade(w, r, nil)
 	if err != nil {
@@ -151,6 +164,10 @@ func (b *Broker) serveWS(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	client := &Client{conn: conn, send: make(chan []byte, 256), id: r.RemoteAddr}
+
+	if b.maxPayloadBytes > 0 {
+		client.conn.SetReadLimit(b.maxPayloadBytes)
+	}
 
 	b.lock.Lock()
 	b.clients[client] = true
@@ -164,12 +181,37 @@ func (b *Broker) serveWS(w http.ResponseWriter, r *http.Request) {
 			_ = client.conn.Close()
 		}()
 		for {
-			_, msg, err := client.conn.ReadMessage()
+			messageType, msg, err := client.conn.ReadMessage()
 			if err != nil {
-				log.Println("read error:", err)
+				if websocket.IsCloseError(err, websocket.CloseMessageTooBig) || errors.Is(err, websocket.ErrReadLimit) {
+					log.Printf("closing connection %s due to oversized payload: %v", client.id, err)
+				} else {
+					log.Printf("read error from %s: %v", client.id, err)
+				}
 				break
 			}
-			b.broadcast(msg)
+			if messageType != websocket.TextMessage {
+				log.Printf("dropping non-text message from %s", client.id)
+				continue
+			}
+
+			var envelope inboundEnvelope
+			if err := json.Unmarshal(msg, &envelope); err != nil {
+				log.Printf("dropping invalid message from %s: %v", client.id, err)
+				continue
+			}
+			if envelope.Type == "" || envelope.ID == "" {
+				log.Printf("dropping message from %s with missing type or id", client.id)
+				continue
+			}
+
+			normalized, err := json.Marshal(envelope)
+			if err != nil {
+				log.Printf("failed to normalize message from %s: %v", client.id, err)
+				continue
+			}
+
+			b.broadcast(normalized)
 		}
 	}()
 
@@ -219,8 +261,20 @@ func statsHandler(provider statsProvider) http.HandlerFunc {
 
 func main() {
 	allowedOriginsDefault := os.Getenv("BROKER_ALLOWED_ORIGINS")
+	maxPayloadDefault := defaultMaxPayloadBytes
+	if envMax := os.Getenv("BROKER_MAX_PAYLOAD_BYTES"); envMax != "" {
+		parsed, err := strconv.ParseInt(envMax, 10, 64)
+		if err != nil {
+			log.Printf("invalid BROKER_MAX_PAYLOAD_BYTES %q: %v", envMax, err)
+		} else if parsed <= 0 {
+			log.Printf("BROKER_MAX_PAYLOAD_BYTES must be positive, got %d", parsed)
+		} else {
+			maxPayloadDefault = parsed
+		}
+	}
 	allowedOriginsFlag := flag.String("allowed-origins", allowedOriginsDefault, "Comma-separated list of allowed origins for WebSocket connections")
 	addr := flag.String("addr", ":8080", "address to listen on")
+	maxPayloadFlag := flag.Int64("max-payload-bytes", maxPayloadDefault, "Maximum size in bytes for inbound WebSocket messages")
 	flag.Parse()
 
 	allowlist := parseAllowedOrigins(*allowedOriginsFlag)
@@ -231,7 +285,14 @@ func main() {
 		log.Println("no allowed origins configured; permitting only local development origins")
 	}
 
-	b := NewBroker()
+	maxPayloadBytes := *maxPayloadFlag
+	if maxPayloadBytes <= 0 {
+		log.Printf("invalid max-payload-bytes value %d; using default %d", maxPayloadBytes, defaultMaxPayloadBytes)
+		maxPayloadBytes = defaultMaxPayloadBytes
+	}
+	log.Printf("maximum WebSocket payload set to %d bytes", maxPayloadBytes)
+
+	b := NewBroker(maxPayloadBytes)
 	http.HandleFunc("/ws", b.serveWS)
 	http.HandleFunc("/api/stats", statsHandler(b))
 	registerControlDocEndpoints()

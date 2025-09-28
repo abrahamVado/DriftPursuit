@@ -37,7 +37,18 @@ Follow these steps to bring the entire stack up locally on one machine:
      ```
    - The CLI flag takes precedence over the environment variable. Requests from origins not in the allow list (and not local) are rejected during the WebSocket upgrade.
 
-3. **Run the Python simulation client** (publishes telemetry messages):
+3. **Adjust the inbound payload limit (optional):**
+   - The broker rejects individual WebSocket messages larger than **1 MiB** by default to prevent runaway publishers from exhausting memory.
+   - Override the limit with the CLI flag or the `BROKER_MAX_PAYLOAD_BYTES` environment variable when your protocol needs larger payloads:
+     ```bash
+     go run main.go -max-payload-bytes=2097152
+     # or
+     export BROKER_MAX_PAYLOAD_BYTES=2097152
+     go run main.go
+     ```
+   - As with other settings, the CLI flag takes precedence when both are supplied.
+
+4. **Run the Python simulation client** (publishes telemetry messages):
    ```bash
    cd python-sim
    python -m venv .venv
@@ -54,7 +65,7 @@ Follow these steps to bring the entire stack up locally on one machine:
    python client.py
    ```
 
-4. **Open the viewer** to visualize entities streaming from the simulation:
+5. **Open the viewer** to visualize entities streaming from the simulation:
    - Navigate to `http://localhost:8080/viewer/index.html` in your browser.
    - You should see the 3D scene update in real time as telemetry arrives.
 
