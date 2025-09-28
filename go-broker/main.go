@@ -32,6 +32,15 @@ func NewBroker() *Broker {
 	return &Broker{clients: make(map[*Client]bool)}
 }
 
+func (b *Broker) deregisterClient(client *Client) {
+	b.lock.Lock()
+	if _, exists := b.clients[client]; exists {
+		delete(b.clients, client)
+		close(client.send)
+	}
+	b.lock.Unlock()
+}
+
 func (b *Broker) broadcast(msg []byte) {
 	b.lock.Lock()
 	defer b.lock.Unlock()
@@ -59,10 +68,8 @@ func (b *Broker) serveWS(w http.ResponseWriter, r *http.Request) {
 	// reader
 	go func() {
 		defer func() {
-			b.lock.Lock()
-			delete(b.clients, client)
-			b.lock.Unlock()
-			client.conn.Close()
+			b.deregisterClient(client)
+			_ = client.conn.Close()
 		}()
 		for {
 			_, msg, err := client.conn.ReadMessage()
@@ -75,12 +82,12 @@ func (b *Broker) serveWS(w http.ResponseWriter, r *http.Request) {
 		}
 	}()
 
-	// writer
+	// writer (handles errors + periodic ping)
 	go func() {
 		ticker := time.NewTicker(time.Second * 30)
 		defer func() {
 			ticker.Stop()
-			client.conn.Close()
+			_ = client.conn.Close()
 		}()
 		for {
 			select {
@@ -89,9 +96,17 @@ func (b *Broker) serveWS(w http.ResponseWriter, r *http.Request) {
 					_ = client.conn.WriteMessage(websocket.CloseMessage, []byte{})
 					return
 				}
-				_ = client.conn.WriteMessage(websocket.TextMessage, msg)
+				if err := client.conn.WriteMessage(websocket.TextMessage, msg); err != nil {
+					log.Println("write error:", err)
+					b.deregisterClient(client)
+					return
+				}
 			case <-ticker.C:
-				_ = client.conn.WriteMessage(websocket.PingMessage, []byte{})
+				if err := client.conn.WriteMessage(websocket.PingMessage, []byte{}); err != nil {
+					log.Println("ping error:", err)
+					b.deregisterClient(client)
+					return
+				}
 			}
 		}
 	}()
