@@ -14,9 +14,17 @@ Quickstart (all on one machine)
    - go run main.go
    Broker listens on http://localhost:8080
 
+Configuring allowed WebSocket origins
+-------------------------------------
+The broker enforces an allowlist for incoming WebSocket connections. By default, only local development origins (`http://localhost`, `http://127.0.0.1`, etc.) are accepted so you can run everything on one machine without extra configuration.
+
+- **Development:** No changes required when testing locally. Optional: `go run main.go -allowed-origins="http://localhost:5173"` to explicitly list your dev server.
+- **Staging/Production:** Provide a comma-separated list of allowed origins through either the `-allowed-origins` flag or the `BROKER_ALLOWED_ORIGINS` environment variable. Example: `BROKER_ALLOWED_ORIGINS="https://viewer.example.com,https://tools.example.com" go run main.go`.
+- The CLI flag takes precedence over the environment variable. Requests from origins not in the allowlist (and not local) will be rejected during the WebSocket upgrade.
+
 2. Start the Python sim client (telemetry producer):
-   - Create a virtualenv, install requirements: pip install -r requirements.txt
    - cd python-sim
+   - Create a virtualenv, install requirements: pip install -r requirements.txt
    - python client.py
    This connects to ws://localhost:8080/ws and sends telemetry & occasional cake_drop messages.
 
@@ -26,5 +34,5 @@ Quickstart (all on one machine)
 
 Notes & next steps
 - The viewer includes a placeholder box model for the plane; replace viewer/assets/models/plane.gltf with a realistic glTF model.
-- This starter is intentionally minimal to get you running quickly. Expand sim/world.py and the viewer to add more gameplay features (abilities, radar overlays, cake physics).
+- This starter is intentionally minimal to get you running quickly. Expand python-sim/ and the viewer to add more gameplay features (abilities, radar overlays, cake physics).
 - The message protocol is JSON over WebSocket. See docs/protocol.md for details.
