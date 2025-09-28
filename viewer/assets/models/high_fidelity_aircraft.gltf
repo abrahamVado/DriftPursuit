@@ -1,0 +1,95 @@
+{
+  "asset": {
+    "version": "2.0",
+    "generator": "Handcrafted"
+  },
+  "scene": 0,
+  "scenes": [
+    {
+      "nodes": [
+        0
+      ]
+    }
+  ],
+  "nodes": [
+    {
+      "name": "StylizedAircraft",
+      "mesh": 0
+    }
+  ],
+  "meshes": [
+    {
+      "name": "StylizedAircraftMesh",
+      "primitives": [
+        {
+          "attributes": {
+            "POSITION": 0,
+            "NORMAL": 1
+          },
+          "mode": 4,
+          "material": 0
+        }
+      ]
+    }
+  ],
+  "materials": [
+    {
+      "name": "AircraftMaterial",
+      "pbrMetallicRoughness": {
+        "baseColorFactor": [
+          0.2,
+          0.32,
+          0.78,
+          1.0
+        ],
+        "metallicFactor": 0.1,
+        "roughnessFactor": 0.45
+      },
+      "doubleSided": false
+    }
+  ],
+  "buffers": [
+    {
+      "uri": "data:application/octet-stream;base64,AAAAAAAAAEAAAAAAAAAAAAAAAMAAAAAAAABAwAAAAAAAAAC/AAAAAAAAAEAAAAAAAABAQAAAAAAAAAC/AAAAAAAAAMAAAAAAAAAAAAAAAEAAAAAAAABAwAAAAAAAAAC/AABAQAAAAAAAAAC/AAAAAAAAAMAAAAAAAABAQAAAAAAAAAC/AABAwAAAAAAAAAC/AAAAAAAAAMAAAAAAAAAAAAAAAMAAAIA/AABAwAAAAAAAAAC/AAAAAAAAAMAAAAAAAABAQAAAAAAAAAC/AAAAAAAAAMAAAIA/NVgoPgAAAABQhHy/NVgoPgAAAABQhHy/NVgoPgAAAABQhHy/NVgovgAAAIBQhHy/NVgovgAAAIBQhHy/NVgovgAAAIBQhHy/AAAAAEJbeL5CW3g/AAAAAEJbeL5CW3g/AAAAAEJbeL5CW3g/AAAAAEJbeD5CW3g/AAAAAEJbeD5CW3g/AAAAAEJbeD5CW3g/1QAOv0ABVb8AAAAA1QAOv0ABVb8AAAAA1QAOv0ABVb8AAAAA1QAOP0ABVb8AAAAA1QAOP0ABVb8AAAAA1QAOP0ABVb8AAAAA",
+      "byteLength": 432
+    }
+  ],
+  "bufferViews": [
+    {
+      "buffer": 0,
+      "byteOffset": 0,
+      "byteLength": 216,
+      "target": 34962
+    },
+    {
+      "buffer": 0,
+      "byteOffset": 216,
+      "byteLength": 216,
+      "target": 34962
+    }
+  ],
+  "accessors": [
+    {
+      "bufferView": 0,
+      "componentType": 5126,
+      "count": 18,
+      "type": "VEC3",
+      "min": [
+        -3,
+        -2,
+        -0.5
+      ],
+      "max": [
+        3,
+        2,
+        1
+      ]
+    },
+    {
+      "bufferView": 1,
+      "componentType": 5126,
+      "count": 18,
+      "type": "VEC3"
+    }
+  ]
+}
