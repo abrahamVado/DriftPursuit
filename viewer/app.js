@@ -2,7 +2,13 @@
 const HUD = document.getElementById('hud');
 const WS_URL = (location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + '/ws';
 
-let scene, camera, renderer, planeMesh, cakes = {};
+const PLANE_STALE_TIMEOUT_MS = 5000;
+
+let scene, camera, renderer;
+const planeMeshes = new Map();
+const planeLastSeen = new Map();
+let currentFollowId = null;
+let cakes = {};
 initThree();
 
 let socket = new WebSocket(WS_URL);
@@ -18,17 +24,19 @@ function handleMsg(msg){
     if(msg.type === 'telemetry'){
         const id = msg.id;
         const p = msg.pos;
-        // create mesh if needed
-        if(!planeMesh){
+        let mesh = planeMeshes.get(id);
+        if(!mesh){
             const geom = new THREE.BoxGeometry(12,4,4);
             const mat = new THREE.MeshStandardMaterial({color:0x3366ff});
-            planeMesh = new THREE.Mesh(geom, mat);
-            scene.add(planeMesh);
+            mesh = new THREE.Mesh(geom, mat);
+            planeMeshes.set(id, mesh);
+            scene.add(mesh);
         }
         // update position (map sim coords to scene; z up)
-        planeMesh.position.set(p[0]/2, p[1]/2, p[2]/50);
-        camera.position.set(planeMesh.position.x - 40, planeMesh.position.y + 0, planeMesh.position.z + 20);
-        camera.lookAt(planeMesh.position);
+        mesh.position.set(p[0]/2, p[1]/2, p[2]/50);
+        planeLastSeen.set(id, performance.now());
+        currentFollowId = id;
+        updateCameraTarget(mesh);
     } else if(msg.type === 'cake_drop'){
         // create simple sphere at landing_pos and remove after a while
         const id = msg.id;
@@ -61,10 +69,50 @@ function initThree(){
     grid.rotation.x = Math.PI/2;
     scene.add(grid);
 
+    setInterval(removeStalePlanes, 1000);
+
     animate();
 }
 
 function animate(){
     requestAnimationFrame(animate);
     renderer.render(scene, camera);
+}
+
+function removeStalePlanes(){
+    const now = performance.now();
+    for(const [id, last] of planeLastSeen.entries()){
+        if((now - last) > PLANE_STALE_TIMEOUT_MS){
+            const mesh = planeMeshes.get(id);
+            if(mesh){
+                scene.remove(mesh);
+                if(mesh.geometry){ mesh.geometry.dispose(); }
+                if(mesh.material){
+                    if(Array.isArray(mesh.material)){
+                        mesh.material.forEach(m => m.dispose && m.dispose());
+                    }else if(mesh.material.dispose){
+                        mesh.material.dispose();
+                    }
+                }
+            }
+            planeMeshes.delete(id);
+            planeLastSeen.delete(id);
+            if(currentFollowId === id){
+                currentFollowId = null;
+            }
+        }
+    }
+
+    if(!currentFollowId && planeMeshes.size > 0){
+        const firstEntry = planeMeshes.entries().next().value;
+        if(firstEntry){
+            currentFollowId = firstEntry[0];
+            updateCameraTarget(firstEntry[1]);
+        }
+    }
+}
+
+function updateCameraTarget(mesh){
+    camera.position.set(mesh.position.x - 40, mesh.position.y + 0, mesh.position.z + 20);
+    camera.lookAt(mesh.position);
 }
