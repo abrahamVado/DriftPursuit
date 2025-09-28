@@ -6,6 +6,7 @@ import (
 	"flag"
 	"fmt"
 	"log"
+	"mime"
 	"net"
 	"net/http"
 	"net/url"
@@ -509,6 +510,10 @@ func buildHandler(b *Broker) (http.Handler, error) {
 	mux.HandleFunc("/api/stats", statsHandler(b))
 	mux.HandleFunc("/healthz", healthzHandler(b))
 	registerControlDocEndpoints(mux) // no-op; extend as needed
+
+	if err := mime.AddExtensionType(".js", "application/javascript"); err != nil {
+		return nil, fmt.Errorf("register js mime type: %w", err)
+	}
 
 	// serve viewer static files (resolve relative to this source file)
 	viewerDir, err := resolveViewerDir()
