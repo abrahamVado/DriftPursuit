@@ -10,6 +10,7 @@ import json
 import random
 import threading
 import time
+from dataclasses import dataclass, field
 from typing import Callable, Optional, Tuple, List, Sequence
 from queue import Empty, Queue
 from urllib.parse import urlparse
@@ -30,6 +31,20 @@ TICK = 1.0 / 30.0
 ORIGIN_ENV_VAR = "SIM_ORIGIN"
 
 PayloadLogger = Callable[[str], None]
+
+
+@dataclass
+class ManualOverrideState:
+    enabled: bool = False
+    velocity: np.ndarray = field(default_factory=lambda: np.zeros(3, dtype=float))
+    orientation: Optional[List[float]] = None
+    last_update: float = 0.0
+
+    def disable(self) -> None:
+        self.enabled = False
+        self.velocity = np.zeros(3, dtype=float)
+        self.orientation = None
+        self.last_update = time.time()
 
 
 def make_payload_logger(handle, log_format: str = "jsonl") -> PayloadLogger:
@@ -55,6 +70,7 @@ class Plane:
         self.vel = np.array([speed, 0, 0], dtype=float)
         self.ori = [0, 0, 0]
         self.tags = []
+        self.manual_override = ManualOverrideState()
 
     def step(self, dt):
         """Advance the position using the current velocity vector."""
@@ -118,6 +134,7 @@ def send_command_status(ws, plane_id, command, status, detail=None, result=None)
         "status": status,
         "from": plane_id,
         "target_id": command.get("target_id") or plane_id,
+        "id": plane_id,
     }
     if "command_id" in command:
         payload["command_id"] = command["command_id"]
@@ -157,6 +174,39 @@ def parse_float(params, key):
         return float(value)
     except (TypeError, ValueError):
         raise ValueError(f"params.{key} must be a number")
+
+
+def parse_vector3(params, key):
+    if key not in params:
+        return None
+    value = params[key]
+    if not isinstance(value, (list, tuple)) or len(value) != 3:
+        raise ValueError(f"params.{key} must be a list of three numbers")
+    try:
+        return np.array([float(value[0]), float(value[1]), float(value[2])], dtype=float)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"params.{key} must contain numeric values") from exc
+
+
+def parse_orientation(params, key):
+    if key not in params:
+        return None
+    value = params[key]
+    if not isinstance(value, (list, tuple)) or len(value) != 3:
+        raise ValueError(f"params.{key} must be a list of three numbers")
+    try:
+        return [float(value[0]), float(value[1]), float(value[2])]
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"params.{key} must contain numeric values") from exc
+
+
+def ensure_tag(tags: List[str], value: str, present: bool) -> None:
+    if present:
+        if value not in tags:
+            tags.append(value)
+    else:
+        while value in tags:
+            tags.remove(value)
 
 
 def receiver_loop(ws, command_queue, stop_event: threading.Event):
@@ -243,6 +293,46 @@ def handle_command(command, plane, planner, cruise, ws, payload_logger: Optional
                 result_payload["max_speed"] = cruise.max_speed
             send_command_status(ws, plane.id, command, "ok", detail="updated cruise controller", result=result_payload)
 
+        elif cmd_name == "manual_override":
+            if "enabled" not in params:
+                raise ValueError("params.enabled is required")
+
+            enabled_value = params.get("enabled")
+            if isinstance(enabled_value, bool):
+                enabled = enabled_value
+            elif isinstance(enabled_value, (int, float)):
+                enabled = bool(enabled_value)
+            else:
+                raise ValueError("params.enabled must be a boolean")
+
+            velocity = parse_vector3(params, "velocity")
+            orientation = parse_orientation(params, "orientation")
+
+            override = plane.manual_override
+            result_payload = {"enabled": enabled}
+
+            if enabled:
+                if velocity is None:
+                    raise ValueError("params.velocity is required when enabling manual override")
+                override.enabled = True
+                override.velocity = velocity
+                override.orientation = orientation if orientation is not None else None
+                override.last_update = time.time()
+                ensure_tag(plane.tags, "manual:override", True)
+                result_payload["velocity"] = [float(component) for component in velocity]
+                if orientation is not None:
+                    result_payload["orientation"] = orientation
+                detail = "manual override enabled"
+            else:
+                override.disable()
+                ensure_tag(plane.tags, "manual:override", False)
+                if orientation is not None:
+                    override.orientation = orientation
+                result_payload["velocity"] = [float(component) for component in override.velocity]
+                detail = "manual override disabled"
+
+            send_command_status(ws, plane.id, command, "ok", detail=detail, result=result_payload)
+
         else:
             detail = f"No handler for command '{cmd_name}'"
             print(detail)
@@ -328,9 +418,18 @@ def run(
 
                     # Update autopilot first so telemetry mirrors controls.
                     desired_direction = planner.tick(p.pos, TICK)
-                    p.vel = cruise.apply(p.vel, desired_direction, TICK)
-                    p.ori = list(CruiseController.orientation_from_velocity(p.vel))
-                    p.step(TICK)
+                    if p.manual_override.enabled:
+                        override = p.manual_override
+                        p.vel = override.velocity.copy()
+                        p.step(TICK)
+                        if override.orientation is not None:
+                            p.ori = list(override.orientation)
+                        else:
+                            p.ori = list(CruiseController.orientation_from_velocity(p.vel))
+                    else:
+                        p.vel = cruise.apply(p.vel, desired_direction, TICK)
+                        p.ori = list(CruiseController.orientation_from_velocity(p.vel))
+                        p.step(TICK)
 
                     # Handle incoming commands
                     process_pending_commands(p, planner, cruise, ws, command_queue, payload_logger)

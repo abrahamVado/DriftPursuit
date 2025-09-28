@@ -281,13 +281,7 @@ func (b *Broker) serveWS(w http.ResponseWriter, r *http.Request) {
 				continue
 			}
 
-			normalized, err := json.Marshal(envelope)
-			if err != nil {
-				log.Printf("failed to normalize message from %s: %v", client.id, err)
-				continue
-			}
-
-			b.broadcast(normalized)
+                        b.broadcast(msg)
 		}
 	}()
 
@@ -472,7 +466,3 @@ func resolveViewerDir() (string, error) {
 	return viewerDir, nil
 }
 
-// --- Optional: keep this stub if that function isn't implemented elsewhere.
-func registerControlDocEndpoints(mux *http.ServeMux) {
-	// no-op for now; add your handlers here later
-}

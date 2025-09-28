@@ -42,6 +42,11 @@ const MAX_PITCH = Math.PI * 0.5;
 const ACCELERATION_RATE = 90; // units/sec^2 for forward thrust button
 const MAX_FORWARD_SPEED = 260; // max forward velocity when thrust engaged
 const NATURAL_DECEL = 35; // drag applied when thrust released
+const SCENE_TO_SIM_SCALE = { x: 2, y: 2, z: 50 };
+const MANUAL_VELOCITY_EPSILON = 0.5;
+const MANUAL_ORIENTATION_EPSILON = 0.005;
+
+const manualOverrideStateByPlane = new Map();
 const DEFAULT_CONTROL_DOCS = [
   {
     id: 'manual-toggle',
@@ -104,6 +109,10 @@ let commandSequence = 0;
 let pendingAutopilotPreset = null;
 let lastAppliedAutopilotLabel = null;
 let nextAutopilotPresetIndex = 0;
+let simManualOverrideActive = false;
+let lastManualOverridePayload = null;
+let lastKnownManualVelocity = [0, 0, 0];
+let lastKnownManualOrientation = [0, 0, 0];
 
 const CRUISE_SPEED_PRESETS = {
   cruise: { max_speed: 250, acceleration: 18 },
@@ -162,6 +171,8 @@ function handleMsg(msg){
   if (msg.type === 'telemetry'){
     const id = msg.id;
     const p = msg.pos || [0,0,0];
+    const tags = Array.isArray(msg.tags) ? msg.tags : [];
+    updateManualOverrideIndicator(id, tags.includes('manual:override'));
 
     if (!aircraftTemplate && !aircraftLoadError){
       pendingTelemetry.push(msg);
@@ -176,7 +187,10 @@ function handleMsg(msg){
       planeMeshes.set(id, mesh);
       planeResources.set(id, { geometries, materials, textures });
       scene.add(mesh);
-      if (!currentFollowId) currentFollowId = id; // follow first seen plane
+      if (!currentFollowId){
+        currentFollowId = id; // follow first seen plane
+        refreshSimManualOverrideState();
+      }
     }
 
     const targetPosition = new THREE.Vector3(p[0]/2, p[1]/2, p[2]/50);
@@ -223,21 +237,25 @@ function nextCommandId(){
   return `viewer-${commandSequence}`;
 }
 
-function sendSimCommand(cmd, params = {}){
+function sendSimCommand(cmd, params = {}, options = {}){
   if (!socket || socket.readyState !== WebSocket.OPEN){
     console.warn('Cannot send command; socket not open');
     return null;
   }
 
-  const commandId = nextCommandId();
+  const includeCommandId = options.includeCommandId !== false;
+  const commandId = includeCommandId ? nextCommandId() : null;
   const payload = {
     type: 'command',
     cmd,
-    from: 'viewer-ui',
-    target_id: currentFollowId || 'plane-1',
+    from: options.from || 'viewer-ui',
+    target_id: options.targetId || currentFollowId || 'plane-1',
     params,
-    command_id: commandId,
   };
+  payload.id = payload.target_id;
+  if (includeCommandId){
+    payload.command_id = commandId;
+  }
 
   try {
     socket.send(JSON.stringify(payload));
@@ -715,6 +733,7 @@ function removeStalePlanes(){
       disposePlaneResources(id);
       planeMeshes.delete(id);
       planeLastSeen.delete(id);
+      manualOverrideStateByPlane.delete(id);
       if (currentFollowId === id) currentFollowId = null;
     }
   }
@@ -725,13 +744,41 @@ function removeStalePlanes(){
     if (firstEntry){
       currentFollowId = firstEntry[0];
       updateCameraTarget(firstEntry[1]);
+      refreshSimManualOverrideState();
     }
+  }
+
+  if (!currentFollowId){
+    setSimManualOverrideActive(false);
   }
 }
 
 function updateCameraTarget(mesh){
   camera.position.set(mesh.position.x - 40, mesh.position.y + 0, mesh.position.z + 20);
   camera.lookAt(mesh.position);
+}
+
+function updateManualOverrideIndicator(id, isActive){
+  manualOverrideStateByPlane.set(id, Boolean(isActive));
+  if (id === currentFollowId){
+    setSimManualOverrideActive(Boolean(isActive));
+  }
+}
+
+function setSimManualOverrideActive(active){
+  const nextValue = Boolean(active);
+  if (simManualOverrideActive === nextValue) return;
+  simManualOverrideActive = nextValue;
+  updateHudStatus();
+}
+
+function refreshSimManualOverrideState(){
+  if (!currentFollowId){
+    setSimManualOverrideActive(false);
+    return;
+  }
+  const active = manualOverrideStateByPlane.get(currentFollowId) || false;
+  setSimManualOverrideActive(Boolean(active));
 }
 
 // ---- Manual control (viewer-side only; sim is still source of truth when telemetry is applied) ----
@@ -745,6 +792,10 @@ function setManualControlEnabled(enabled){
     setManualMovementActive(false);
     // Disable thrust quietly while avoiding recursive manual re-enabling.
     setAccelerationEngaged(false, { skipManualEnforce: true });
+    lastKnownManualVelocity = [0, 0, 0];
+    emitManualOverrideSnapshot({ force: true, enabledOverride: false });
+  } else {
+    emitManualOverrideSnapshot({ force: true, enabledOverride: true });
   }
 
   updateManualButtonState();
@@ -816,24 +867,28 @@ function setManualMovementActive(active){
   updateHudStatus();
 }
 
+function computeManualSceneVelocity(){
+  const velocity = { x: 0, y: 0, z: 0 };
+
+  if (pressedKeys.has('KeyW')) velocity.y += TRANSLATION_SPEED;
+  if (pressedKeys.has('KeyS')) velocity.y -= TRANSLATION_SPEED;
+  if (pressedKeys.has('KeyA')) velocity.x -= TRANSLATION_SPEED;
+  if (pressedKeys.has('KeyD')) velocity.x += TRANSLATION_SPEED;
+
+  if (pressedKeys.has('KeyR') || pressedKeys.has('Space')) velocity.z += ALTITUDE_SPEED;
+  if (pressedKeys.has('KeyF') || pressedKeys.has('ShiftLeft') || pressedKeys.has('ShiftRight')) velocity.z -= ALTITUDE_SPEED;
+
+  return velocity;
+}
+
 function updateManualControl(delta){
   if (!manualControlEnabled) return;
   const mesh = planeMeshes.get(currentFollowId);
+  const d = Number.isFinite(delta) ? Math.max(delta, 0) : 0;
   const movementActive = isAnyMovementKeyActive() || (accelerationEngaged && forwardSpeed > 0.1);
   setManualMovementActive(movementActive);
 
-  if (!mesh || !movementActive) return;
-
-  const d = Number.isFinite(delta) ? Math.max(delta, 0) : 0;
-  const pos = mesh.position;
-  let moved = false;
-
-  if (pressedKeys.has('KeyW')){ pos.y += TRANSLATION_SPEED * d; moved = true; }
-  if (pressedKeys.has('KeyS')){ pos.y -= TRANSLATION_SPEED * d; moved = true; }
-  if (pressedKeys.has('KeyA')){ pos.x -= TRANSLATION_SPEED * d; moved = true; }
-  if (pressedKeys.has('KeyD')){ pos.x += TRANSLATION_SPEED * d; moved = true; }
-  if (pressedKeys.has('KeyR') || pressedKeys.has('Space')){ pos.z += ALTITUDE_SPEED * d; moved = true; }
-  if (pressedKeys.has('KeyF') || pressedKeys.has('ShiftLeft') || pressedKeys.has('ShiftRight')){ pos.z -= ALTITUDE_SPEED * d; moved = true; }
+  const velocityScene = computeManualSceneVelocity();
 
   if (accelerationEngaged){
     forwardSpeed = clamp(forwardSpeed + ACCELERATION_RATE * d, 0, MAX_FORWARD_SPEED);
@@ -842,32 +897,138 @@ function updateManualControl(delta){
   }
 
   if (forwardSpeed > 0){
-    pos.y += forwardSpeed * d;
-    moved = true;
+    velocityScene.y += forwardSpeed;
   }
 
-  pos.x = clamp(pos.x, -MAX_DISTANCE, MAX_DISTANCE);
-  pos.y = clamp(pos.y, -MAX_DISTANCE, MAX_DISTANCE);
-  pos.z = clamp(pos.z, MIN_ALTITUDE, MAX_ALTITUDE);
+  let moved = false;
+  if (mesh){
+    const pos = mesh.position;
+    if (velocityScene.x !== 0){ pos.x += velocityScene.x * d; moved = true; }
+    if (velocityScene.y !== 0){ pos.y += velocityScene.y * d; moved = true; }
+    if (velocityScene.z !== 0){ pos.z += velocityScene.z * d; moved = true; }
 
-  const rot = mesh.rotation;
+    pos.x = clamp(pos.x, -MAX_DISTANCE, MAX_DISTANCE);
+    pos.y = clamp(pos.y, -MAX_DISTANCE, MAX_DISTANCE);
+    pos.z = clamp(pos.z, MIN_ALTITUDE, MAX_ALTITUDE);
+  }
+
   let rotated = false;
+  if (mesh){
+    const rot = mesh.rotation;
+    if (pressedKeys.has('KeyQ')){ rot.z += ROTATION_SPEED * d; rotated = true; }
+    if (pressedKeys.has('KeyE')){ rot.z -= ROTATION_SPEED * d; rotated = true; }
+    if (pressedKeys.has('ArrowUp')){ rot.y += ROTATION_SPEED * d; rotated = true; }
+    if (pressedKeys.has('ArrowDown')){ rot.y -= ROTATION_SPEED * d; rotated = true; }
+    if (pressedKeys.has('ArrowLeft')){ rot.x += ROTATION_SPEED * d; rotated = true; }
+    if (pressedKeys.has('ArrowRight')){ rot.x -= ROTATION_SPEED * d; rotated = true; }
 
-  if (pressedKeys.has('KeyQ')){ rot.z += ROTATION_SPEED * d; rotated = true; }
-  if (pressedKeys.has('KeyE')){ rot.z -= ROTATION_SPEED * d; rotated = true; }
-  if (pressedKeys.has('ArrowUp')){ rot.y += ROTATION_SPEED * d; rotated = true; }
-  if (pressedKeys.has('ArrowDown')){ rot.y -= ROTATION_SPEED * d; rotated = true; }
-  if (pressedKeys.has('ArrowLeft')){ rot.x += ROTATION_SPEED * d; rotated = true; }
-  if (pressedKeys.has('ArrowRight')){ rot.x -= ROTATION_SPEED * d; rotated = true; }
+    rot.x = clamp(rot.x, -MAX_ROLL, MAX_ROLL);
+    rot.y = clamp(rot.y, -MAX_PITCH, MAX_PITCH);
+  }
 
-  rot.x = clamp(rot.x, -MAX_ROLL, MAX_ROLL);
-  rot.y = clamp(rot.y, -MAX_PITCH, MAX_PITCH);
-
-  if (moved || rotated) updateCameraTarget(mesh);
+  if (mesh && (moved || rotated)) updateCameraTarget(mesh);
 
   if (accelerationEngaged || forwardSpeed > 0.1){
     updateHudStatus();
   }
+
+  const orientation = mesh
+    ? [mesh.rotation.z, mesh.rotation.y, mesh.rotation.x]
+    : lastKnownManualOrientation;
+  if (mesh){
+    lastKnownManualOrientation = orientation;
+  }
+
+  const velocitySim = sceneVelocityToSim(velocityScene);
+  lastKnownManualVelocity = velocitySim;
+
+  maybeSendManualOverride({
+    enabled: manualControlEnabled,
+    velocity: velocitySim,
+    orientation,
+  });
+}
+
+function sceneVelocityToSim(velocity){
+  if (!velocity) return [0, 0, 0];
+  return [
+    velocity.x * SCENE_TO_SIM_SCALE.x,
+    velocity.y * SCENE_TO_SIM_SCALE.y,
+    velocity.z * SCENE_TO_SIM_SCALE.z,
+  ];
+}
+
+function emitManualOverrideSnapshot(options = {}){
+  const mesh = planeMeshes.get(currentFollowId);
+  let orientation = lastKnownManualOrientation;
+  if (mesh){
+    orientation = [mesh.rotation.z, mesh.rotation.y, mesh.rotation.x];
+    lastKnownManualOrientation = orientation;
+  }
+
+  const enabledOverride = options.enabledOverride;
+  const enabled = typeof enabledOverride === 'boolean' ? enabledOverride : Boolean(manualControlEnabled);
+  const velocity = enabled ? lastKnownManualVelocity : [0, 0, 0];
+
+  maybeSendManualOverride({
+    enabled,
+    velocity,
+    orientation,
+    force: Boolean(options.force),
+    targetId: currentFollowId || undefined,
+  });
+}
+
+function maybeSendManualOverride(update){
+  if (!socket || socket.readyState !== WebSocket.OPEN) return;
+  const targetId = update.targetId || currentFollowId || 'plane-1';
+  if (!targetId) return;
+
+  const normalized = {
+    targetId,
+    enabled: Boolean(update.enabled),
+  };
+
+  if (Array.isArray(update.velocity) && update.velocity.length === 3){
+    normalized.velocity = update.velocity.map((component) => Number(component) || 0);
+  }
+
+  if (Array.isArray(update.orientation) && update.orientation.length === 3){
+    normalized.orientation = update.orientation.map((component) => Number(component) || 0);
+  }
+
+  if (!update.force && manualOverridePayloadEqual(lastManualOverridePayload, normalized)){
+    return;
+  }
+
+  const params = { enabled: normalized.enabled };
+  if (normalized.velocity) params.velocity = normalized.velocity;
+  if (normalized.orientation) params.orientation = normalized.orientation;
+
+  sendSimCommand('manual_override', params, {
+    includeCommandId: false,
+    targetId,
+  });
+  lastManualOverridePayload = normalized;
+}
+
+function manualOverridePayloadEqual(previous, next){
+  if (!previous || !next) return false;
+  if (previous.enabled !== next.enabled) return false;
+  if (previous.targetId !== next.targetId) return false;
+  if (!compareVector(previous.velocity, next.velocity, MANUAL_VELOCITY_EPSILON)) return false;
+  if (!compareVector(previous.orientation, next.orientation, MANUAL_ORIENTATION_EPSILON)) return false;
+  return true;
+}
+
+function compareVector(a, b, epsilon){
+  if (!a && !b) return true;
+  if (!a || !b) return false;
+  if (a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i += 1){
+    if (Math.abs(a[i] - b[i]) > epsilon) return false;
+  }
+  return true;
 }
 
 function clamp(value, min, max){
@@ -882,7 +1043,10 @@ function updateHudStatus(){
   const accelLabel = accelerationEngaged
     ? `Forward acceleration: ON (${forwardSpeed.toFixed(0)} u/s)`
     : 'Forward acceleration: off';
-  HUD.innerText = `${connectionStatus}\nMode: ${controlMode}\nModel set: ${MODEL_SET_LABEL}\n${accelLabel}\n[M] toggle manual · [T] toggle thrust · WASD/RF move · QE yaw · arrows pitch/roll`;
+  const simOverrideLabel = simManualOverrideActive
+    ? 'Simulator override: MANUAL'
+    : 'Simulator override: autopilot';
+  HUD.innerText = `${connectionStatus}\nMode: ${controlMode}\nModel set: ${MODEL_SET_LABEL}\n${accelLabel}\n${simOverrideLabel}\n[M] toggle manual · [T] toggle thrust · WASD/RF move · QE yaw · arrows pitch/roll`;
 }
 
 function wireButtonHandlers(){
