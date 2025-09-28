@@ -270,12 +270,6 @@ function reconnectToBroker(){
   connect();
 }
 
-    handleMsg(msg);
-  } catch (err) {
-    console.warn('bad msg', err);
-  }
-}
-
 function handleSocketInterrupted(options = {}){
   const wasAlreadyScheduled = Boolean(reconnectTimerId);
   socket = null;
