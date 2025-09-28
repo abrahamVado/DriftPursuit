@@ -80,6 +80,20 @@ Follow these steps to bring the entire stack up locally on one machine:
    python client.py
    ```
 
+   To experiment with telemetry noise, supply the optional CLI flags. Noise
+   defaults to zero so runs are deterministic unless you opt in:
+
+   ```bash
+   python client.py --pos-noise 5.0 --vel-noise 1.5 --random-seed 12345
+   ```
+
+   - `--pos-noise` adds up to the specified number of meters of positional
+     jitter to each telemetry sample.
+   - `--vel-noise` adds up to the specified meters/second of velocity
+     variation.
+   - `--random-seed` makes the injected noise deterministic so you can
+     reproduce the same run later.
+
 5. **Open the viewer** to visualize entities streaming from the simulation:
    - Navigate to `http://localhost:8080/viewer/index.html` in your browser.
    - You should see the 3D scene update in real time as telemetry arrives.

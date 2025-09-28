@@ -3,7 +3,7 @@
 
 import argparse
 import os
-from typing import Optional
+from typing import Optional, Tuple
 import json
 import random
 import threading
@@ -44,6 +44,30 @@ def mk_telemetry(plane, t):
         "ori": plane.ori,
         "tags": plane.tags,
     })
+
+
+def apply_noise(plane, rng: np.random.Generator, pos_noise: float, vel_noise: float) -> Tuple[Optional[np.ndarray], Optional[np.ndarray]]:
+    """Apply bounded uniform noise to the plane's position and velocity.
+
+    Returns the generated deltas so callers can restore the original state
+    after emitting telemetry.
+    """
+
+    if (pos_noise <= 0 and vel_noise <= 0) or rng is None:
+        return None, None
+
+    pos_delta: Optional[np.ndarray] = None
+    vel_delta: Optional[np.ndarray] = None
+
+    if pos_noise > 0:
+        pos_delta = rng.uniform(-pos_noise, pos_noise, size=plane.pos.shape)
+        plane.pos += pos_delta
+
+    if vel_noise > 0:
+        vel_delta = rng.uniform(-vel_noise, vel_noise, size=plane.vel.shape)
+        plane.vel += vel_delta
+
+    return pos_delta, vel_delta
 
 
 def mk_cake_drop(plane, landing_pos=None, status="in_flight"):
@@ -114,7 +138,13 @@ def handle_command(command, plane, ws):
         print(f"No handler for command '{cmd_name}', ignoring")
 
 
-def run(ws_url: str, origin: Optional[str] = None):
+def run(
+    ws_url: str,
+    origin: Optional[str] = None,
+    pos_noise: float = 0.0,
+    vel_noise: float = 0.0,
+    random_seed: Optional[int] = None,
+):
     print("Connecting to", ws_url)
     p = Plane("plane-1", x=0, y=0, z=1200, speed=140.0)
     p.tags.append("pastel:turquoise")
@@ -124,6 +154,8 @@ def run(ws_url: str, origin: Optional[str] = None):
     # aircraft continuously showcases the parallax of the buildings and trees.
     planner = FlightPathPlanner(build_default_waypoints(), loop=True, arrival_tolerance=80.0)
     cruise = CruiseController(acceleration=18.0, max_speed=250.0)
+
+    rng = np.random.default_rng(random_seed)
 
     t0 = time.time()
     last_cake = -10.0
@@ -164,12 +196,18 @@ def run(ws_url: str, origin: Optional[str] = None):
                 # Handle incoming commands from broker
                 process_pending_commands(p, ws, command_queue)
 
-                # Send telemetry
+                # Send telemetry (with optional positional/velocity noise)
+                pos_delta, vel_delta = apply_noise(p, rng, pos_noise, vel_noise)
                 try:
                     ws.send(mk_telemetry(p, t))
                 except WebSocketConnectionClosedException:
                     print("Connection closed while sending telemetry")
                     raise
+                finally:
+                    if pos_delta is not None:
+                        p.pos -= pos_delta
+                    if vel_delta is not None:
+                        p.vel -= vel_delta
 
                 # Occasional cake drop
                 if (t - last_cake) > 8.0 and random.random() < 0.02:
@@ -212,6 +250,18 @@ def run(ws_url: str, origin: Optional[str] = None):
         backoff = min(backoff * 2, max_backoff)
 
 
+def non_negative_float(value: str) -> float:
+    try:
+        parsed = float(value)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(f"'{value}' is not a valid number") from exc
+
+    if parsed < 0:
+        raise argparse.ArgumentTypeError("Noise values must be non-negative")
+
+    return parsed
+
+
 def parse_args():
     parser = argparse.ArgumentParser(
         description=(
@@ -232,6 +282,35 @@ def parse_args():
         help=(
             "HTTP(S) origin to send during the WebSocket handshake. Overrides "
             "the SIM_ORIGIN environment variable."
+        ),
+    )
+    parser.add_argument(
+        "--pos-noise",
+        type=non_negative_float,
+        default=0.0,
+        metavar="METERS",
+        help=(
+            "Maximum absolute positional noise (in meters) added to telemetry. "
+            "Defaults to 0.0 (no noise)."
+        ),
+    )
+    parser.add_argument(
+        "--vel-noise",
+        type=non_negative_float,
+        default=0.0,
+        metavar="MPS",
+        help=(
+            "Maximum absolute velocity noise (in meters/second) added to telemetry. "
+            "Defaults to 0.0 (no noise)."
+        ),
+    )
+    parser.add_argument(
+        "--random-seed",
+        type=int,
+        default=None,
+        help=(
+            "Seed for the telemetry noise RNG so runs can be reproduced. "
+            "If omitted, a random seed is used."
         ),
     )
     return parser.parse_args()
@@ -276,4 +355,10 @@ if __name__ == '__main__':
     args = parse_args()
     ws_url = get_ws_url(args.broker_url)
     origin = get_origin(args.origin, ws_url)
-    run(ws_url, origin)
+    run(
+        ws_url,
+        origin,
+        pos_noise=args.pos_noise,
+        vel_noise=args.vel_noise,
+        random_seed=args.random_seed,
+    )
