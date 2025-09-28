@@ -5,7 +5,17 @@ This starter project wires together three pieces so you can focus on gameplay an
 - `go-broker/`: Simple Go WebSocket broker that relays messages and serves the static viewer.
 - `python-sim/`: Python simulation client that publishes telemetry and cake drops.
 - `viewer/`: A minimal three.js web client that subscribes to the broker feed.
-  - Pass `?modelSet=stylized_lowpoly` in the viewer URL to try the built-in procedural low-poly kit without needing a GLTF file.
+  - Switch between available aircraft kits with the **Aircraft Model** dropdown in the viewer. Assets are cached locally so toggling sets is instant, your last choice is remembered in `localStorage`, and the legacy `?modelSet=` query parameter still works for deep links.
+
+## Viewer connection banner
+
+The viewer shows a status banner while it connects to the Go broker. Earlier revisions of this documentation embedded a PNG screenshot from `docs/images/connection-banner.png`, but that asset is no longer versioned with the project. To capture a fresh banner image for release notes or runbooks:
+
+1. Start the broker and viewer locally (see **Local Setup** below).
+2. Launch the viewer at `http://localhost:8080/viewer/index.html`.
+3. Grab a screenshot once the HUD panel reads “DriftPursuit Viewer – connecting…”.
+
+Store the screenshot wherever you publish your documentation or knowledge base—keeping it out of the repository avoids unnecessary binary churn.
 
 ## Prerequisites
 
@@ -101,6 +111,8 @@ Follow these steps to bring the entire stack up locally on one machine:
 5. **Open the viewer** to visualize entities streaming from the simulation:
    - Navigate to `http://localhost:8080/viewer/index.html` in your browser.
    - You should see the 3D scene update in real time as telemetry arrives.
+   - Use the **Aircraft Model** dropdown to hot-swap between model sets. The HUD and console panel reflect loading progress so you know when a kit is ready.
+   - A Quickstart panel in the lower-left corner summarizes manual controls, keyboard shortcuts, and the autopilot loop toggle.
 
 ## Development
 

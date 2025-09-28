@@ -3,6 +3,8 @@ const HUD = document.getElementById('hud');
 const MANUAL_BUTTON = document.getElementById('manual-toggle');
 const ACCELERATE_BUTTON = document.getElementById('accelerate-forward');
 const REROUTE_BUTTON = document.getElementById('reroute-waypoints');
+const MODEL_SET_SELECT = document.getElementById('model-set-select');
+const MODEL_SET_STATUS = document.getElementById('model-set-status');
 const CONTROL_INSTRUCTIONS_LIST = document.getElementById('control-instructions');
 const CONNECTION_BANNER = document.getElementById('connection-banner');
 const CONNECTION_BANNER_MESSAGE = document.getElementById('connection-banner-message');
@@ -23,9 +25,17 @@ const MODEL_SETS = {
   },
 };
 const DEFAULT_MODEL_SET_KEY = 'high_fidelity';
-const SELECTED_MODEL_SET_KEY = resolveModelSetKey();
-const SELECTED_MODEL_SET = MODEL_SETS[SELECTED_MODEL_SET_KEY] || MODEL_SETS[DEFAULT_MODEL_SET_KEY];
-const MODEL_SET_LABEL = SELECTED_MODEL_SET.label;
+const MODEL_SET_STORAGE_KEY = 'driftpursuit:modelSet';
+const modelSetAssetCache = new Map();
+let modelSetStorageUnavailable = false;
+let runtimeModelSetKey = null;
+let currentModelSetKey = resolveModelSetKey();
+let currentModelSet = MODEL_SETS[currentModelSetKey] || MODEL_SETS[DEFAULT_MODEL_SET_KEY];
+if (!MODEL_SETS[currentModelSetKey]) {
+  currentModelSetKey = DEFAULT_MODEL_SET_KEY;
+  currentModelSet = MODEL_SETS[DEFAULT_MODEL_SET_KEY];
+}
+persistModelSetKey(currentModelSetKey);
 const MOVEMENT_KEY_CODES = new Set([
   'KeyW','KeyA','KeyS','KeyD',      // planar translation
   'KeyR','KeyF',                    // altitude adjustments
@@ -117,20 +127,8 @@ let cakes = {};
 
 // ----- Aircraft model (optional GLTF or procedural set) -----
 let gltfLoader = null;
+let gltfLoaderUnavailable = false;
 let aircraftLoadError = false;
-if (SELECTED_MODEL_SET.type === 'gltf') {
-  try {
-    if (typeof THREE !== 'undefined' && typeof THREE.GLTFLoader === 'function') {
-      gltfLoader = new THREE.GLTFLoader();
-    } else {
-      console.warn('GLTFLoader not found; will use fallback mesh.');
-      aircraftLoadError = true;
-    }
-  } catch (err) {
-    console.warn('Failed to init GLTFLoader; using fallback mesh.', err);
-    aircraftLoadError = true;
-  }
-}
 let aircraftTemplate = null;
 let aircraftLoadPromise = null;
 const pendingTelemetry = [];
@@ -153,6 +151,18 @@ let simManualOverrideActive = false;
 let lastManualOverridePayload = null;
 let lastKnownManualVelocity = [0, 0, 0];
 let lastKnownManualOrientation = [0, 0, 0];
+
+const RECONNECT_BASE_DELAY_MS = 1000;
+const RECONNECT_MAX_DELAY_MS = 12000;
+const RECONNECT_SPINNER_INTERVAL_MS = 250;
+const RECONNECT_SPINNER_FRAMES = ['⠋','⠙','⠹','⠸','⠼','⠴','⠦','⠧','⠇','⠏'];
+
+let socket = null;
+let reconnectAttempt = 0;
+let reconnectTimerId = null;
+let reconnectCountdownTimerId = null;
+let reconnectTargetTimestamp = null;
+let reconnectSpinnerIndex = 0;
 
 const CRUISE_SPEED_PRESETS = {
   cruise: { max_speed: 250, acceleration: 18 },
@@ -193,79 +203,154 @@ if (CONNECTION_RECONNECT_BUTTON){
 
 updateHudStatus();
 wireButtonHandlers();
+setupModelSetPicker();
 loadControlDocs();
 
 window.addEventListener('keydown', handleKeyDown);
 window.addEventListener('keyup', handleKeyUp);
 
 initThree();
-if (SELECTED_MODEL_SET.type === 'procedural' || gltfLoader) beginAircraftLoad();
+beginAircraftLoad();
 
-let socket = null;
-establishSocketConnection();
+connect();
 
-function establishSocketConnection(options = {}){
-  const previous = socket;
-  const ws = new WebSocket(WS_URL);
-  bindSocketEvents(ws);
-  socket = ws;
 
-  const nextStatus = options.isReconnect
-    ? CONNECTION_STATUS_KEYS.RECONNECTING
-    : CONNECTION_STATUS_KEYS.CONNECTING;
-  setConnectionStatus(nextStatus);
+function connect(){
+  clearReconnectScheduling();
+  const socketInstance = new WebSocket(WS_URL);
+  socket = socketInstance;
+  const isReconnect = reconnectAttempt > 0;
+  connectionStatus = isReconnect ? 'Reconnecting…' : 'Connecting…';
+  reconnectSpinnerIndex = 0;
+  updateHudStatus();
 
-  if (previous && previous !== ws && previous.readyState !== WebSocket.CLOSING && previous.readyState !== WebSocket.CLOSED){
-    try {
-      previous.close(1000, 'replaced-by-new-connection');
-    } catch (err) {
-      console.warn('Failed to close previous socket', err);
-    }
-  }
+  socketInstance.addEventListener('open', () => {
+    if (socket !== socketInstance) return;
+    clearReconnectScheduling();
+    reconnectAttempt = 0;
+    connectionStatus = 'Connected to broker';
+    updateHudStatus();
+    syncCruiseControllerTarget({ forceBaseline: true });
+    emitManualOverrideSnapshot({ force: true });
+  });
 
-  return ws;
+  socketInstance.addEventListener('message', (event) => {
+    if (socket !== socketInstance) return;
+    onSocketMessage(event);
+  });
+
+  socketInstance.addEventListener('close', () => {
+    if (socket !== socketInstance) return;
+    handleSocketInterrupted({ reason: 'closed' });
+  });
+
+  socketInstance.addEventListener('error', () => {
+    if (socket !== socketInstance) return;
+    handleSocketInterrupted({ reason: 'error' });
+  });
 }
 
-function reconnectToBroker(){
-  establishSocketConnection({ isReconnect: true });
-}
-
-function bindSocketEvents(ws){
-  if (!ws) return;
-  ws.addEventListener('open', handleSocketOpen);
-  ws.addEventListener('message', handleSocketMessage);
-  ws.addEventListener('close', handleSocketClose);
-  ws.addEventListener('error', handleSocketError);
-}
-
-function handleSocketOpen(){
-  if (this !== socket) return;
-  setConnectionStatus(CONNECTION_STATUS_KEYS.CONNECTED);
-  syncCruiseControllerTarget({ forceBaseline: true });
-}
-
-function handleSocketMessage(ev){
-  if (this !== socket) return;
+function onSocketMessage(event){
   try {
-    const msg = JSON.parse(ev.data);
+    const msg = JSON.parse(event.data);
     handleMsg(msg);
   } catch (err) {
     console.warn('bad msg', err);
   }
 }
 
-function handleSocketClose(){
-  if (this !== socket) return;
-  const nextStatus = connectionStatusKey === CONNECTION_STATUS_KEYS.ERROR
-    ? CONNECTION_STATUS_KEYS.ERROR
-    : CONNECTION_STATUS_KEYS.DISCONNECTED;
-  setConnectionStatus(nextStatus);
+// Small shim so the UI "Reconnect" button still works.
+function reconnectToBroker(){
+  clearReconnectScheduling();
+  connect();
 }
 
-function handleSocketError(){
-  if (this !== socket) return;
-  setConnectionStatus(CONNECTION_STATUS_KEYS.ERROR);
+    handleMsg(msg);
+  } catch (err) {
+    console.warn('bad msg', err);
+  }
 }
+
+function handleSocketInterrupted(options = {}){
+  const wasAlreadyScheduled = Boolean(reconnectTimerId);
+  socket = null;
+  const reason = options.reason === 'error' ? 'Connection error' : 'Connection lost';
+  connectionStatus = `${reason}. Reconnecting…`;
+  updateHudStatus();
+  resetManualStateForReconnect();
+  if (!wasAlreadyScheduled){
+    scheduleReconnect();
+  }
+}
+
+function resetManualStateForReconnect(){
+  pressedKeys.clear();
+  setManualMovementActive(false);
+  if (accelerationEngaged){
+    setAccelerationEngaged(false, { skipManualEnforce: true, skipCruiseSync: true });
+  }
+  forwardSpeed = 0;
+  lastManualOverridePayload = null;
+  lastKnownManualVelocity = [0, 0, 0];
+  updateHudStatus();
+}
+
+function scheduleReconnect(){
+  if (reconnectTimerId) return;
+  reconnectAttempt += 1;
+  const delay = computeReconnectDelay(reconnectAttempt);
+  reconnectTargetTimestamp = Date.now() + delay;
+  updateReconnectCountdownStatus(true);
+  reconnectTimerId = window.setTimeout(() => {
+    clearReconnectScheduling();
+    connect();
+  }, delay);
+  reconnectCountdownTimerId = window.setInterval(() => {
+    updateReconnectCountdownStatus();
+  }, RECONNECT_SPINNER_INTERVAL_MS);
+}
+
+function clearReconnectScheduling(){
+  if (reconnectTimerId){
+    window.clearTimeout(reconnectTimerId);
+    reconnectTimerId = null;
+  }
+  if (reconnectCountdownTimerId){
+    window.clearInterval(reconnectCountdownTimerId);
+    reconnectCountdownTimerId = null;
+  }
+  reconnectTargetTimestamp = null;
+}
+
+function updateReconnectCountdownStatus(force){
+  if (force){
+    reconnectSpinnerIndex = 0;
+  }
+
+  if (!reconnectTargetTimestamp){
+    connectionStatus = 'Reconnecting…';
+  } else {
+    const now = Date.now();
+    const remainingMs = Math.max(0, reconnectTargetTimestamp - now);
+    const spinner = RECONNECT_SPINNER_FRAMES[reconnectSpinnerIndex % RECONNECT_SPINNER_FRAMES.length];
+    reconnectSpinnerIndex = (reconnectSpinnerIndex + 1) % RECONNECT_SPINNER_FRAMES.length;
+    if (remainingMs <= 0){
+      connectionStatus = `${spinner} Reconnecting…`;
+    } else {
+      const remainingSeconds = Math.ceil(remainingMs / 1000);
+      connectionStatus = `${spinner} Reconnecting in ${remainingSeconds}s (attempt ${reconnectAttempt})…`;
+    }
+  }
+
+  updateHudStatus();
+}
+
+function computeReconnectDelay(attempt){
+  const exponent = Math.max(0, attempt - 1);
+  const delay = RECONNECT_BASE_DELAY_MS * Math.pow(1.5, exponent);
+  return Math.min(RECONNECT_MAX_DELAY_MS, Math.round(delay));
+}
+
 
 function handleMsg(msg){
   if (msg.type === 'telemetry'){
@@ -444,50 +529,146 @@ function syncCruiseControllerTarget(options = {}){
 }
 
 function beginAircraftLoad(){
-  if (aircraftTemplate || aircraftLoadPromise || aircraftLoadError) return aircraftLoadPromise;
+  const activeKey = currentModelSetKey;
+  currentModelSet = MODEL_SETS[activeKey] || MODEL_SETS[DEFAULT_MODEL_SET_KEY];
 
-  if (SELECTED_MODEL_SET.type === 'gltf') {
-    if (!gltfLoader){
+  if (!currentModelSet){
+    aircraftLoadError = true;
+    flushPendingTelemetry();
+    updateHudStatus();
+    return null;
+  }
+
+  if (aircraftTemplate && !aircraftLoadError){
+    const cachedTemplate = modelSetAssetCache.get(activeKey);
+    if (!cachedTemplate || cachedTemplate.template !== aircraftTemplate){
+      modelSetAssetCache.set(activeKey, { template: aircraftTemplate });
+    }
+    updateHudStatus();
+    return Promise.resolve(aircraftTemplate);
+  }
+
+  const cached = modelSetAssetCache.get(activeKey);
+  if (cached?.template){
+    aircraftTemplate = cached.template;
+    aircraftLoadError = false;
+    rebuildActiveAircraftInstances();
+    flushPendingTelemetry();
+    updateHudStatus();
+    return Promise.resolve(aircraftTemplate);
+  }
+
+  if (cached?.promise){
+    aircraftLoadPromise = cached.promise;
+    return aircraftLoadPromise;
+  }
+
+  let loadPromise;
+  if (currentModelSet.type === 'gltf') {
+    const loader = ensureGltfLoader();
+    if (!loader){
       aircraftLoadError = true;
+      modelSetAssetCache.set(activeKey, { error: new Error('GLTFLoader unavailable') });
       flushPendingTelemetry();
+      updateHudStatus();
       return null;
     }
-    aircraftLoadPromise = new Promise((resolve, reject) => {
-      gltfLoader.load(SELECTED_MODEL_SET.path, (gltf) => {
-        aircraftTemplate = prepareAircraftTemplate(gltf.scene);
-        resolve(aircraftTemplate);
+    loadPromise = new Promise((resolve, reject) => {
+      loader.load(currentModelSet.path, (gltf) => {
+        resolve(prepareAircraftTemplate(gltf.scene));
       }, undefined, (err) => reject(err));
     });
-  } else if (SELECTED_MODEL_SET.type === 'procedural') {
-    aircraftLoadPromise = new Promise((resolve, reject) => {
+  } else if (currentModelSet.type === 'procedural') {
+    loadPromise = new Promise((resolve, reject) => {
       try {
-        aircraftTemplate = prepareAircraftTemplate(SELECTED_MODEL_SET.builder());
-        resolve(aircraftTemplate);
+        resolve(prepareAircraftTemplate(currentModelSet.builder()));
       } catch (builderErr) {
         reject(builderErr);
       }
     });
   } else {
     aircraftLoadError = true;
+    modelSetAssetCache.set(activeKey, { error: new Error('Unsupported model set type') });
     flushPendingTelemetry();
+    updateHudStatus();
     return null;
   }
 
-  aircraftLoadPromise.then(() => {
-    flushPendingTelemetry();
+  const trackedPromise = loadPromise.then((template) => {
+    modelSetAssetCache.set(activeKey, { template });
+    if (currentModelSetKey === activeKey){
+      aircraftTemplate = template;
+      aircraftLoadError = false;
+      rebuildActiveAircraftInstances();
+      flushPendingTelemetry();
+      updateHudStatus();
+    }
+    return template;
   }).catch((err) => {
-    aircraftLoadError = true;
     console.error('Failed to load aircraft model', err);
-    flushPendingTelemetry();
+    modelSetAssetCache.set(activeKey, { error: err });
+    if (currentModelSetKey === activeKey){
+      aircraftLoadError = true;
+      flushPendingTelemetry();
+      updateHudStatus();
+    }
+    throw err;
+  }).finally(() => {
+    if (currentModelSetKey === activeKey){
+      aircraftLoadPromise = null;
+    }
   });
 
-  return aircraftLoadPromise;
+  modelSetAssetCache.set(activeKey, { promise: trackedPromise });
+  if (currentModelSetKey === activeKey){
+    aircraftLoadPromise = trackedPromise;
+  }
+  updateHudStatus();
+  return trackedPromise;
 }
 
 function flushPendingTelemetry(){
   if (!pendingTelemetry.length) return;
   const queued = pendingTelemetry.splice(0, pendingTelemetry.length);
   queued.forEach((queuedMsg) => handleMsg(queuedMsg));
+}
+
+function ensureGltfLoader(){
+  if (gltfLoader) return gltfLoader;
+  if (gltfLoaderUnavailable) return null;
+  try {
+    if (typeof THREE !== 'undefined' && typeof THREE.GLTFLoader === 'function') {
+      gltfLoader = new THREE.GLTFLoader();
+      return gltfLoader;
+    }
+    console.warn('GLTFLoader not found; using fallback mesh.');
+  } catch (err) {
+    console.warn('Failed to init GLTFLoader; using fallback mesh.', err);
+  }
+  gltfLoaderUnavailable = true;
+  return null;
+}
+
+function rebuildActiveAircraftInstances(){
+  if (!aircraftTemplate || aircraftLoadError || !scene) return;
+  planeMeshes.forEach((mesh, id) => {
+    if (!mesh) return;
+    const previousPosition = mesh.position.clone();
+    const previousQuaternion = mesh.quaternion.clone();
+    const previousScale = mesh.scale.clone();
+
+    scene.remove(mesh);
+    disposePlaneResources(id);
+
+    const { object, geometries, materials, textures } = createAircraftInstance();
+    object.position.copy(previousPosition);
+    object.quaternion.copy(previousQuaternion);
+    object.scale.copy(previousScale);
+
+    planeMeshes.set(id, object);
+    planeResources.set(id, { geometries, materials, textures });
+    scene.add(object);
+  });
 }
 
 function prepareAircraftTemplate(root){
@@ -918,7 +1099,9 @@ function setAccelerationEngaged(enabled, options = {}){
 
   updateAccelerationButtonState();
   updateHudStatus();
-  syncCruiseControllerTarget();
+  if (!options.skipCruiseSync){
+    syncCruiseControllerTarget();
+  }
 }
 
 function handleKeyDown(event){
@@ -1136,27 +1319,67 @@ function clamp(value, min, max){
 }
 
 function updateHudStatus(){
-  if (HUD){
-    const controlMode = manualControlEnabled
-      ? `Manual ${manualMovementActive ? '(active)' : '(idle)'}`
-      : 'Telemetry';
-    const accelLabel = accelerationEngaged
-      ? `Forward acceleration: ON (${forwardSpeed.toFixed(0)} u/s)`
-      : 'Forward acceleration: off';
-    const simOverrideLabel = simManualOverrideActive
-      ? 'Simulator override: MANUAL'
-      : 'Simulator override: autopilot';
-    HUD.innerText = `${connectionStatus}\nMode: ${controlMode}\nModel set: ${MODEL_SET_LABEL}\n${accelLabel}\n${simOverrideLabel}\n[M] toggle manual · [T] toggle thrust · WASD/RF move · QE yaw · arrows pitch/roll`;
+  if (!HUD) return;
+  const controlMode = manualControlEnabled
+    ? `Manual ${manualMovementActive ? '(active)' : '(idle)'}`
+    : 'Telemetry';
+  const accelLabel = accelerationEngaged
+    ? `Forward acceleration: ON (${forwardSpeed.toFixed(0)} u/s)`
+    : 'Forward acceleration: off';
+  const simOverrideLabel = simManualOverrideActive
+    ? 'Simulator override: MANUAL'
+    : 'Simulator override: autopilot';
+  const modelStatus = computeModelSetStatus();
+  const modelLine = modelStatus.note
+    ? `${modelStatus.label} ${modelStatus.note}`.trim()
+    : modelStatus.label;
+
+  HUD.innerText =
+    `${connectionStatus}\n` +
+    `Mode: ${controlMode}\n` +
+    `Model set: ${modelLine}\n` +
+    `${accelLabel}\n` +
+    `${simOverrideLabel}\n` +
+    `[M] toggle manual · [T] toggle thrust · WASD/RF move · QE yaw · arrows pitch/roll`;
+
+  if (MODEL_SET_STATUS){
+    MODEL_SET_STATUS.textContent = `Active aircraft: ${modelLine}`.trim();
   }
-  updateConnectionBanner();
+  syncModelSetPicker();
+  updateConnectionBanner(); // keep the banner in sync with connectionStatus
 }
 
+function computeModelSetStatus(){
+  const activeSet = MODEL_SETS[currentModelSetKey] || MODEL_SETS[DEFAULT_MODEL_SET_KEY];
+  if (!activeSet){
+    return { label: 'Unavailable', note: '(not configured)' };
+  }
+  if (aircraftLoadError){
+    return { label: activeSet.label, note: '(fallback active)' };
+  }
+  const cacheEntry = modelSetAssetCache.get(currentModelSetKey);
+  if (cacheEntry?.promise){
+    return { label: activeSet.label, note: '(loading…)' };
+  }
+  if (cacheEntry?.template || aircraftTemplate){
+    return { label: activeSet.label, note: '(ready)' };
+  }
+  return { label: activeSet.label, note: '(initializing…)' };
+}
+
+function syncModelSetPicker(){
+  if (!MODEL_SET_SELECT || !MODEL_SET_SELECT.options?.length) return;
+  if (MODEL_SET_SELECT.value !== currentModelSetKey){
+    MODEL_SET_SELECT.value = currentModelSetKey;
+  }
+}
+
+// Minimal banner updater driven by the plain `connectionStatus` string.
 function updateConnectionBanner(){
   if (!CONNECTION_BANNER) return;
-  const shouldShow = connectionStatusKey === CONNECTION_STATUS_KEYS.ERROR
-    || connectionStatusKey === CONNECTION_STATUS_KEYS.DISCONNECTED
-    || connectionStatusKey === CONNECTION_STATUS_KEYS.RECONNECTING;
 
+  // Show the banner when we’re not cleanly connected.
+  const shouldShow = /Reconnecting|Connection lost|Connection error|Connecting…/i.test(connectionStatus);
   if (shouldShow){
     CONNECTION_BANNER.removeAttribute('hidden');
   } else {
@@ -1164,41 +1387,28 @@ function updateConnectionBanner(){
   }
 
   if (CONNECTION_BANNER_MESSAGE){
-    const bannerCopy = getConnectionStatusBanner(connectionStatusKey) || connectionStatus;
-    CONNECTION_BANNER_MESSAGE.textContent = bannerCopy || connectionStatus;
+    CONNECTION_BANNER_MESSAGE.textContent = connectionStatus;
   }
 
   if (CONNECTION_RECONNECT_BUTTON){
-    CONNECTION_RECONNECT_BUTTON.textContent = UI_STRINGS.buttons.reconnect;
-    CONNECTION_RECONNECT_BUTTON.disabled = connectionStatusKey === CONNECTION_STATUS_KEYS.RECONNECTING;
+    // Disable during the automatic countdown phase (user sees remaining seconds)
+    const disabled = /Reconnecting in \d+s/.test(connectionStatus);
+    CONNECTION_RECONNECT_BUTTON.textContent = UI_STRINGS?.buttons?.reconnect || 'Reconnect';
+    CONNECTION_RECONNECT_BUTTON.disabled = disabled;
   }
 
-  CONNECTION_BANNER.dataset.status = connectionStatusKey;
+  // Optional: reflect status as a data-attribute for CSS hooks
+  // (maps to coarse states based on text)
+  const statusKey =
+    /Connected/.test(connectionStatus) ? 'connected' :
+    /Reconnecting/.test(connectionStatus) ? 'reconnecting' :
+    /Connecting/.test(connectionStatus) ? 'connecting' :
+    /error/i.test(connectionStatus) ? 'error' :
+    /lost/i.test(connectionStatus) ? 'disconnected' :
+    'unknown';
+  CONNECTION_BANNER.dataset.status = statusKey;
 }
 
-function setConnectionStatus(statusKey){
-  if (!statusKey) return;
-  connectionStatusKey = statusKey;
-  connectionStatus = getConnectionStatusLabel(statusKey);
-  updateHudStatus();
-}
-
-function getConnectionStatusCopy(statusKey, field){
-  const fallback = UI_STRINGS.connectionStatus[CONNECTION_STATUS_KEYS.CONNECTING] || {};
-  const entry = UI_STRINGS.connectionStatus[statusKey] || fallback;
-  const value = entry && field ? entry[field] : null;
-  if (typeof value === 'string' && value.length) return value;
-  const fallbackValue = fallback && field ? fallback[field] : null;
-  return typeof fallbackValue === 'string' ? fallbackValue : '';
-}
-
-function getConnectionStatusLabel(statusKey){
-  return getConnectionStatusCopy(statusKey, 'label');
-}
-
-function getConnectionStatusBanner(statusKey){
-  return getConnectionStatusCopy(statusKey, 'banner');
-}
 
 function wireButtonHandlers(){
   // Bind UI buttons to the same logic used by the keyboard shortcuts so the
@@ -1224,6 +1434,40 @@ function wireButtonHandlers(){
   updateManualButtonState();
   updateAccelerationButtonState();
   updateRerouteButtonState();
+}
+
+function setupModelSetPicker(){
+  if (!MODEL_SET_SELECT) return;
+  MODEL_SET_SELECT.innerHTML = '';
+  Object.entries(MODEL_SETS).forEach(([key, set]) => {
+    const option = document.createElement('option');
+    option.value = key;
+    option.textContent = set.label;
+    MODEL_SET_SELECT.appendChild(option);
+  });
+  MODEL_SET_SELECT.addEventListener('change', (event) => {
+    const desiredKey = event.target.value;
+    handleModelSetSelection(desiredKey);
+  });
+  syncModelSetPicker();
+}
+
+function handleModelSetSelection(desiredKey){
+  const resolvedKey = resolveModelSetKey(desiredKey);
+  const nextKey = MODEL_SETS[resolvedKey] ? resolvedKey : DEFAULT_MODEL_SET_KEY;
+  currentModelSetKey = nextKey;
+  currentModelSet = MODEL_SETS[currentModelSetKey] || MODEL_SETS[DEFAULT_MODEL_SET_KEY];
+  runtimeModelSetKey = currentModelSetKey;
+  persistModelSetKey(currentModelSetKey);
+
+  aircraftTemplate = null;
+  aircraftLoadPromise = null;
+  aircraftLoadError = false;
+
+  syncModelSetPicker();
+  updateHudStatus();
+
+  beginAircraftLoad();
 }
 
 function loadControlDocs(){
@@ -1264,15 +1508,74 @@ function updateAccelerationButtonState(){
   ACCELERATE_BUTTON.classList.toggle('is-active', accelerationEngaged);
 }
 
-function resolveModelSetKey(){
+function resolveModelSetKey(preferredKey){
+  if (preferredKey && MODEL_SETS[preferredKey]) {
+    runtimeModelSetKey = preferredKey;
+    return preferredKey;
+  }
+
+  if (preferredKey && !MODEL_SETS[preferredKey]) {
+    runtimeModelSetKey = DEFAULT_MODEL_SET_KEY;
+    return DEFAULT_MODEL_SET_KEY;
+  }
+
+  if (runtimeModelSetKey && MODEL_SETS[runtimeModelSetKey]) {
+    return runtimeModelSetKey;
+  }
+
+  let queryKey = null;
   try {
     const params = new URLSearchParams(window.location.search);
-    const key = params.get('modelSet') || params.get('modelset');
-    if (key && MODEL_SETS[key]) return key;
+    queryKey = params.get('modelSet') || params.get('modelset');
   } catch (err) {
     console.warn('Unable to parse modelSet parameter', err);
   }
+  if (queryKey && MODEL_SETS[queryKey]){
+    runtimeModelSetKey = queryKey;
+    return queryKey;
+  }
+
+  const storedKey = readPersistedModelSetKey();
+  if (storedKey && MODEL_SETS[storedKey]){
+    runtimeModelSetKey = storedKey;
+    return storedKey;
+  }
+
+  runtimeModelSetKey = DEFAULT_MODEL_SET_KEY;
   return DEFAULT_MODEL_SET_KEY;
+}
+
+function readPersistedModelSetKey(){
+  if (modelSetStorageUnavailable) return null;
+  try {
+    if (typeof window === 'undefined' || !window.localStorage){
+      modelSetStorageUnavailable = true;
+      return null;
+    }
+    return window.localStorage.getItem(MODEL_SET_STORAGE_KEY);
+  } catch (err) {
+    if (!modelSetStorageUnavailable) {
+      console.warn('Unable to read model set from storage', err);
+    }
+    modelSetStorageUnavailable = true;
+  }
+  return null;
+}
+
+function persistModelSetKey(key){
+  if (modelSetStorageUnavailable) return;
+  try {
+    if (typeof window === 'undefined' || !window.localStorage){
+      modelSetStorageUnavailable = true;
+      return;
+    }
+    window.localStorage.setItem(MODEL_SET_STORAGE_KEY, key);
+  } catch (err) {
+    if (!modelSetStorageUnavailable) {
+      console.warn('Unable to persist model set selection', err);
+    }
+    modelSetStorageUnavailable = true;
+  }
 }
 
 function createStylizedLowpolyTemplate(){
