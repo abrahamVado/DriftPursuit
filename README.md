@@ -84,6 +84,18 @@ Follow these steps to bring the entire stack up locally on one machine:
    - Navigate to `http://localhost:8080/viewer/index.html` in your browser.
    - You should see the 3D scene update in real time as telemetry arrives.
 
+## Development
+
+Run the Python unit tests after making changes to the navigation helpers:
+
+```bash
+cd python-sim
+python -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+pytest
+```
+
 ## Key URLs
 
 Once everything is running locally, you can visit these URLs:
