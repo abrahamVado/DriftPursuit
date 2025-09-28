@@ -1,5 +1,9 @@
 # python-sim/client.py
 # Minimal simulation client that sends telemetry and occasional cake_drop messages to ws://localhost:8080/ws
+
+import argparse
+import os
+from typing import Optional
 import json
 import random
 import threading
@@ -7,38 +11,41 @@ import time
 from queue import Empty, Queue
 
 import numpy as np
-from websocket import WebSocketConnectionClosedException, create_connection
+from websocket import create_connection, WebSocketConnectionClosedException
 
-WS_URL = "ws://localhost:8080/ws"
-TICK = 1.0/30.0
+DEFAULT_WS_URL = "ws://localhost:8080/ws"
+TICK = 1.0 / 30.0
+
 
 class Plane:
-    def __init__(self, id, x=0,y=0,z=1000, speed=120.0):
+    def __init__(self, id, x=0, y=0, z=1000, speed=120.0):
         self.id = id
-        self.pos = np.array([x,y,z], dtype=float)
-        self.vel = np.array([speed,0,0], dtype=float)
-        self.ori = [0,0,0]
+        self.pos = np.array([x, y, z], dtype=float)
+        self.vel = np.array([speed, 0, 0], dtype=float)
+        self.ori = [0, 0, 0]
         self.tags = []
 
     def step(self, dt):
         self.pos += self.vel * dt
 
+
 def mk_telemetry(plane, t):
     return json.dumps({
-        "type":"telemetry",
+        "type": "telemetry",
         "id": plane.id,
         "t": t,
         "pos": [float(plane.pos[0]), float(plane.pos[1]), float(plane.pos[2])],
         "vel": [float(plane.vel[0]), float(plane.vel[1]), float(plane.vel[2])],
         "ori": plane.ori,
-        "tags": plane.tags
+        "tags": plane.tags,
     })
+
 
 def mk_cake_drop(plane, landing_pos=None, status="in_flight"):
     landing = landing_pos or [float(plane.pos[0] + 50), float(plane.pos[1] - 20), 0.0]
     landing = [float(component) for component in landing]
     return json.dumps({
-        "type":"cake_drop",
+        "type": "cake_drop",
         "id": f"cake-{int(time.time())}",
         "from": plane.id,
         "pos": [float(plane.pos[0]), float(plane.pos[1]), float(plane.pos[2])],
@@ -46,7 +53,9 @@ def mk_cake_drop(plane, landing_pos=None, status="in_flight"):
         "status": status,
     })
 
-def receiver_loop(ws, command_queue, stop_event):
+
+def receiver_loop(ws, command_queue, stop_event: threading.Event):
+    """Background loop to receive messages from broker and enqueue commands."""
     while not stop_event.is_set():
         try:
             raw_msg = ws.recv()
@@ -67,23 +76,22 @@ def receiver_loop(ws, command_queue, stop_event):
             print("Receiver loop: invalid JSON", raw_msg)
             continue
 
-        msg_type = msg.get("type")
-        if msg_type == "command":
+        if msg.get("type") == "command":
             command_queue.put(msg)
             print("Receiver loop: queued command", msg)
-        else:
-            print(f"Receiver loop: ignoring unsupported message type '{msg_type}'")
+        # else: ignore other message types
 
     stop_event.set()
 
-def process_pending_commands(plane, ws, command_queue):
+
+def process_pending_commands(plane, ws, command_queue: Queue):
     while True:
         try:
             command = command_queue.get_nowait()
         except Empty:
             break
-
         handle_command(command, plane, ws)
+
 
 def handle_command(command, plane, ws):
     cmd_name = command.get("cmd")
@@ -100,44 +108,117 @@ def handle_command(command, plane, ws):
     else:
         print(f"No handler for command '{cmd_name}', ignoring")
 
-def run():
-    print("Connecting to", WS_URL)
-    try:
-        ws = create_connection(WS_URL)
-    except Exception as e:
-        print("Failed to connect:", e)
-        return
+
+def run(ws_url: str):
+    print("Connecting to", ws_url)
     p = Plane("plane-1", x=0, y=0, z=1200, speed=140.0)
     p.tags.append("pastel:turquoise")
+
     t0 = time.time()
     last_cake = -10.0
-    stop_event = threading.Event()
-    command_queue = Queue()
-    receiver = threading.Thread(target=receiver_loop, args=(ws, command_queue, stop_event), daemon=True)
-    receiver.start()
-    try:
-        while not stop_event.is_set():
-            t = time.time() - t0
-            p.step(TICK)
-            process_pending_commands(p, ws, command_queue)
-            try:
-                ws.send(mk_telemetry(p, t))
-            except WebSocketConnectionClosedException:
-                print("Connection closed"); break
-            # simple cake drop every ~8-12s randomly
-            if (t - last_cake) > 8.0 and random.random() < 0.02:
-                last_cake = t
+    backoff = 1.0
+    max_backoff = 10.0
+    should_stop = False
+
+    while not should_stop:
+        ws = None
+        stop_event = threading.Event()
+        command_queue: Queue = Queue()
+        receiver: Optional[threading.Thread] = None
+
+        try:
+            print("Connecting to", ws_url)
+            ws = create_connection(ws_url)
+            print("Connected to", ws_url)
+            backoff = 1.0
+
+            # Start background receiver
+            receiver = threading.Thread(target=receiver_loop, args=(ws, command_queue, stop_event), daemon=True)
+            receiver.start()
+
+            while not stop_event.is_set():
+                t = time.time() - t0
+                p.step(TICK)
+
+                # Handle incoming commands from broker
+                process_pending_commands(p, ws, command_queue)
+
+                # Send telemetry
                 try:
-                    cake_msg = mk_cake_drop(p)
-                    ws.send(cake_msg)
-                    print("Sent cake_drop", cake_msg)
-                except Exception as e:
-                    print("send cake err", e)
-            time.sleep(TICK)
-    finally:
-        stop_event.set()
-        ws.close()
-        receiver.join(timeout=1.0)
+                    ws.send(mk_telemetry(p, t))
+                except WebSocketConnectionClosedException:
+                    print("Connection closed while sending telemetry")
+                    raise
+
+                # Occasional cake drop
+                if (t - last_cake) > 8.0 and random.random() < 0.02:
+                    last_cake = t
+                    try:
+                        cake_msg = mk_cake_drop(p)
+                        ws.send(cake_msg)
+                        print("Sent cake_drop", cake_msg)
+                    except WebSocketConnectionClosedException:
+                        print("Connection closed while sending cake_drop")
+                        raise
+                    except Exception as e:
+                        print("send cake err", e)
+
+                time.sleep(TICK)
+
+        except KeyboardInterrupt:
+            print("Stopping client")
+            should_stop = True
+        except WebSocketConnectionClosedException:
+            print("Lost connection to server")
+        except Exception as e:
+            print("Connection error:", e)
+        finally:
+            # Signal receiver to stop and close socket
+            stop_event.set()
+            if ws is not None:
+                try:
+                    ws.close()
+                except Exception:
+                    pass
+            if receiver is not None:
+                receiver.join(timeout=1.0)
+
+        if should_stop:
+            break
+
+        print(f"Reconnecting in {backoff:.1f}s...")
+        time.sleep(backoff)
+        backoff = min(backoff * 2, max_backoff)
+
+
+def parse_args():
+    parser = argparse.ArgumentParser(
+        description=(
+            "Minimal simulation client that sends telemetry and occasional "
+            "cake_drop messages to a DriftPursuit broker."
+        )
+    )
+    parser.add_argument(
+        "--broker-url",
+        "-b",
+        help=(
+            "WebSocket URL of the broker to connect to. Overrides the "
+            "SIM_BROKER_URL environment variable."
+        ),
+    )
+    return parser.parse_args()
+
+
+def get_ws_url(cli_url: Optional[str]) -> str:
+    if cli_url:
+        return cli_url
+    env_url = os.getenv("SIM_BROKER_URL")
+    if env_url:
+        return env_url
+    return DEFAULT_WS_URL
+
 
 if __name__ == '__main__':
-    run()
+    args = parse_args()
+    ws_url = get_ws_url(args.broker_url)
+    run(ws_url)
