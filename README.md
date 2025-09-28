@@ -1,42 +1,75 @@
-DriftPursuit - Starter Repo (Go broker + Python sim + three.js viewer)
-====================================================================
+# DriftPursuit - Starter Repo (Go broker + Python sim + three.js viewer)
 
-This starter contains:
-- go-broker/: simple WebSocket broker (Go) that relays messages and serves the viewer
-- python-sim/: Python simulation client that sends telemetry and cake drops
-- viewer/: a small three.js app (third-person view) connecting to the broker
+This starter project wires together three pieces so you can focus on gameplay and visual polish:
 
-Quickstart (all on one machine)
-1. Start the Go broker (serves viewer and WS):
-   - Install Go 1.20+
-   - cd go-broker
-   - go mod tidy
-   - go run main.go
-   Broker listens on http://localhost:8080
+- `go-broker/`: Simple Go WebSocket broker that relays messages and serves the static viewer.
+- `python-sim/`: Python simulation client that publishes telemetry and cake drops.
+- `viewer/`: A minimal three.js web client that subscribes to the broker feed.
 
-Configuring allowed WebSocket origins
--------------------------------------
-The broker enforces an allowlist for incoming WebSocket connections. By default, only local development origins (`http://localhost`, `http://127.0.0.1`, etc.) are accepted so you can run everything on one machine without extra configuration.
+## Prerequisites
 
-- **Development:** No changes required when testing locally. Optional: `go run main.go -allowed-origins="http://localhost:5173"` to explicitly list your dev server.
-- **Staging/Production:** Provide a comma-separated list of allowed origins through either the `-allowed-origins` flag or the `BROKER_ALLOWED_ORIGINS` environment variable. Example: `BROKER_ALLOWED_ORIGINS="https://viewer.example.com,https://tools.example.com" go run main.go`.
-- The CLI flag takes precedence over the environment variable. Requests from origins not in the allowlist (and not local) will be rejected during the WebSocket upgrade.
+- Go 1.20 or newer
+- Python 3.10 or newer with `pip`
+- Node.js/npm (optional, only needed if you plan to extend or rebuild the viewer assets)
 
-2. Start the Python sim client (telemetry producer):
-   - cd python-sim
-   - Create a virtualenv, install requirements: pip install -r requirements.txt
-   - python client.py
-   This connects to ws://localhost:8080/ws by default and sends telemetry & occasional cake_drop messages.
-   - To target a different broker, run `python client.py --broker-url ws://example.com:8080/ws` or set the
-     `SIM_BROKER_URL` environment variable before running the client.
-   - The client now derives an HTTP(S) origin from the broker URL automatically. To override it explicitly,
-     pass `--origin https://your-site.example` or export `SIM_ORIGIN` before launching the client.
+## Local Setup
 
-3. Open the viewer in your browser:
-   - Browse to http://localhost:8080/viewer/index.html
-   - You should see a simple 3D scene and incoming entities from the sim.
+Follow these steps to bring the entire stack up locally on one machine:
 
-Notes & next steps
-- The viewer includes a placeholder box model for the plane; replace viewer/assets/models/plane.gltf with a realistic glTF model.
-- This starter is intentionally minimal to get you running quickly. Expand python-sim/ and the viewer to add more gameplay features (abilities, radar overlays, cake physics).
-- The message protocol is JSON over WebSocket. See docs/protocol.md for details.
+1. **Start the Go broker** (serves the viewer and the WebSocket endpoint):
+   ```bash
+   cd go-broker
+   go mod tidy
+   go run main.go
+   ```
+   The broker will start on port `8080` and serve both HTTP and WebSocket traffic.
+
+2. **Configure allowed WebSocket origins (optional but recommended when deploying):**
+   - By default the broker accepts local origins such as `http://localhost` and `http://127.0.0.1` so development "just works".
+   - Supply a comma-separated allow list through the CLI flag or environment variable when you need additional origins:
+     ```bash
+     go run main.go -allowed-origins="http://localhost:5173,https://viewer.example.com"
+     # or
+     export BROKER_ALLOWED_ORIGINS="https://viewer.example.com,https://tools.example.com"
+     go run main.go
+     ```
+   - The CLI flag takes precedence over the environment variable. Requests from origins not in the allow list (and not local) are rejected during the WebSocket upgrade.
+
+3. **Run the Python simulation client** (publishes telemetry messages):
+   ```bash
+   cd python-sim
+   python -m venv .venv
+   source .venv/bin/activate
+   pip install -r requirements.txt
+   python client.py
+   ```
+   The client connects to `ws://localhost:8080/ws` by default. Override the broker URL or HTTP(S) origin if needed:
+   ```bash
+   python client.py --broker-url ws://example.com:8080/ws --origin https://example.com
+   # or
+   export SIM_BROKER_URL=ws://example.com:8080/ws
+   export SIM_ORIGIN=https://example.com
+   python client.py
+   ```
+
+4. **Open the viewer** to visualize entities streaming from the simulation:
+   - Navigate to `http://localhost:8080/viewer/index.html` in your browser.
+   - You should see the 3D scene update in real time as telemetry arrives.
+
+## Key URLs
+
+Once everything is running locally, you can visit these URLs:
+
+| Purpose | URL |
+| --- | --- |
+| Broker health/root | `http://localhost:8080/` |
+| Viewer web app | `http://localhost:8080/viewer/index.html` |
+| WebSocket endpoint | `ws://localhost:8080/ws` |
+| Protocol documentation | `docs/protocol.md` (local file) |
+
+## Next Steps
+
+- Swap out `viewer/assets/models/plane.gltf` with a high-fidelity model or add additional assets.
+- Extend the Python simulator with more telemetry types, abilities, or cake physics.
+- Expand the viewer UI with HUD elements, radar overlays, and controls.
+- Refer to `docs/protocol.md` for message schemas when integrating additional clients.
