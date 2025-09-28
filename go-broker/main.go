@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"flag"
 	"fmt"
 	"log"
@@ -35,10 +36,20 @@ type Client struct {
 type Broker struct {
 	clients map[*Client]bool
 	lock    sync.Mutex
+	stats   BrokerStats
 }
 
 func NewBroker() *Broker {
 	return &Broker{clients: make(map[*Client]bool)}
+}
+
+type BrokerStats struct {
+	Broadcasts int `json:"broadcasts"`
+	Clients    int `json:"clients"`
+}
+
+type statsProvider interface {
+	Stats() BrokerStats
 }
 
 func (b *Broker) deregisterClient(client *Client) {
@@ -46,12 +57,16 @@ func (b *Broker) deregisterClient(client *Client) {
 	if _, exists := b.clients[client]; exists {
 		delete(b.clients, client)
 		close(client.send)
+		if b.stats.Clients > 0 {
+			b.stats.Clients--
+		}
 	}
 	b.lock.Unlock()
 }
 
 func (b *Broker) broadcast(msg []byte) {
 	b.lock.Lock()
+	b.stats.Broadcasts++
 	defer b.lock.Unlock()
 	for c := range b.clients {
 		select {
@@ -59,8 +74,17 @@ func (b *Broker) broadcast(msg []byte) {
 		default:
 			close(c.send)
 			delete(b.clients, c)
+			if b.stats.Clients > 0 {
+				b.stats.Clients--
+			}
 		}
 	}
+}
+
+func (b *Broker) Stats() BrokerStats {
+	b.lock.Lock()
+	defer b.lock.Unlock()
+	return b.stats
 }
 
 // --- Origin allowlist helpers ---
@@ -130,6 +154,7 @@ func (b *Broker) serveWS(w http.ResponseWriter, r *http.Request) {
 
 	b.lock.Lock()
 	b.clients[client] = true
+	b.stats.Clients++
 	b.lock.Unlock()
 
 	// reader
@@ -178,6 +203,18 @@ func (b *Broker) serveWS(w http.ResponseWriter, r *http.Request) {
 	}()
 }
 
+func statsHandler(provider statsProvider) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		stats := provider.Stats()
+		w.Header().Set("Content-Type", "application/json")
+		if err := json.NewEncoder(w).Encode(stats); err != nil {
+			log.Printf("encode stats: %v", err)
+			http.Error(w, "internal server error", http.StatusInternalServerError)
+			return
+		}
+	}
+}
+
 // --- main / static viewer resolution ---
 
 func main() {
@@ -196,6 +233,7 @@ func main() {
 
 	b := NewBroker()
 	http.HandleFunc("/ws", b.serveWS)
+	http.HandleFunc("/api/stats", statsHandler(b))
 	registerControlDocEndpoints()
 
 	// serve viewer static files (resolve relative to this source file)
