@@ -1,10 +1,13 @@
 # python-sim/client.py
 # Minimal simulation client that sends telemetry and occasional cake_drop messages to ws://localhost:8080/ws
+import argparse
+import os
+from typing import Optional
 import time, json, math, random
 from websocket import create_connection, WebSocketConnectionClosedException
 import numpy as np
 
-WS_URL = "ws://localhost:8080/ws"
+DEFAULT_WS_URL = "ws://localhost:8080/ws"
 TICK = 1.0/30.0
 
 class Plane:
@@ -29,10 +32,10 @@ def mk_telemetry(plane, t):
         "tags": plane.tags
     })
 
-def run():
-    print("Connecting to", WS_URL)
+def run(ws_url: str):
+    print("Connecting to", ws_url)
     try:
-        ws = create_connection(WS_URL)
+        ws = create_connection(ws_url)
     except Exception as e:
         print("Failed to connect:", e)
         return
@@ -68,5 +71,34 @@ def run():
     finally:
         ws.close()
 
+def parse_args():
+    parser = argparse.ArgumentParser(
+        description=(
+            "Minimal simulation client that sends telemetry and occasional "
+            "cake_drop messages to a DriftPursuit broker."
+        )
+    )
+    parser.add_argument(
+        "--broker-url",
+        "-b",
+        help=(
+            "WebSocket URL of the broker to connect to. Overrides the "
+            "SIM_BROKER_URL environment variable."
+        ),
+    )
+    return parser.parse_args()
+
+
+def get_ws_url(cli_url: Optional[str]) -> str:
+    if cli_url:
+        return cli_url
+    env_url = os.getenv("SIM_BROKER_URL")
+    if env_url:
+        return env_url
+    return DEFAULT_WS_URL
+
+
 if __name__ == '__main__':
-    run()
+    args = parse_args()
+    ws_url = get_ws_url(args.broker_url)
+    run(ws_url)

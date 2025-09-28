@@ -18,7 +18,9 @@ Quickstart (all on one machine)
    - Create a virtualenv, install requirements: pip install -r requirements.txt
    - cd python-sim
    - python client.py
-   This connects to ws://localhost:8080/ws and sends telemetry & occasional cake_drop messages.
+   This connects to ws://localhost:8080/ws by default and sends telemetry & occasional cake_drop messages.
+   - To target a different broker, run `python client.py --broker-url ws://example.com:8080/ws` or set the
+     `SIM_BROKER_URL` environment variable before running the client.
 
 3. Open the viewer in your browser:
    - Browse to http://localhost:8080/viewer/index.html
