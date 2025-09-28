@@ -14,7 +14,12 @@ from urllib.parse import urlparse
 import numpy as np
 from websocket import create_connection, WebSocketConnectionClosedException
 
-from navigation import CruiseController, FlightPathPlanner, build_default_waypoints
+from navigation import (
+    CruiseController,
+    FlightPathPlanner,
+    Waypoint,
+    build_default_waypoints,
+)
 
 DEFAULT_WS_URL = "ws://localhost:8080/ws"
 TICK = 1.0 / 30.0
@@ -59,6 +64,54 @@ def mk_cake_drop(plane, landing_pos=None, status="in_flight"):
     })
 
 
+def send_command_status(ws, plane_id, command, status, detail=None, result=None):
+    payload = {
+        "type": "command_status",
+        "cmd": command.get("cmd"),
+        "status": status,
+        "from": plane_id,
+        "target_id": command.get("target_id") or plane_id,
+    }
+    if "command_id" in command:
+        payload["command_id"] = command["command_id"]
+    if detail:
+        payload["detail"] = detail
+    if result is not None:
+        payload["result"] = result
+
+    try:
+        ws.send(json.dumps(payload))
+    except Exception as exc:
+        print("Failed to send command status:", exc)
+
+
+def parse_waypoint_list(raw_waypoints):
+    if not isinstance(raw_waypoints, list) or not raw_waypoints:
+        raise ValueError("params.waypoints must be a non-empty list")
+
+    waypoints = []
+    for index, entry in enumerate(raw_waypoints):
+        if not isinstance(entry, (list, tuple)) or len(entry) != 3:
+            raise ValueError(f"waypoint #{index + 1} must be a list of three numbers")
+        try:
+            x, y, z = (float(entry[0]), float(entry[1]), float(entry[2]))
+        except (TypeError, ValueError):
+            raise ValueError(f"waypoint #{index + 1} contains non-numeric values")
+        waypoints.append(Waypoint(x, y, z))
+
+    return waypoints
+
+
+def parse_float(params, key):
+    if key not in params:
+        return None
+    value = params[key]
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        raise ValueError(f"params.{key} must be a number")
+
+
 def receiver_loop(ws, command_queue, stop_event: threading.Event):
     """Background loop to receive messages from broker and enqueue commands."""
     while not stop_event.is_set():
@@ -89,29 +142,82 @@ def receiver_loop(ws, command_queue, stop_event: threading.Event):
     stop_event.set()
 
 
-def process_pending_commands(plane, ws, command_queue: Queue):
+def process_pending_commands(plane, planner, cruise, ws, command_queue: Queue):
     while True:
         try:
             command = command_queue.get_nowait()
         except Empty:
             break
-        handle_command(command, plane, ws)
+        handle_command(command, plane, planner, cruise, ws)
 
 
-def handle_command(command, plane, ws):
+def handle_command(command, plane, planner, cruise, ws):
     cmd_name = command.get("cmd")
     cmd_from = command.get("from")
     print(f"Handling command '{cmd_name}' from '{cmd_from}' with payload: {command}")
 
-    if cmd_name == "drop_cake":
-        landing_override = command.get("params", {}).get("landing_pos")
-        try:
+    params = command.get("params") or {}
+
+    try:
+        if cmd_name == "drop_cake":
+            landing_override = params.get("landing_pos")
             ws.send(mk_cake_drop(plane, landing_override))
             print("Handled drop_cake command: dispatched cake_drop message")
-        except Exception as exc:
-            print("Failed to send cake_drop in response to command:", exc)
-    else:
-        print(f"No handler for command '{cmd_name}', ignoring")
+            send_command_status(
+                ws,
+                plane.id,
+                command,
+                "ok",
+                detail="cake_drop dispatched",
+            )
+        elif cmd_name == "set_waypoints":
+            waypoints = parse_waypoint_list(params.get("waypoints"))
+            loop = params.get("loop")
+            if loop is not None and not isinstance(loop, bool):
+                raise ValueError("params.loop must be a boolean if provided")
+            arrival = parse_float(params, "arrival_tolerance")
+            planner.reset_path(waypoints, loop=loop, arrival_tolerance=arrival)
+            result_payload = {
+                "waypoint_count": len(waypoints),
+                "first_waypoint": [waypoints[0].x, waypoints[0].y, waypoints[0].z],
+                "loop": planner.loop,
+                "arrival_tolerance": planner.arrival_tolerance,
+            }
+            send_command_status(
+                ws,
+                plane.id,
+                command,
+                "ok",
+                detail="updated flight path",
+                result=result_payload,
+            )
+        elif cmd_name == "set_speed":
+            acceleration = parse_float(params, "acceleration")
+            max_speed = parse_float(params, "max_speed")
+            cruise.update_parameters(acceleration=acceleration, max_speed=max_speed)
+            result_payload = {}
+            if acceleration is not None:
+                result_payload["acceleration"] = cruise.acceleration
+            if max_speed is not None:
+                result_payload["max_speed"] = cruise.max_speed
+            send_command_status(
+                ws,
+                plane.id,
+                command,
+                "ok",
+                detail="updated cruise controller",
+                result=result_payload,
+            )
+        else:
+            detail = f"No handler for command '{cmd_name}'"
+            print(detail)
+            send_command_status(ws, plane.id, command, "error", detail=detail)
+    except ValueError as exc:
+        print(f"Validation error while handling command '{cmd_name}':", exc)
+        send_command_status(ws, plane.id, command, "error", detail=str(exc))
+    except Exception as exc:
+        print(f"Unexpected error while handling command '{cmd_name}':", exc)
+        send_command_status(ws, plane.id, command, "error", detail=f"internal error: {exc}")
 
 
 def run(ws_url: str, origin: Optional[str] = None):
@@ -162,7 +268,7 @@ def run(ws_url: str, origin: Optional[str] = None):
                 p.step(TICK)
 
                 # Handle incoming commands from broker
-                process_pending_commands(p, ws, command_queue)
+                process_pending_commands(p, planner, cruise, ws, command_queue)
 
                 # Send telemetry
                 try:

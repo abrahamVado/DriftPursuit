@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass
-from typing import Iterable, List, Sequence
+from typing import Iterable, List, Optional, Sequence
 
 import numpy as np
 
@@ -64,6 +64,52 @@ class FlightPathPlanner:
         """Return the waypoint currently being tracked."""
 
         return self._waypoints[self._index]
+
+    @property
+    def loop(self) -> bool:
+        """Whether the planner loops after reaching the last waypoint."""
+
+        return self._loop
+
+    @property
+    def arrival_tolerance(self) -> float:
+        """Distance threshold used to advance to the next waypoint."""
+
+        return self._arrival_tolerance
+
+    def reset_path(
+        self,
+        waypoints: Sequence[Waypoint],
+        *,
+        loop: Optional[bool] = None,
+        arrival_tolerance: Optional[float] = None,
+    ) -> None:
+        """Replace the waypoint list and optionally tweak planner options.
+
+        Parameters
+        ----------
+        waypoints:
+            New set of waypoints for the autopilot to follow. At least one
+            waypoint is required.
+        loop:
+            Optional flag to override whether the planner loops. ``None``
+            keeps the previous behaviour.
+        arrival_tolerance:
+            Optional override for the distance threshold that triggers an
+            advance to the next waypoint.
+        """
+
+        if not waypoints:
+            raise ValueError("waypoints must not be empty")
+
+        self._waypoints = list(waypoints)
+        self._index = 0
+
+        if loop is not None:
+            self._loop = bool(loop)
+
+        if arrival_tolerance is not None:
+            self._arrival_tolerance = float(arrival_tolerance)
 
     def advance_if_needed(self, position: np.ndarray) -> None:
         """Advance the internal pointer if the aircraft is within tolerance."""
@@ -146,6 +192,29 @@ class CruiseController:
 
         target_speed = min(np.linalg.norm(velocity) + self.acceleration * dt, self.max_speed)
         return blended_direction * target_speed
+
+    def update_parameters(
+        self,
+        *,
+        acceleration: Optional[float] = None,
+        max_speed: Optional[float] = None,
+    ) -> None:
+        """Update runtime tuning knobs for the cruise controller."""
+
+        if acceleration is None and max_speed is None:
+            raise ValueError("at least one parameter must be provided")
+
+        if acceleration is not None:
+            acceleration = float(acceleration)
+            if acceleration <= 0:
+                raise ValueError("acceleration must be positive")
+            self.acceleration = acceleration
+
+        if max_speed is not None:
+            max_speed = float(max_speed)
+            if max_speed <= 0:
+                raise ValueError("max_speed must be positive")
+            self.max_speed = max_speed
 
     @staticmethod
     def orientation_from_velocity(velocity: np.ndarray) -> Sequence[float]:
