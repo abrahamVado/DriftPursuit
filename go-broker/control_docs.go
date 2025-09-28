@@ -29,17 +29,23 @@ var defaultControlDocs = []ControlDoc{
 		Description: "Engage viewer-driven manual control so keyboard movement is applied on top of telemetry.",
 		Shortcut:    "Button / keyboard M",
 	},
-	{
-		ID:          "accelerate-forward",
-		Label:       "Forward Acceleration",
-		Description: "Toggle a scripted thrust curve that pushes the aircraft down the runway.",
-		Shortcut:    "Button / keyboard T",
-	},
-	{
-		ID:          "keyboard",
-		Label:       "Flight Keys",
-		Description: "WASD for planar movement, RF/Space/Shift for altitude, QE for yaw, arrow keys for pitch and roll.",
-	},
+        {
+                ID:          "accelerate-forward",
+                Label:       "Forward Acceleration",
+                Description: "Toggle a scripted thrust curve that pushes the aircraft down the runway.",
+                Shortcut:    "Button / keyboard T",
+        },
+        {
+                ID:          "reroute-waypoints",
+                Label:       "Cycle Autopilot Route",
+                Description: "Send preset waypoint loops to the simulator using the set_waypoints command.",
+                Shortcut:    "Button",
+        },
+        {
+                ID:          "keyboard",
+                Label:       "Flight Keys",
+                Description: "WASD for planar movement, RF/Space/Shift for altitude, QE for yaw, arrow keys for pitch and roll.",
+        },
 }
 
 // registerControlDocEndpoints registers the HTTP handlers used by the viewer to

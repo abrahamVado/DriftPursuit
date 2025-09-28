@@ -2,6 +2,7 @@
 const HUD = document.getElementById('hud');
 const MANUAL_BUTTON = document.getElementById('manual-toggle');
 const ACCELERATE_BUTTON = document.getElementById('accelerate-forward');
+const REROUTE_BUTTON = document.getElementById('reroute-waypoints');
 const CONTROL_INSTRUCTIONS_LIST = document.getElementById('control-instructions');
 const WS_URL = (location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + '/ws';
 
@@ -56,6 +57,11 @@ const DEFAULT_CONTROL_DOCS = [
     id: 'keyboard',
     label: 'Flight Keys',
     description: 'Use WASD to strafe, RF/Space/Shift to climb or descend, QE for yaw, and arrow keys for pitch/roll.'
+  },
+  {
+    id: 'reroute-waypoints',
+    label: 'Cycle Autopilot Route',
+    description: 'Send preset waypoint loops to the simulator via the set_waypoints command.'
   }
 ];
 
@@ -94,6 +100,40 @@ let connectionStatus = 'Connecting…';
 let lastFrameTime = null;
 let accelerationEngaged = false;
 let forwardSpeed = 0;
+let commandSequence = 0;
+let pendingAutopilotPreset = null;
+let lastAppliedAutopilotLabel = null;
+let nextAutopilotPresetIndex = 0;
+
+const CRUISE_SPEED_PRESETS = {
+  cruise: { max_speed: 250, acceleration: 18 },
+  boost: { max_speed: 290, acceleration: 26 },
+};
+
+const AUTOPILOT_PRESETS = [
+  {
+    label: 'Scenic Runway Loop',
+    loop: true,
+    arrivalTolerance: 80,
+    waypoints: [
+      [-800, -400, 1200],
+      [-200, 0, 1350],
+      [600, 420, 1200],
+      [200, -200, 1100],
+    ],
+  },
+  {
+    label: 'Harbour Climb',
+    loop: true,
+    arrivalTolerance: 70,
+    waypoints: [
+      [-600, -300, 1000],
+      [-150, 260, 1500],
+      [520, 520, 1400],
+      [420, -280, 1050],
+    ],
+  },
+];
 
 updateHudStatus();
 wireButtonHandlers();
@@ -106,7 +146,11 @@ initThree();
 if (SELECTED_MODEL_SET.type === 'procedural' || gltfLoader) beginAircraftLoad();
 
 let socket = new WebSocket(WS_URL);
-socket.addEventListener('open', ()=>{ connectionStatus = 'Connected to broker'; updateHudStatus(); });
+socket.addEventListener('open', ()=>{
+  connectionStatus = 'Connected to broker';
+  updateHudStatus();
+  syncCruiseControllerTarget({ forceBaseline: true });
+});
 socket.addEventListener('message', (ev)=>{
   try{
     const msg = JSON.parse(ev.data);
@@ -169,7 +213,116 @@ function handleMsg(msg){
     scene.add(s);
     cakes[id] = s;
     setTimeout(()=>{ scene.remove(s); delete cakes[id]; }, 8000);
+  } else if (msg.type === 'command_status') {
+    handleCommandStatus(msg);
   }
+}
+
+function nextCommandId(){
+  commandSequence += 1;
+  return `viewer-${commandSequence}`;
+}
+
+function sendSimCommand(cmd, params = {}){
+  if (!socket || socket.readyState !== WebSocket.OPEN){
+    console.warn('Cannot send command; socket not open');
+    return null;
+  }
+
+  const commandId = nextCommandId();
+  const payload = {
+    type: 'command',
+    cmd,
+    from: 'viewer-ui',
+    target_id: currentFollowId || 'plane-1',
+    params,
+    command_id: commandId,
+  };
+
+  try {
+    socket.send(JSON.stringify(payload));
+    console.log('Sent command', payload);
+    return commandId;
+  } catch (err) {
+    console.warn('Failed to send command', err);
+    return null;
+  }
+}
+
+function handleCommandStatus(msg){
+  const { cmd, status, detail } = msg;
+  const logPrefix = status === 'ok' ? 'Command succeeded' : 'Command failed';
+  console.log(`${logPrefix}: ${cmd}`, msg);
+  if (status === 'error' && detail){
+    console.warn('Command detail:', detail);
+  }
+
+  if (cmd === 'set_waypoints'){
+    if (pendingAutopilotPreset && msg.command_id === pendingAutopilotPreset.commandId){
+      if (status === 'ok'){
+        lastAppliedAutopilotLabel = pendingAutopilotPreset.label;
+        nextAutopilotPresetIndex = (pendingAutopilotPreset.index + 1) % AUTOPILOT_PRESETS.length;
+      }
+      pendingAutopilotPreset = null;
+      updateRerouteButtonState();
+    }
+  }
+
+  if (cmd === 'set_speed' && status === 'error'){
+    // Re-send baseline cruise settings so the aircraft continues smoothly.
+    syncCruiseControllerTarget({ forceBaseline: true });
+  }
+}
+
+function updateRerouteButtonState(){
+  if (!REROUTE_BUTTON) return;
+  let label = 'Cycle Autopilot Route';
+  if (pendingAutopilotPreset){
+    label = `Routing… ${pendingAutopilotPreset.label}`;
+    REROUTE_BUTTON.classList.add('is-active');
+  } else {
+    REROUTE_BUTTON.classList.remove('is-active');
+    if (lastAppliedAutopilotLabel){
+      label = `Route: ${lastAppliedAutopilotLabel} · Cycle Autopilot Route`;
+    }
+  }
+  REROUTE_BUTTON.textContent = label;
+}
+
+function cycleAutopilotWaypoints(){
+  if (pendingAutopilotPreset){
+    console.warn('Autopilot command already pending');
+    return;
+  }
+  if (!AUTOPILOT_PRESETS.length){
+    console.warn('No autopilot presets available');
+    return;
+  }
+  const preset = AUTOPILOT_PRESETS[nextAutopilotPresetIndex];
+  const commandId = sendSimCommand('set_waypoints', {
+    waypoints: preset.waypoints,
+    loop: preset.loop,
+    arrival_tolerance: preset.arrivalTolerance,
+  });
+  if (commandId){
+    pendingAutopilotPreset = {
+      commandId,
+      label: preset.label,
+      index: nextAutopilotPresetIndex,
+    };
+    updateRerouteButtonState();
+  }
+}
+
+function syncCruiseControllerTarget(options = {}){
+  const preset = options.forceBaseline || !accelerationEngaged
+    ? CRUISE_SPEED_PRESETS.cruise
+    : CRUISE_SPEED_PRESETS.boost;
+  if (!preset) return;
+  sendSimCommand('set_speed', {
+    max_speed: preset.max_speed,
+    acceleration: preset.acceleration,
+  });
 }
 
 function beginAircraftLoad(){
@@ -614,6 +767,7 @@ function setAccelerationEngaged(enabled, options = {}){
 
   updateAccelerationButtonState();
   updateHudStatus();
+  syncCruiseControllerTarget();
 }
 
 function handleKeyDown(event){
@@ -746,8 +900,15 @@ function wireButtonHandlers(){
     });
   }
 
+  if (REROUTE_BUTTON){
+    REROUTE_BUTTON.addEventListener('click', () => {
+      cycleAutopilotWaypoints();
+    });
+  }
+
   updateManualButtonState();
   updateAccelerationButtonState();
+  updateRerouteButtonState();
 }
 
 function loadControlDocs(){
