@@ -35,6 +35,7 @@ Follow these steps to bring the entire stack up locally on one machine:
    ```
    The broker will start on port `8080` and serve both HTTP and WebSocket traffic.
    A JSON summary of the broker status is exposed at `http://localhost:8080/api/stats`.
+   A lightweight health endpoint is available at `http://localhost:8080/healthz` and reports HTTP 200 when the broker is healthy or 503 if a fatal startup issue was recorded.
 
    To enable HTTPS/WSS, provide a certificate and key (CLI flags take precedence over the matching environment variables):
    ```bash
