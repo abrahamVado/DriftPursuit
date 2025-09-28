@@ -2,6 +2,8 @@
 
 This starter project wires together three pieces so you can focus on gameplay and visual polish:
 
+> **Documentation asset note:** The connection flow banner screenshot is now managed outside of this repository so it can be updated manually without touching version control.
+
 - `go-broker/`: Simple Go WebSocket broker that relays messages and serves the static viewer.
 - `python-sim/`: Python simulation client that publishes telemetry and cake drops.
 - `viewer/`: A minimal three.js web client that subscribes to the broker feed.
