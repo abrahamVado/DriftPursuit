@@ -1,13 +1,16 @@
-# python-sim/client.py
-# Minimal simulation client that sends telemetry and occasional cake_drop messages to ws://localhost:8080/ws
+"""Minimal simulation client that sends telemetry to a DriftPursuit broker.
+
+The client can optionally persist every telemetry and cake_drop payload to a log
+file using ``--log-file`` (defaulting to JSON Lines output).
+"""
 
 import argparse
 import os
-from typing import Optional, Tuple
 import json
 import random
 import threading
 import time
+from typing import Callable, Optional, Tuple
 from queue import Empty, Queue
 from urllib.parse import urlparse
 
@@ -16,9 +19,27 @@ from websocket import create_connection, WebSocketConnectionClosedException
 
 from navigation import CruiseController, FlightPathPlanner, build_default_waypoints
 
-DEFAULT_WS_URL = "ws://localhost:8080/ws"
+DEFAULT_WS_URL = "ws://localhost:43127/ws"  # match Go broker default
 TICK = 1.0 / 30.0
 ORIGIN_ENV_VAR = "SIM_ORIGIN"
+
+PayloadLogger = Callable[[str], None]
+
+
+def make_payload_logger(handle, log_format: str = "jsonl") -> PayloadLogger:
+    """Return a callable that appends payloads to ``handle`` using ``log_format``."""
+    normalized_format = (log_format or "jsonl").lower()
+
+    def _logger(payload: str) -> None:
+        if handle is None:
+            return
+        if normalized_format == "jsonl":
+            handle.write(payload.rstrip("\n") + "\n")
+        else:
+            handle.write(payload if payload.endswith("\n") else payload + "\n")
+        handle.flush()
+
+    return _logger
 
 
 class Plane:
@@ -46,13 +67,14 @@ def mk_telemetry(plane, t):
     })
 
 
-def apply_noise(plane, rng: np.random.Generator, pos_noise: float, vel_noise: float) -> Tuple[Optional[np.ndarray], Optional[np.ndarray]]:
+def apply_noise(
+    plane, rng: np.random.Generator, pos_noise: float, vel_noise: float
+) -> Tuple[Optional[np.ndarray], Optional[np.ndarray]]:
     """Apply bounded uniform noise to the plane's position and velocity.
 
     Returns the generated deltas so callers can restore the original state
     after emitting telemetry.
     """
-
     if (pos_noise <= 0 and vel_noise <= 0) or rng is None:
         return None, None
 
@@ -113,16 +135,18 @@ def receiver_loop(ws, command_queue, stop_event: threading.Event):
     stop_event.set()
 
 
-def process_pending_commands(plane, ws, command_queue: Queue):
+def process_pending_commands(
+    plane, ws, command_queue: Queue, payload_logger: Optional[PayloadLogger]
+):
     while True:
         try:
             command = command_queue.get_nowait()
         except Empty:
             break
-        handle_command(command, plane, ws)
+        handle_command(command, plane, ws, payload_logger)
 
 
-def handle_command(command, plane, ws):
+def handle_command(command, plane, ws, payload_logger: Optional[PayloadLogger]):
     cmd_name = command.get("cmd")
     cmd_from = command.get("from")
     print(f"Handling command '{cmd_name}' from '{cmd_from}' with payload: {command}")
@@ -130,7 +154,10 @@ def handle_command(command, plane, ws):
     if cmd_name == "drop_cake":
         landing_override = command.get("params", {}).get("landing_pos")
         try:
-            ws.send(mk_cake_drop(plane, landing_override))
+            payload = mk_cake_drop(plane, landing_override)
+            ws.send(payload)
+            if payload_logger:
+                payload_logger(payload)
             print("Handled drop_cake command: dispatched cake_drop message")
         except Exception as exc:
             print("Failed to send cake_drop in response to command:", exc)
@@ -141,6 +168,9 @@ def handle_command(command, plane, ws):
 def run(
     ws_url: str,
     origin: Optional[str] = None,
+    *,
+    log_file: Optional[str] = None,
+    log_format: str = "jsonl",
     pos_noise: float = 0.0,
     vel_noise: float = 0.0,
     random_seed: Optional[int] = None,
@@ -150,8 +180,8 @@ def run(
     p.tags.append("pastel:turquoise")
     p.tags.append("autopilot:cruise")
 
-    # Build a deterministic loop around the new scenic environment so the
-    # aircraft continuously showcases the parallax of the buildings and trees.
+    # Build a deterministic loop around the scenic environment so the
+    # aircraft continuously showcases parallax.
     planner = FlightPathPlanner(build_default_waypoints(), loop=True, arrival_tolerance=80.0)
     cruise = CruiseController(acceleration=18.0, max_speed=250.0)
 
@@ -163,91 +193,114 @@ def run(
     max_backoff = 10.0
     should_stop = False
 
-    while not should_stop:
-        ws = None
-        stop_event = threading.Event()
-        command_queue: Queue = Queue()
-        receiver: Optional[threading.Thread] = None
+    log_handle = None
+    payload_logger: Optional[PayloadLogger] = None
 
-        try:
-            connect_kwargs = {}
-            if origin:
-                connect_kwargs["origin"] = origin
-                print("Using origin", origin)
+    try:
+        if log_file:
+            log_handle = open(log_file, "a", encoding="utf-8")
+            payload_logger = make_payload_logger(log_handle, log_format)
 
-            print("Connecting to", ws_url)
-            ws = create_connection(ws_url, **connect_kwargs)
-            print("Connected to", ws_url)
-            backoff = 1.0
+        while not should_stop:
+            ws = None
+            stop_event = threading.Event()
+            command_queue: Queue = Queue()
+            receiver: Optional[threading.Thread] = None
 
-            # Start background receiver
-            receiver = threading.Thread(target=receiver_loop, args=(ws, command_queue, stop_event), daemon=True)
-            receiver.start()
+            try:
+                connect_kwargs = {}
+                if origin:
+                    connect_kwargs["origin"] = origin
+                    print("Using origin", origin)
 
-            while not stop_event.is_set():
-                t = time.time() - t0
-                # Update the autopilot before moving the aircraft so the
-                # telemetry matches the controls shown in the viewer.
-                desired_direction = planner.tick(p.pos, TICK)
-                p.vel = cruise.apply(p.vel, desired_direction, TICK)
-                p.ori = list(CruiseController.orientation_from_velocity(p.vel))
-                p.step(TICK)
+                print("Connecting to", ws_url)
+                ws = create_connection(ws_url, **connect_kwargs)
+                print("Connected to", ws_url)
+                backoff = 1.0
 
-                # Handle incoming commands from broker
-                process_pending_commands(p, ws, command_queue)
+                # Start background receiver
+                receiver = threading.Thread(
+                    target=receiver_loop, args=(ws, command_queue, stop_event), daemon=True
+                )
+                receiver.start()
 
-                # Send telemetry (with optional positional/velocity noise)
-                pos_delta, vel_delta = apply_noise(p, rng, pos_noise, vel_noise)
-                try:
-                    ws.send(mk_telemetry(p, t))
-                except WebSocketConnectionClosedException:
-                    print("Connection closed while sending telemetry")
-                    raise
-                finally:
-                    if pos_delta is not None:
-                        p.pos -= pos_delta
-                    if vel_delta is not None:
-                        p.vel -= vel_delta
+                while not stop_event.is_set():
+                    t = time.time() - t0
 
-                # Occasional cake drop
-                if (t - last_cake) > 8.0 and random.random() < 0.02:
-                    last_cake = t
+                    # Update autopilot first so telemetry mirrors controls.
+                    desired_direction = planner.tick(p.pos, TICK)
+                    p.vel = cruise.apply(p.vel, desired_direction, TICK)
+                    p.ori = list(CruiseController.orientation_from_velocity(p.vel))
+                    p.step(TICK)
+
+                    # Handle incoming commands
+                    process_pending_commands(p, ws, command_queue, payload_logger)
+
+                    # Send telemetry (with optional noise)
+                    pos_delta, vel_delta = apply_noise(p, rng, pos_noise, vel_noise)
                     try:
-                        cake_msg = mk_cake_drop(p)
-                        ws.send(cake_msg)
-                        print("Sent cake_drop", cake_msg)
+                        payload = mk_telemetry(p, t)
+                        ws.send(payload)
+                        if payload_logger:
+                            payload_logger(payload)
                     except WebSocketConnectionClosedException:
-                        print("Connection closed while sending cake_drop")
+                        print("Connection closed while sending telemetry")
                         raise
-                    except Exception as e:
-                        print("send cake err", e)
+                    finally:
+                        # Restore state after noise
+                        if pos_delta is not None:
+                            p.pos -= pos_delta
+                        if vel_delta is not None:
+                            p.vel -= vel_delta
 
-                time.sleep(TICK)
+                    # Occasional cake drop
+                    if (t - last_cake) > 8.0 and random.random() < 0.02:
+                        last_cake = t
+                        try:
+                            cake_msg = mk_cake_drop(p)
+                            ws.send(cake_msg)
+                            if payload_logger:
+                                payload_logger(cake_msg)
+                            print("Sent cake_drop", cake_msg)
+                        except WebSocketConnectionClosedException:
+                            print("Connection closed while sending cake_drop")
+                            raise
+                        except Exception as e:
+                            print("send cake err", e)
 
-        except KeyboardInterrupt:
-            print("Stopping client")
-            should_stop = True
-        except WebSocketConnectionClosedException:
-            print("Lost connection to server")
-        except Exception as e:
-            print("Connection error:", e)
-        finally:
-            # Signal receiver to stop and close socket
-            stop_event.set()
-            if ws is not None:
-                try:
-                    ws.close()
-                except Exception:
-                    pass
-            if receiver is not None:
-                receiver.join(timeout=1.0)
+                    time.sleep(TICK)
 
-        if should_stop:
-            break
+            except KeyboardInterrupt:
+                print("Stopping client")
+                should_stop = True
+            except WebSocketConnectionClosedException:
+                print("Lost connection to server")
+            except Exception as e:
+                print("Connection error:", e)
+            finally:
+                # Signal receiver to stop and close socket
+                stop_event.set()
+                if ws is not None:
+                    try:
+                        ws.close()
+                    except Exception:
+                        pass
+                if receiver is not None:
+                    receiver.join(timeout=1.0)
 
-        print(f"Reconnecting in {backoff:.1f}s...")
-        time.sleep(backoff)
-        backoff = min(backoff * 2, max_backoff)
+            if should_stop:
+                break
+
+            print(f"Reconnecting in {backoff:.1f}s...")
+            time.sleep(backoff)
+            backoff = min(backoff * 2, max_backoff)
+
+    finally:
+        if log_handle is not None:
+            try:
+                log_handle.flush()
+            finally:
+                log_handle.close()
 
 
 def non_negative_float(value: str) -> float:
@@ -255,10 +308,8 @@ def non_negative_float(value: str) -> float:
         parsed = float(value)
     except ValueError as exc:
         raise argparse.ArgumentTypeError(f"'{value}' is not a valid number") from exc
-
     if parsed < 0:
         raise argparse.ArgumentTypeError("Noise values must be non-negative")
-
     return parsed
 
 
@@ -266,52 +317,48 @@ def parse_args():
     parser = argparse.ArgumentParser(
         description=(
             "Minimal simulation client that sends telemetry and occasional "
-            "cake_drop messages to a DriftPursuit broker."
+            "cake_drop messages to a DriftPursuit broker, optionally logging "
+            "each payload to disk."
         )
     )
     parser.add_argument(
-        "--broker-url",
-        "-b",
-        help=(
-            "WebSocket URL of the broker to connect to. Overrides the "
-            "SIM_BROKER_URL environment variable."
-        ),
+        "--broker-url", "-b",
+        help="WebSocket URL of the broker (overrides SIM_BROKER_URL).",
     )
     parser.add_argument(
         "--origin",
-        help=(
-            "HTTP(S) origin to send during the WebSocket handshake. Overrides "
-            "the SIM_ORIGIN environment variable."
-        ),
+        help="HTTP(S) Origin to send during the WebSocket handshake (overrides SIM_ORIGIN).",
     )
+    # Logging options
+    parser.add_argument(
+        "--log-file",
+        help="Append every telemetry and cake_drop payload to this file.",
+    )
+    parser.add_argument(
+        "--log-format",
+        default="jsonl",
+        help="Format to use for log entries when --log-file is provided (default: jsonl).",
+    )
+    # Noise + RNG
     parser.add_argument(
         "--pos-noise",
         type=non_negative_float,
         default=0.0,
         metavar="METERS",
-        help=(
-            "Maximum absolute positional noise (in meters) added to telemetry. "
-            "Defaults to 0.0 (no noise)."
-        ),
+        help="Maximum absolute positional noise in meters (default: 0.0).",
     )
     parser.add_argument(
         "--vel-noise",
         type=non_negative_float,
         default=0.0,
         metavar="MPS",
-        help=(
-            "Maximum absolute velocity noise (in meters/second) added to telemetry. "
-            "Defaults to 0.0 (no noise)."
-        ),
+        help="Maximum absolute velocity noise in m/s (default: 0.0).",
     )
     parser.add_argument(
         "--random-seed",
         type=int,
         default=None,
-        help=(
-            "Seed for the telemetry noise RNG so runs can be reproduced. "
-            "If omitted, a random seed is used."
-        ),
+        help="Seed for the telemetry noise RNG (default: random).",
     )
     return parser.parse_args()
 
@@ -332,22 +379,16 @@ def derive_origin(ws_url: str) -> str:
     if parsed.hostname is None:
         raise ValueError("Broker URL must include a host")
 
-    if parsed.scheme == "wss":
-        origin_scheme = "https"
-    else:
-        origin_scheme = "http"
-
+    origin_scheme = "https" if parsed.scheme == "wss" else "http"
     return f"{origin_scheme}://{parsed.hostname}"
 
 
 def get_origin(cli_origin: Optional[str], ws_url: str) -> str:
     if cli_origin:
         return cli_origin
-
     env_origin = os.getenv(ORIGIN_ENV_VAR)
     if env_origin:
         return env_origin
-
     return derive_origin(ws_url)
 
 
@@ -358,6 +399,8 @@ if __name__ == '__main__':
     run(
         ws_url,
         origin,
+        log_file=args.log_file,
+        log_format=args.log_format,
         pos_noise=args.pos_noise,
         vel_noise=args.vel_noise,
         random_seed=args.random_seed,
