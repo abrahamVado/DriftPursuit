@@ -6,9 +6,12 @@ const REROUTE_BUTTON = document.getElementById('reroute-waypoints');
 const MODEL_SET_SELECT = document.getElementById('model-set-select');
 const MODEL_SET_STATUS = document.getElementById('model-set-status');
 const CONTROL_INSTRUCTIONS_LIST = document.getElementById('control-instructions');
+const PLANE_FOLLOW_SELECT = document.getElementById('plane-follow-select');
+const PLANE_SELECTOR_STATUS = document.getElementById('plane-selector-status');
 const WS_URL = (location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + '/ws';
 
 const PLANE_STALE_TIMEOUT_MS = 5000;
+const PLANE_REMOVAL_TIMEOUT_MS = PLANE_STALE_TIMEOUT_MS * 1.5;
 const MODEL_SETS = {
   high_fidelity: {
     label: 'High fidelity glTF',
@@ -74,6 +77,11 @@ const DEFAULT_CONTROL_DOCS = [
     description: 'Use WASD to strafe, RF/Space/Shift to climb or descend, QE for yaw, and arrow keys for pitch/roll.'
   },
   {
+    id: 'plane-selector',
+    label: 'Tracked Aircraft',
+    description: 'Choose the aircraft to follow or press ] and [ to cycle through active planes.'
+  },
+  {
     id: 'reroute-waypoints',
     label: 'Cycle Autopilot Route',
     description: 'Send preset waypoint loops to the simulator via the set_waypoints command.'
@@ -83,7 +91,15 @@ const DEFAULT_CONTROL_DOCS = [
 let scene, camera, renderer;
 const planeMeshes = new Map();   // id -> THREE.Object3D
 const planeLastSeen = new Map(); // id -> timestamp
-let currentFollowId = null;
+const followManager = (typeof PlaneState !== 'undefined' && PlaneState && typeof PlaneState.createFollowManager === 'function')
+  ? PlaneState.createFollowManager({
+      planeLastSeen,
+      staleTimeoutMs: PLANE_STALE_TIMEOUT_MS,
+      removalTimeoutMs: PLANE_REMOVAL_TIMEOUT_MS,
+      nowProvider: () => performance.now(),
+    })
+  : null;
+let currentFollowId = followManager ? followManager.getFollow() : null;
 let cakes = {};
 
 // ----- Aircraft model (optional GLTF or procedural set) -----
@@ -157,6 +173,7 @@ const AUTOPILOT_PRESETS = [
 updateHudStatus();
 wireButtonHandlers();
 setupModelSetPicker();
+setupPlaneSelector();
 loadControlDocs();
 
 window.addEventListener('keydown', handleKeyDown);
@@ -311,17 +328,27 @@ function handleMsg(msg){
       planeMeshes.set(id, mesh);
       planeResources.set(id, { geometries, materials, textures });
       scene.add(mesh);
+    }
+
+    const now = performance.now();
+    let planeSeenResult = { isNew: false, followChanged: false, statusChanged: false };
+    if (followManager){
+      planeSeenResult = followManager.onPlaneSeen(id, now) || planeSeenResult;
+      syncFollowState();
+    } else {
+      planeLastSeen.set(id, now);
       if (!currentFollowId){
-        currentFollowId = id; // follow first seen plane
+        currentFollowId = id;
         refreshSimManualOverrideState();
       }
     }
 
+    const followId = getCurrentFollowId();
     const targetPosition = new THREE.Vector3(p[0]/2, p[1]/2, p[2]/50);
 
     // optional orientation: [yaw, pitch, roll]
     const o = msg.ori;
-    const shouldApplyTelemetry = !(manualControlEnabled && currentFollowId === id);
+    const shouldApplyTelemetry = !(manualControlEnabled && followId === id);
 
     if (shouldApplyTelemetry){
       // update position (map sim coords to scene; z up)
@@ -335,10 +362,16 @@ function handleMsg(msg){
       }
     }
 
-    planeLastSeen.set(id, performance.now());
-
     // update camera only if we're following this plane and telemetry was applied
-    if (currentFollowId === id && shouldApplyTelemetry) updateCameraTarget(mesh);
+    if (followId === id && shouldApplyTelemetry) updateCameraTarget(mesh);
+
+    if (followManager){
+      if (planeSeenResult.isNew || planeSeenResult.statusChanged || planeSeenResult.followChanged){
+        refreshPlaneSelector();
+      }
+    } else {
+      refreshPlaneSelector();
+    }
 
   } else if (msg.type === 'cake_drop'){
     // create simple sphere at landing_pos and remove after a while
@@ -369,11 +402,12 @@ function sendSimCommand(cmd, params = {}, options = {}){
 
   const includeCommandId = options.includeCommandId !== false;
   const commandId = includeCommandId ? nextCommandId() : null;
+  const targetFollowId = options.targetId || getCurrentFollowId();
   const payload = {
     type: 'command',
     cmd,
     from: options.from || 'viewer-ui',
-    target_id: options.targetId || currentFollowId || 'plane-1',
+    target_id: targetFollowId || 'plane-1',
     params,
   };
   payload.id = payload.target_id;
@@ -946,6 +980,32 @@ function animate(now){
 
 function removeStalePlanes(){
   const now = performance.now();
+
+  if (followManager){
+    const statuses = followManager.getPlaneStatuses(now);
+    const hadStale = statuses.some((status) => status.stale);
+    const { removedIds, followChanged } = followManager.reapStalePlanes(now);
+
+    removedIds.forEach((id) => {
+      const mesh = planeMeshes.get(id);
+      if (mesh) scene.remove(mesh);
+      disposePlaneResources(id);
+      planeMeshes.delete(id);
+      manualOverrideStateByPlane.delete(id);
+    });
+
+    const { followId } = syncFollowState({ refreshCamera: followChanged });
+
+    if (hadStale || removedIds.length > 0 || followChanged){
+      refreshPlaneSelector();
+    }
+
+    if (!followId){
+      setSimManualOverrideActive(false);
+    }
+    return;
+  }
+
   for (const [id, last] of planeLastSeen.entries()){
     if ((now - last) > PLANE_STALE_TIMEOUT_MS){
       const mesh = planeMeshes.get(id);
@@ -971,6 +1031,8 @@ function removeStalePlanes(){
   if (!currentFollowId){
     setSimManualOverrideActive(false);
   }
+
+  refreshPlaneSelector();
 }
 
 function updateCameraTarget(mesh){
@@ -980,7 +1042,8 @@ function updateCameraTarget(mesh){
 
 function updateManualOverrideIndicator(id, isActive){
   manualOverrideStateByPlane.set(id, Boolean(isActive));
-  if (id === currentFollowId){
+  const followId = getCurrentFollowId();
+  if (id === followId){
     setSimManualOverrideActive(Boolean(isActive));
   }
 }
@@ -993,11 +1056,12 @@ function setSimManualOverrideActive(active){
 }
 
 function refreshSimManualOverrideState(){
-  if (!currentFollowId){
+  const followId = getCurrentFollowId();
+  if (!followId){
     setSimManualOverrideActive(false);
     return;
   }
-  const active = manualOverrideStateByPlane.get(currentFollowId) || false;
+  const active = manualOverrideStateByPlane.get(followId) || false;
   setSimManualOverrideActive(Boolean(active));
 }
 
@@ -1056,6 +1120,18 @@ function handleKeyDown(event){
     return;
   }
 
+  if (code === 'BracketRight'){
+    event.preventDefault();
+    cycleFollowTarget(1);
+    return;
+  }
+
+  if (code === 'BracketLeft'){
+    event.preventDefault();
+    cycleFollowTarget(-1);
+    return;
+  }
+
   if (!MOVEMENT_KEY_CODES.has(code)) return;
 
   if (['ArrowUp','ArrowDown','ArrowLeft','ArrowRight','Space'].includes(code)){
@@ -1105,7 +1181,8 @@ function computeManualSceneVelocity(){
 
 function updateManualControl(delta){
   if (!manualControlEnabled) return;
-  const mesh = planeMeshes.get(currentFollowId);
+  const followId = getCurrentFollowId();
+  const mesh = planeMeshes.get(followId);
   const d = Number.isFinite(delta) ? Math.max(delta, 0) : 0;
   const movementActive = isAnyMovementKeyActive() || (accelerationEngaged && forwardSpeed > 0.1);
   setManualMovementActive(movementActive);
@@ -1181,7 +1258,8 @@ function sceneVelocityToSim(velocity){
 }
 
 function emitManualOverrideSnapshot(options = {}){
-  const mesh = planeMeshes.get(currentFollowId);
+  const followId = getCurrentFollowId();
+  const mesh = planeMeshes.get(followId);
   let orientation = lastKnownManualOrientation;
   if (mesh){
     orientation = [mesh.rotation.z, mesh.rotation.y, mesh.rotation.x];
@@ -1197,13 +1275,13 @@ function emitManualOverrideSnapshot(options = {}){
     velocity,
     orientation,
     force: Boolean(options.force),
-    targetId: currentFollowId || undefined,
+    targetId: followId || undefined,
   });
 }
 
 function maybeSendManualOverride(update){
   if (!socket || socket.readyState !== WebSocket.OPEN) return;
-  const targetId = update.targetId || currentFollowId || 'plane-1';
+  const targetId = update.targetId || getCurrentFollowId() || 'plane-1';
   if (!targetId) return;
 
   const normalized = {
@@ -1344,6 +1422,120 @@ function setupModelSetPicker(){
     handleModelSetSelection(desiredKey);
   });
   syncModelSetPicker();
+}
+
+function setupPlaneSelector(){
+  if (!PLANE_FOLLOW_SELECT) return;
+  PLANE_FOLLOW_SELECT.addEventListener('change', handlePlaneSelectionChange);
+  refreshPlaneSelector();
+}
+
+function refreshPlaneSelector(){
+  if (!PLANE_FOLLOW_SELECT) return;
+  const statuses = followManager ? followManager.getPlaneStatuses() : [];
+  const followId = getCurrentFollowId();
+
+  PLANE_FOLLOW_SELECT.innerHTML = '';
+
+  if (!statuses.length){
+    const option = document.createElement('option');
+    option.value = '';
+    option.textContent = 'Waiting for planes…';
+    option.disabled = true;
+    option.selected = true;
+    PLANE_FOLLOW_SELECT.appendChild(option);
+    PLANE_FOLLOW_SELECT.disabled = true;
+    if (PLANE_SELECTOR_STATUS){
+      PLANE_SELECTOR_STATUS.textContent = 'Waiting for telemetry…';
+    }
+    return;
+  }
+
+  PLANE_FOLLOW_SELECT.disabled = false;
+
+  statuses.forEach(({ id, stale }) => {
+    const option = document.createElement('option');
+    option.value = id;
+    option.dataset.state = stale ? 'stale' : 'active';
+    option.textContent = `${stale ? '⚠️' : '🟢'} ${id}${stale ? ' (stale)' : ''}`;
+    PLANE_FOLLOW_SELECT.appendChild(option);
+  });
+
+  let selectedId = followId;
+  const hasFollow = selectedId && statuses.some((s) => s.id === selectedId);
+  if (!hasFollow){
+    selectedId = statuses[0]?.id || '';
+    if (selectedId && followManager){
+      followManager.setFollow(selectedId);
+      syncFollowState();
+    } else {
+      currentFollowId = selectedId || null;
+    }
+  }
+
+  if (selectedId){
+    PLANE_FOLLOW_SELECT.value = selectedId;
+  } else {
+    PLANE_FOLLOW_SELECT.selectedIndex = 0;
+  }
+
+  if (PLANE_SELECTOR_STATUS){
+    if (!selectedId){
+      PLANE_SELECTOR_STATUS.textContent = 'Select an aircraft to focus the camera. Use ] and [ to cycle.';
+    } else {
+      const selectedStatus = statuses.find((s) => s.id === selectedId);
+      if (selectedStatus?.stale){
+        PLANE_SELECTOR_STATUS.textContent = `${selectedId} is awaiting telemetry.`;
+      } else {
+        PLANE_SELECTOR_STATUS.textContent = `Following ${selectedId}. Use ] and [ to cycle.`;
+      }
+    }
+  }
+}
+
+function handlePlaneSelectionChange(event){
+  if (!followManager) return;
+  const selectedId = event.target.value;
+  followManager.setFollow(selectedId || null);
+  syncFollowState({ refreshCamera: true });
+  refreshPlaneSelector();
+}
+
+function cycleFollowTarget(step){
+  if (!followManager) return;
+  followManager.cycleFollow(step);
+  syncFollowState({ refreshCamera: true });
+  refreshPlaneSelector();
+}
+
+function syncFollowState(options = {}){
+  const previous = currentFollowId;
+  const nextId = followManager ? followManager.getFollow() : currentFollowId;
+  currentFollowId = nextId || null;
+  if (previous !== currentFollowId){
+    refreshSimManualOverrideState();
+  }
+  if (options.refreshCamera){
+    updateCameraTargetForCurrentPlane();
+  }
+  return { changed: previous !== currentFollowId, followId: currentFollowId };
+}
+
+function getCurrentFollowId(){
+  if (followManager){
+    const nextId = followManager.getFollow();
+    if (nextId !== currentFollowId){
+      currentFollowId = nextId || null;
+    }
+  }
+  return currentFollowId;
+}
+
+function updateCameraTargetForCurrentPlane(){
+  const followId = getCurrentFollowId();
+  if (!followId) return;
+  const mesh = planeMeshes.get(followId);
+  if (mesh) updateCameraTarget(mesh);
 }
 
 function handleModelSetSelection(desiredKey){

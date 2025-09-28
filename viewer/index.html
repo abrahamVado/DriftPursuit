@@ -51,6 +51,12 @@
       gap: 6px;
     }
 
+    #plane-selector {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+
     .control-label {
       font-size: 12px;
       letter-spacing: 0.05em;
@@ -76,6 +82,14 @@
       outline: none;
       border-color: rgba(65, 105, 225, 0.6);
       box-shadow: 0 0 0 2px rgba(65, 105, 225, 0.18);
+    }
+
+    #plane-follow-select option[data-state="stale"] {
+      color: #a03b20;
+    }
+
+    #plane-follow-select option[data-state="active"] {
+      color: #1c2d4d;
     }
 
     .control-button {
@@ -171,6 +185,11 @@
       <select id="model-set-select" class="control-select"></select>
       <p id="model-set-status" class="controls-subtext">Preparing…</p>
     </div>
+    <div id="plane-selector">
+      <label for="plane-follow-select" class="control-label">Tracked Aircraft</label>
+      <select id="plane-follow-select" class="control-select" aria-label="Choose aircraft to follow"></select>
+      <p id="plane-selector-status" class="controls-subtext" aria-live="polite">Waiting for telemetry…</p>
+    </div>
     <button id="manual-toggle" class="control-button">Enable Manual Control</button>
     <button id="accelerate-forward" class="control-button">Start Forward Acceleration</button>
     <button id="reroute-waypoints" class="control-button">Cycle Autopilot Route</button>
@@ -182,12 +201,14 @@
     <ol>
       <li>Select an aircraft model to load its assets.</li>
       <li>Watch the HUD for “ready”, then toggle Manual Control or use keyboard shortcuts.</li>
+      <li>Use the Tracked Aircraft dropdown (or press ] / [) to switch the camera between active planes.</li>
       <li>Use WASD/RF for translation, QE for yaw, and arrow keys for pitch/roll.</li>
       <li>Cycle the autopilot route to see preset waypoint loops.</li>
     </ol>
   </div>
   <script src="https://cdn.jsdelivr.net/npm/three@0.152.2/build/three.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/three@0.152.2/examples/js/loaders/GLTFLoader.js"></script>
+  <script src="planeState.js"></script>
   <script src="app.js"></script>
 </body>
 </html>
