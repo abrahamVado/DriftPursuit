@@ -135,8 +135,8 @@ func TestBrokerServesViewerOverTLS(t *testing.T) {
 
 	certFile, keyFile := generateSelfSignedCert(t)
 
-	// buildHandler expects maxPayloadBytes in your current server.go
-	handler, err := buildHandler(defaultMaxPayloadBytes)
+	// buildHandler now expects (maxPayloadBytes, maxClients)
+	handler, err := buildHandler(defaultMaxPayloadBytes, 256)
 	if err != nil {
 		t.Fatalf("buildHandler: %v", err)
 	}
@@ -314,7 +314,7 @@ func listenOnce(conn *websocket.Conn) <-chan wsReadResult {
 
 func TestServeWSDropsInvalidMessages(t *testing.T) {
 	upgrader.CheckOrigin = func(*http.Request) bool { return true }
-	broker := NewBroker(defaultMaxPayloadBytes)
+	broker := NewBroker(defaultMaxPayloadBytes, 0)
 
 	server := httptest.NewServer(http.HandlerFunc(broker.serveWS))
 	defer server.Close()
@@ -366,7 +366,7 @@ func TestServeWSDropsInvalidMessages(t *testing.T) {
 
 func TestServeWSRejectsOversizedMessages(t *testing.T) {
 	upgrader.CheckOrigin = func(*http.Request) bool { return true }
-	broker := NewBroker(64) // very small limit for the test
+	broker := NewBroker(64, 0) // very small limit for the test
 
 	server := httptest.NewServer(http.HandlerFunc(broker.serveWS))
 	defer server.Close()
@@ -436,5 +436,45 @@ func TestServeWSRejectsOversizedMessages(t *testing.T) {
 		}
 	case <-time.After(time.Second):
 		t.Fatal("timed out waiting for broadcast after oversized message")
+	}
+}
+
+/*********************************
+ * Test: capacity limiting (HTTP 503)
+ *********************************/
+
+func TestServeWSRejectsWhenAtCapacity(t *testing.T) {
+	// Limit to 1 client
+	b := NewBroker(defaultMaxPayloadBytes, 1)
+
+	// Pretend one client is already connected
+	existing := &Client{send: make(chan []byte, 1)}
+	b.lock.Lock()
+	b.clients[existing] = true
+	b.stats.Clients = 1
+	b.lock.Unlock()
+
+	// Plain HTTP request (no real upgrade needed) should hit pre-upgrade capacity check.
+	req := httptest.NewRequest(http.MethodGet, "/ws", nil)
+	req.Header.Set("Connection", "Upgrade")
+	req.Header.Set("Upgrade", "websocket")
+	rr := httptest.NewRecorder()
+
+	b.serveWS(rr, req)
+
+	if rr.Code != http.StatusServiceUnavailable {
+		t.Fatalf("expected status %d, got %d", http.StatusServiceUnavailable, rr.Code)
+	}
+
+	b.lock.Lock()
+	clientCount := len(b.clients)
+	pending := b.pendingClients
+	b.lock.Unlock()
+
+	if clientCount != 1 {
+		t.Fatalf("expected client count to remain 1, got %d", clientCount)
+	}
+	if pending != 0 {
+		t.Fatalf("expected pending clients to be 0, got %d", pending)
 	}
 }

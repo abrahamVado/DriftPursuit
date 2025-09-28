@@ -26,11 +26,11 @@ const defaultMaxPayloadBytes int64 = 1 << 20 // 1 MiB
 var upgrader = websocket.Upgrader{}
 
 const (
-	writeWait          = 10 * time.Second      // write deadline for outgoing frames
-	pongWaitMultiplier = 2                      // read deadline = pingInterval * multiplier
+	writeWait          = 10 * time.Second // write deadline for outgoing frames
+	pongWaitMultiplier = 2                // read deadline = pingInterval * multiplier
 )
 
-var pingInterval = 30 * time.Second // can be overridden by --ping-interval
+var pingInterval = 30 * time.Second // overridden by --ping-interval
 
 // Always allow localhost for dev convenience.
 var localHosts = map[string]struct{}{
@@ -50,13 +50,21 @@ type Broker struct {
 	lock            sync.Mutex
 	stats           BrokerStats
 	maxPayloadBytes int64
+
+	// capacity limiting
+	maxClients     int
+	pendingClients int
 }
 
-func NewBroker(maxPayloadBytes int64) *Broker {
+func NewBroker(maxPayloadBytes int64, maxClients int) *Broker {
 	if maxPayloadBytes <= 0 {
 		maxPayloadBytes = defaultMaxPayloadBytes
 	}
-	return &Broker{clients: make(map[*Client]bool), maxPayloadBytes: maxPayloadBytes}
+	return &Broker{
+		clients:         make(map[*Client]bool),
+		maxPayloadBytes: maxPayloadBytes,
+		maxClients:      maxClients,
+	}
 }
 
 type BrokerStats struct {
@@ -66,6 +74,19 @@ type BrokerStats struct {
 
 type statsProvider interface {
 	Stats() BrokerStats
+}
+
+func intFromEnv(key string, fallback int) int {
+	raw := os.Getenv(key)
+	if raw == "" {
+		return fallback
+	}
+	value, err := strconv.Atoi(raw)
+	if err != nil || value < 0 {
+		log.Printf("invalid %s value %q: %v; falling back to %d", key, raw, err, fallback)
+		return fallback
+	}
+	return value
 }
 
 func (b *Broker) deregisterClient(client *Client) {
@@ -166,8 +187,28 @@ type inboundEnvelope struct {
 }
 
 func (b *Broker) serveWS(w http.ResponseWriter, r *http.Request) {
+	// Capacity pre-check
+	if b.maxClients > 0 {
+		b.lock.Lock()
+		if len(b.clients)+b.pendingClients >= b.maxClients {
+			b.lock.Unlock()
+			log.Printf("refusing websocket connection from %s: client limit %d reached", r.RemoteAddr, b.maxClients)
+			http.Error(w, "service unavailable: client limit reached", http.StatusServiceUnavailable)
+			return
+		}
+		b.pendingClients++
+		b.lock.Unlock()
+	}
+
 	conn, err := upgrader.Upgrade(w, r, nil)
 	if err != nil {
+		if b.maxClients > 0 {
+			b.lock.Lock()
+			if b.pendingClients > 0 {
+				b.pendingClients--
+			}
+			b.lock.Unlock()
+		}
 		log.Println("upgrade:", err)
 		return
 	}
@@ -190,6 +231,9 @@ func (b *Broker) serveWS(w http.ResponseWriter, r *http.Request) {
 	})
 
 	b.lock.Lock()
+	if b.maxClients > 0 && b.pendingClients > 0 {
+		b.pendingClients--
+	}
 	b.clients[client] = true
 	b.stats.Clients++
 	b.lock.Unlock()
@@ -203,7 +247,7 @@ func (b *Broker) serveWS(w http.ResponseWriter, r *http.Request) {
 		for {
 			messageType, msg, err := client.conn.ReadMessage()
 			if err != nil {
-				// Differentiate a few common cases for logging clarity
+				// Better logging on exits
 				if ne, ok := err.(net.Error); ok && ne.Timeout() {
 					log.Printf("read deadline exceeded for %s: %v", client.id, err)
 				} else if websocket.IsCloseError(err, websocket.CloseMessageTooBig) || errors.Is(err, websocket.ErrReadLimit) {
@@ -216,7 +260,7 @@ func (b *Broker) serveWS(w http.ResponseWriter, r *http.Request) {
 				break
 			}
 
-			// Extend read deadline after each successful frame
+			// Extend read deadline after every frame
 			if err := client.conn.SetReadDeadline(time.Now().Add(waitDuration)); err != nil {
 				log.Printf("failed to extend read deadline for %s: %v", client.id, err)
 				break
@@ -272,7 +316,7 @@ func (b *Broker) serveWS(w http.ResponseWriter, r *http.Request) {
 					return
 				}
 			case <-ticker.C:
-				// Send ping periodically; pong handler will extend read deadline
+				// Send ping periodically; pong handler extends read deadline
 				if err := client.conn.WriteControl(websocket.PingMessage, []byte{}, time.Now().Add(writeWait)); err != nil {
 					log.Printf("ping failure for %s: %v", client.id, err)
 					b.deregisterClient(client)
@@ -316,15 +360,24 @@ func main() {
 	// flags
 	allowedOriginsFlag := flag.String("allowed-origins", allowedOriginsDefault, "Comma-separated list of allowed origins for WebSocket connections")
 	addr := flag.String("addr", ":43127", "address to listen on") // default to match python client
+
+	// TLS flags
 	tlsCertDefault := os.Getenv("BROKER_TLS_CERT")
 	tlsKeyDefault := os.Getenv("BROKER_TLS_KEY")
 	tlsCert := flag.String("tls-cert", tlsCertDefault, "Path to the TLS certificate file")
 	tlsKey := flag.String("tls-key", tlsKeyDefault, "Path to the TLS private key file")
+
+	// payload + keepalive
 	maxPayloadFlag := flag.Int64("max-payload-bytes", maxPayloadDefault, "Maximum size in bytes for inbound WebSocket messages")
 	pingFlag := flag.Duration("ping-interval", pingInterval, "interval between WebSocket ping frames for connection liveness")
+
+	// capacity limit
+	maxClientsDefault := intFromEnv("BROKER_MAX_CLIENTS", 256)
+	maxClientsFlag := flag.Int("max-clients", maxClientsDefault, "Maximum number of simultaneous WebSocket clients (0 = unlimited)")
+
 	flag.Parse()
 
-	// validate ping interval and apply
+	// ping interval
 	if *pingFlag <= 0 {
 		log.Fatalf("ping interval must be positive, got %v", *pingFlag)
 	}
@@ -347,6 +400,17 @@ func main() {
 	}
 	log.Printf("maximum WebSocket payload set to %d bytes", maxPayloadBytes)
 
+	// capacity policy
+	maxClients := *maxClientsFlag
+	if maxClients < 0 {
+		maxClients = maxClientsDefault
+	}
+	if maxClients > 0 {
+		log.Printf("limiting WebSocket clients to %d", maxClients)
+	} else {
+		log.Println("no limit configured for WebSocket clients")
+	}
+
 	// TLS config sanity
 	certProvided := strings.TrimSpace(*tlsCert) != ""
 	keyProvided := strings.TrimSpace(*tlsKey) != ""
@@ -355,7 +419,7 @@ func main() {
 	}
 
 	// build handler with consistent mux
-	handler, err := buildHandler(maxPayloadBytes)
+	handler, err := buildHandler(maxPayloadBytes, maxClients)
 	if err != nil {
 		log.Fatalf("failed to build HTTP handler: %v", err)
 	}
@@ -371,15 +435,15 @@ func main() {
 	log.Fatal(server.ListenAndServe())
 }
 
-func buildHandler(maxPayloadBytes int64) (http.Handler, error) {
+func buildHandler(maxPayloadBytes int64, maxClients int) (http.Handler, error) {
 	mux := http.NewServeMux()
 
-	b := NewBroker(maxPayloadBytes)
+	b := NewBroker(maxPayloadBytes, maxClients)
 
 	// Register everything on the same mux
 	mux.HandleFunc("/ws", b.serveWS)
 	mux.HandleFunc("/api/stats", statsHandler(b))
-	registerControlDocEndpoints(mux) // no-op stub below; replace when adding control endpoints
+	registerControlDocEndpoints(mux) // no-op; extend as needed
 
 	// serve viewer static files (resolve relative to this source file)
 	viewerDir, err := resolveViewerDir()

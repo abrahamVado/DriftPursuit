@@ -47,6 +47,10 @@ Follow these steps to bring the entire stack up locally on one machine:
      ```
    - The CLI flag takes precedence over the environment variable. Requests from origins not in the allow list (and not local) are rejected during the WebSocket upgrade.
 
+      ### Broker options
+
+   - **Maximum clients:** Limit concurrent WebSocket sessions with `--max-clients` (or `BROKER_MAX_CLIENTS`). The default is `256`; set it to `0` to allow unlimited clients. When the broker is at capacity, new connection attempts receive an HTTP 503 response and a log entry is emitted so operators can adjust the limit if needed.
+
 3. **Adjust the inbound payload limit (optional):**
    - The broker rejects individual WebSocket messages larger than **1 MiB** by default to prevent runaway publishers from exhausting memory.
    - Override the limit with the CLI flag or the `BROKER_MAX_PAYLOAD_BYTES` environment variable when your protocol needs larger payloads:
@@ -59,6 +63,7 @@ Follow these steps to bring the entire stack up locally on one machine:
    - As with other settings, the CLI flag takes precedence when both are supplied.
 
 4. **Run the Python simulation client** (publishes telemetry messages):
+
    ```bash
    cd python-sim
    python -m venv .venv
