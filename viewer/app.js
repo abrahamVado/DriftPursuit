@@ -27,6 +27,12 @@ function handleMsg(msg){
         }
         // update position (map sim coords to scene; z up)
         planeMesh.position.set(p[0]/2, p[1]/2, p[2]/50);
+        const o = msg.ori;
+        if(Array.isArray(o) && o.length === 3){
+            const [yaw, pitch, roll] = o;
+            const euler = new THREE.Euler(roll, pitch, yaw, 'ZYX');
+            planeMesh.setRotationFromEuler(euler);
+        }
         camera.position.set(planeMesh.position.x - 40, planeMesh.position.y + 0, planeMesh.position.z + 20);
         camera.lookAt(planeMesh.position);
     } else if(msg.type === 'cake_drop'){
