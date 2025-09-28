@@ -79,6 +79,10 @@ Follow these steps to bring the entire stack up locally on one machine:
    export SIM_ORIGIN=https://example.com
    python client.py
    ```
+   To supply a custom autopilot loop, pass a waypoint file (see `docs/waypoints-format.md` for details):
+   ```bash
+   python client.py --waypoints-file path/to/loop.yaml
+   ```
 
    To experiment with telemetry noise, supply the optional CLI flags. Noise
    defaults to zero so runs are deterministic unless you opt in:

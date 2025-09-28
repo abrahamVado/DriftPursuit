@@ -9,9 +9,12 @@ code remains dependency free and easy to tweak.
 
 from __future__ import annotations
 
+import ast
+import json
 import math
 from dataclasses import dataclass
-from typing import Iterable, List, Sequence
+from pathlib import Path
+from typing import Any, Iterable, List, Sequence
 
 import numpy as np
 
@@ -172,9 +175,151 @@ def build_default_waypoints() -> Iterable[Waypoint]:
     ]
 
 
+def _parse_yaml_like(content: str, source: Path) -> Any:
+    entries: List[Any] = []
+    current_map: dict[str, Any] | None = None
+
+    for raw_line in content.splitlines():
+        stripped = raw_line.strip()
+        if not stripped or stripped.startswith("#"):
+            continue
+
+        if stripped.startswith("- "):
+            payload = stripped[2:].strip()
+            if payload.startswith("["):
+                try:
+                    entries.append(ast.literal_eval(payload))
+                except (SyntaxError, ValueError) as exc:
+                    raise ValueError(
+                        f"Failed to parse list waypoint in '{source}': {payload!r}"
+                    ) from exc
+                current_map = None
+                continue
+
+            if ":" not in payload:
+                raise ValueError(
+                    f"Unsupported YAML entry in '{source}': {raw_line.strip()}"
+                )
+            key, value = payload.split(":", 1)
+            current_map = {}
+            entries.append(current_map)
+            current_map[key.strip()] = _parse_yaml_scalar(value.strip())
+            continue
+
+        if current_map is None:
+            raise ValueError(
+                f"Unexpected line in '{source}': {raw_line.strip()}"
+            )
+        if ":" not in stripped:
+            raise ValueError(
+                f"Expected key/value pair in '{source}' but found: {raw_line.strip()}"
+            )
+        key, value = stripped.split(":", 1)
+        current_map[key.strip()] = _parse_yaml_scalar(value.strip())
+
+    return entries
+
+
+def _parse_yaml_scalar(value: str) -> Any:
+    if not value:
+        return ""
+    if value.startswith("#"):
+        return ""
+    if " #" in value:
+        value = value.split(" #", 1)[0].rstrip()
+    try:
+        return ast.literal_eval(value)
+    except (SyntaxError, ValueError):
+        return value
+
+
+def _load_raw_waypoints(path: Path) -> Any:
+    suffix = path.suffix.lower()
+    if suffix == ".json":
+        return json.loads(path.read_text())
+    if suffix in {".yaml", ".yml"}:
+        return _parse_yaml_like(path.read_text(), path)
+    raise ValueError(
+        f"Unsupported waypoint file extension '{path.suffix}'. "
+        "Use .json, .yaml, or .yml."
+    )
+
+
+def _coerce_waypoint(entry: Any, index: int, source: Path) -> Waypoint:
+    def _ensure_finite(value: Any, label: str) -> float:
+        try:
+            number = float(value)
+        except (TypeError, ValueError):
+            raise ValueError(
+                f"Waypoint {index} in '{source}' has a non-numeric {label}: {value!r}"
+            ) from None
+        if not math.isfinite(number):
+            raise ValueError(
+                f"Waypoint {index} in '{source}' has a non-finite {label}: {value!r}"
+            )
+        return number
+
+    if isinstance(entry, dict):
+        try:
+            x = _ensure_finite(entry["x"], "x")
+            y = _ensure_finite(entry["y"], "y")
+            z = _ensure_finite(entry["z"], "z")
+        except KeyError as missing:
+            raise ValueError(
+                f"Waypoint {index} in '{source}' is missing coordinate '{missing.args[0]}'"
+            ) from None
+        return Waypoint(x, y, z)
+
+    if isinstance(entry, (list, tuple)):
+        if len(entry) != 3:
+            raise ValueError(
+                f"Waypoint {index} in '{source}' must contain exactly 3 coordinates"
+            )
+        x = _ensure_finite(entry[0], "x")
+        y = _ensure_finite(entry[1], "y")
+        z = _ensure_finite(entry[2], "z")
+        return Waypoint(x, y, z)
+
+    raise ValueError(
+        f"Waypoint {index} in '{source}' must be an object with x/y/z keys or "
+        "a sequence of three numbers"
+    )
+
+
+def load_waypoints_from_file(path_like: Any) -> List[Waypoint]:
+    """Load waypoints from a JSON or YAML file.
+
+    The helper accepts either a mapping with explicit ``x``/``y``/``z`` keys or a
+    simple list of 3-number sequences.  Values are coerced to ``float`` and
+    validated to be finite.
+    """
+
+    path = Path(path_like)
+    if not path.exists():
+        raise FileNotFoundError(f"Waypoint file '{path}' does not exist")
+
+    raw = _load_raw_waypoints(path)
+    if raw is None:
+        raise ValueError(f"Waypoint file '{path}' is empty")
+    if not isinstance(raw, list):
+        raise ValueError(
+            f"Waypoint file '{path}' must contain a list of waypoints, got {type(raw).__name__}"
+        )
+
+    waypoints: List[Waypoint] = []
+    for idx, entry in enumerate(raw):
+        waypoints.append(_coerce_waypoint(entry, idx, path))
+
+    if not waypoints:
+        raise ValueError(f"Waypoint file '{path}' must define at least one waypoint")
+
+    return waypoints
+
+
 __all__ = [
     "Waypoint",
     "FlightPathPlanner",
     "CruiseController",
     "build_default_waypoints",
+    "load_waypoints_from_file",
 ]
