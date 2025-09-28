@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -34,13 +35,18 @@ type Client struct {
 }
 
 type Broker struct {
-	clients map[*Client]bool
-	lock    sync.Mutex
-	stats   BrokerStats
+	clients        map[*Client]bool
+	lock           sync.Mutex
+	stats          BrokerStats
+	maxClients     int
+	pendingClients int
 }
 
-func NewBroker() *Broker {
-	return &Broker{clients: make(map[*Client]bool)}
+func NewBroker(maxClients int) *Broker {
+	return &Broker{
+		clients:    make(map[*Client]bool),
+		maxClients: maxClients,
+	}
 }
 
 type BrokerStats struct {
@@ -50,6 +56,19 @@ type BrokerStats struct {
 
 type statsProvider interface {
 	Stats() BrokerStats
+}
+
+func intFromEnv(key string, fallback int) int {
+	raw := os.Getenv(key)
+	if raw == "" {
+		return fallback
+	}
+	value, err := strconv.Atoi(raw)
+	if err != nil || value < 0 {
+		log.Printf("invalid %s value %q: %v; falling back to %d", key, raw, err, fallback)
+		return fallback
+	}
+	return value
 }
 
 func (b *Broker) deregisterClient(client *Client) {
@@ -145,14 +164,38 @@ func buildOriginChecker(allowlist []string) func(*http.Request) bool {
 // --- WS handler ---
 
 func (b *Broker) serveWS(w http.ResponseWriter, r *http.Request) {
+	if b.maxClients > 0 {
+		b.lock.Lock()
+		if len(b.clients)+b.pendingClients >= b.maxClients {
+			b.lock.Unlock()
+			log.Printf("refusing websocket connection from %s: client limit %d reached", r.RemoteAddr, b.maxClients)
+			http.Error(w, "service unavailable: client limit reached", http.StatusServiceUnavailable)
+			return
+		}
+		b.pendingClients++
+		b.lock.Unlock()
+	}
+
 	conn, err := upgrader.Upgrade(w, r, nil)
 	if err != nil {
+		if b.maxClients > 0 {
+			b.lock.Lock()
+			if b.pendingClients > 0 {
+				b.pendingClients--
+			}
+			b.lock.Unlock()
+		}
 		log.Println("upgrade:", err)
 		return
 	}
 	client := &Client{conn: conn, send: make(chan []byte, 256), id: r.RemoteAddr}
 
 	b.lock.Lock()
+	if b.maxClients > 0 {
+		if b.pendingClients > 0 {
+			b.pendingClients--
+		}
+	}
 	b.clients[client] = true
 	b.stats.Clients++
 	b.lock.Unlock()
@@ -221,7 +264,22 @@ func main() {
 	allowedOriginsDefault := os.Getenv("BROKER_ALLOWED_ORIGINS")
 	allowedOriginsFlag := flag.String("allowed-origins", allowedOriginsDefault, "Comma-separated list of allowed origins for WebSocket connections")
 	addr := flag.String("addr", ":8080", "address to listen on")
+	maxClientsDefault := intFromEnv("BROKER_MAX_CLIENTS", 256)
+	maxClientsFlag := flag.Int("max-clients", maxClientsDefault, "Maximum number of simultaneous WebSocket clients (0 = unlimited)")
 	flag.Parse()
+
+	if *maxClientsFlag < 0 {
+		log.Printf("invalid max-clients value %d; falling back to %d", *maxClientsFlag, maxClientsDefault)
+	}
+	maxClients := *maxClientsFlag
+	if maxClients < 0 {
+		maxClients = maxClientsDefault
+	}
+	if maxClients > 0 {
+		log.Printf("limiting WebSocket clients to %d", maxClients)
+	} else {
+		log.Println("no limit configured for WebSocket clients")
+	}
 
 	allowlist := parseAllowedOrigins(*allowedOriginsFlag)
 	upgrader.CheckOrigin = buildOriginChecker(allowlist)
@@ -231,7 +289,7 @@ func main() {
 		log.Println("no allowed origins configured; permitting only local development origins")
 	}
 
-	b := NewBroker()
+	b := NewBroker(maxClients)
 	http.HandleFunc("/ws", b.serveWS)
 	http.HandleFunc("/api/stats", statsHandler(b))
 	registerControlDocEndpoints()

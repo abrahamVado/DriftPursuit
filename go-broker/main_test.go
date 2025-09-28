@@ -104,3 +104,40 @@ func TestStatsHandlerHonorsLocking(t *testing.T) {
 		t.Fatalf("expected Stats to be called once, got %d", calls)
 	}
 }
+
+func TestServeWSRejectsWhenAtCapacity(t *testing.T) {
+	b := NewBroker(1)
+	existing := &Client{send: make(chan []byte, 1)}
+
+	if b.maxClients != 1 {
+		t.Fatalf("expected max clients to be 1, got %d", b.maxClients)
+	}
+
+	b.lock.Lock()
+	b.clients[existing] = true
+	b.stats.Clients = 1
+	b.lock.Unlock()
+
+	req := httptest.NewRequest(http.MethodGet, "/ws", nil)
+	req.Header.Set("Connection", "Upgrade")
+	req.Header.Set("Upgrade", "websocket")
+	rr := httptest.NewRecorder()
+
+	b.serveWS(rr, req)
+
+	if rr.Code != http.StatusServiceUnavailable {
+		t.Fatalf("expected status %d, got %d", http.StatusServiceUnavailable, rr.Code)
+	}
+
+	b.lock.Lock()
+	clientCount := len(b.clients)
+	pending := b.pendingClients
+	b.lock.Unlock()
+
+	if clientCount != 1 {
+		t.Fatalf("expected client count to remain 1, got %d", clientCount)
+	}
+	if pending != 0 {
+		t.Fatalf("expected pending clients to be 0, got %d", pending)
+	}
+}
