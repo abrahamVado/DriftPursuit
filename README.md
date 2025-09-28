@@ -90,6 +90,13 @@ Follow these steps to bring the entire stack up locally on one machine:
    export SIM_ORIGIN=https://example.com
    python client.py
    ```
+   Adjust the simulation cadence with ``--tick-rate`` (in Hertz) to slow down or
+   speed up the autopilot loop:
+
+   ```bash
+   python client.py --tick-rate 60  # run at 60 Hz instead of the 30 Hz default
+   ```
+
    To supply a custom autopilot loop, pass a waypoint file (see `docs/waypoints-format.md` for details):
    ```bash
    python client.py --waypoints-file path/to/loop.yaml
