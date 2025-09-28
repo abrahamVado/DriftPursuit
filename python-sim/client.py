@@ -9,12 +9,14 @@ import random
 import threading
 import time
 from queue import Empty, Queue
+from urllib.parse import urlparse
 
 import numpy as np
 from websocket import create_connection, WebSocketConnectionClosedException
 
 DEFAULT_WS_URL = "ws://localhost:8080/ws"
 TICK = 1.0 / 30.0
+ORIGIN_ENV_VAR = "SIM_ORIGIN"
 
 
 class Plane:
@@ -109,7 +111,7 @@ def handle_command(command, plane, ws):
         print(f"No handler for command '{cmd_name}', ignoring")
 
 
-def run(ws_url: str):
+def run(ws_url: str, origin: Optional[str] = None):
     print("Connecting to", ws_url)
     p = Plane("plane-1", x=0, y=0, z=1200, speed=140.0)
     p.tags.append("pastel:turquoise")
@@ -127,8 +129,13 @@ def run(ws_url: str):
         receiver: Optional[threading.Thread] = None
 
         try:
+            connect_kwargs = {}
+            if origin:
+                connect_kwargs["origin"] = origin
+                print("Using origin", origin)
+
             print("Connecting to", ws_url)
-            ws = create_connection(ws_url)
+            ws = create_connection(ws_url, **connect_kwargs)
             print("Connected to", ws_url)
             backoff = 1.0
 
@@ -206,6 +213,13 @@ def parse_args():
             "SIM_BROKER_URL environment variable."
         ),
     )
+    parser.add_argument(
+        "--origin",
+        help=(
+            "HTTP(S) origin to send during the WebSocket handshake. Overrides "
+            "the SIM_ORIGIN environment variable."
+        ),
+    )
     return parser.parse_args()
 
 
@@ -218,7 +232,34 @@ def get_ws_url(cli_url: Optional[str]) -> str:
     return DEFAULT_WS_URL
 
 
+def derive_origin(ws_url: str) -> str:
+    parsed = urlparse(ws_url)
+    if not parsed.scheme:
+        raise ValueError("Broker URL must include a scheme (ws:// or wss://)")
+    if parsed.hostname is None:
+        raise ValueError("Broker URL must include a host")
+
+    if parsed.scheme == "wss":
+        origin_scheme = "https"
+    else:
+        origin_scheme = "http"
+
+    return f"{origin_scheme}://{parsed.hostname}"
+
+
+def get_origin(cli_origin: Optional[str], ws_url: str) -> str:
+    if cli_origin:
+        return cli_origin
+
+    env_origin = os.getenv(ORIGIN_ENV_VAR)
+    if env_origin:
+        return env_origin
+
+    return derive_origin(ws_url)
+
+
 if __name__ == '__main__':
     args = parse_args()
     ws_url = get_ws_url(args.broker_url)
-    run(ws_url)
+    origin = get_origin(args.origin, ws_url)
+    run(ws_url, origin)
