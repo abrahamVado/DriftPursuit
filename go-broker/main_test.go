@@ -135,7 +135,7 @@ func TestBrokerServesViewerOverTLS(t *testing.T) {
 
 	certFile, keyFile := generateSelfSignedCert(t)
 
-	// NOTE: buildHandler now expects maxPayloadBytes
+	// buildHandler expects maxPayloadBytes in your current server.go
 	handler, err := buildHandler(defaultMaxPayloadBytes)
 	if err != nil {
 		t.Fatalf("buildHandler: %v", err)
@@ -160,8 +160,8 @@ func TestBrokerServesViewerOverTLS(t *testing.T) {
 		Timeout: 5 * time.Second,
 	}
 
-	url := fmt.Sprintf("https://%s/viewer/index.html", ln.Addr().String())
-	resp, err := client.Get(url)
+	u := fmt.Sprintf("https://%s/viewer/index.html", ln.Addr().String())
+	resp, err := client.Get(u)
 	if err != nil {
 		t.Fatalf("GET viewer: %v", err)
 	}
@@ -395,7 +395,7 @@ func TestServeWSRejectsOversizedMessages(t *testing.T) {
 	if _, _, err := sender.ReadMessage(); err == nil {
 		t.Fatal("expected connection to close after oversized message")
 	} else if !websocket.IsCloseError(err, websocket.CloseMessageTooBig) && !strings.Contains(strings.ToLower(err.Error()), "close 1009") {
-		// different stacks may map to 1009 (Message Too Big)
+		// some stacks map this to 1009 (Message Too Big)
 		t.Fatalf("expected CloseMessageTooBig/1009 error, got %v", err)
 	}
 	if err := sender.SetReadDeadline(time.Time{}); err != nil {

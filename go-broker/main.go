@@ -6,6 +6,7 @@ import (
 	"flag"
 	"fmt"
 	"log"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -23,6 +24,13 @@ const defaultMaxPayloadBytes int64 = 1 << 20 // 1 MiB
 
 // Will be configured in main() after parsing flags/env.
 var upgrader = websocket.Upgrader{}
+
+const (
+	writeWait          = 10 * time.Second      // write deadline for outgoing frames
+	pongWaitMultiplier = 2                      // read deadline = pingInterval * multiplier
+)
+
+var pingInterval = 30 * time.Second // can be overridden by --ping-interval
 
 // Always allow localhost for dev convenience.
 var localHosts = map[string]struct{}{
@@ -165,9 +173,21 @@ func (b *Broker) serveWS(w http.ResponseWriter, r *http.Request) {
 	}
 	client := &Client{conn: conn, send: make(chan []byte, 256), id: r.RemoteAddr}
 
+	// Enforce payload limit (read side)
 	if b.maxPayloadBytes > 0 {
 		client.conn.SetReadLimit(b.maxPayloadBytes)
 	}
+
+	// Keepalive: read deadline & pong handler
+	waitDuration := time.Duration(pongWaitMultiplier) * pingInterval
+	if err := client.conn.SetReadDeadline(time.Now().Add(waitDuration)); err != nil {
+		log.Printf("set initial read deadline for %s: %v", client.id, err)
+		_ = client.conn.Close()
+		return
+	}
+	client.conn.SetPongHandler(func(string) error {
+		return client.conn.SetReadDeadline(time.Now().Add(waitDuration))
+	})
 
 	b.lock.Lock()
 	b.clients[client] = true
@@ -183,13 +203,25 @@ func (b *Broker) serveWS(w http.ResponseWriter, r *http.Request) {
 		for {
 			messageType, msg, err := client.conn.ReadMessage()
 			if err != nil {
-				if websocket.IsCloseError(err, websocket.CloseMessageTooBig) || errors.Is(err, websocket.ErrReadLimit) {
+				// Differentiate a few common cases for logging clarity
+				if ne, ok := err.(net.Error); ok && ne.Timeout() {
+					log.Printf("read deadline exceeded for %s: %v", client.id, err)
+				} else if websocket.IsCloseError(err, websocket.CloseMessageTooBig) || errors.Is(err, websocket.ErrReadLimit) {
 					log.Printf("closing connection %s due to oversized payload: %v", client.id, err)
+				} else if websocket.IsUnexpectedCloseError(err, websocket.CloseGoingAway, websocket.CloseNormalClosure) {
+					log.Printf("unexpected close for %s: %v", client.id, err)
 				} else {
 					log.Printf("read error from %s: %v", client.id, err)
 				}
 				break
 			}
+
+			// Extend read deadline after each successful frame
+			if err := client.conn.SetReadDeadline(time.Now().Add(waitDuration)); err != nil {
+				log.Printf("failed to extend read deadline for %s: %v", client.id, err)
+				break
+			}
+
 			if messageType != websocket.TextMessage {
 				log.Printf("dropping non-text message from %s", client.id)
 				continue
@@ -217,7 +249,7 @@ func (b *Broker) serveWS(w http.ResponseWriter, r *http.Request) {
 
 	// writer (handles errors + periodic ping)
 	go func() {
-		ticker := time.NewTicker(30 * time.Second)
+		ticker := time.NewTicker(pingInterval)
 		defer func() {
 			ticker.Stop()
 			_ = client.conn.Close()
@@ -229,14 +261,20 @@ func (b *Broker) serveWS(w http.ResponseWriter, r *http.Request) {
 					_ = client.conn.WriteMessage(websocket.CloseMessage, []byte{})
 					return
 				}
+				if err := client.conn.SetWriteDeadline(time.Now().Add(writeWait)); err != nil {
+					log.Printf("set write deadline for %s: %v", client.id, err)
+					b.deregisterClient(client)
+					return
+				}
 				if err := client.conn.WriteMessage(websocket.TextMessage, msg); err != nil {
-					log.Println("write error:", err)
+					log.Printf("write error for %s: %v", client.id, err)
 					b.deregisterClient(client)
 					return
 				}
 			case <-ticker.C:
-				if err := client.conn.WriteMessage(websocket.PingMessage, []byte{}); err != nil {
-					log.Println("ping error:", err)
+				// Send ping periodically; pong handler will extend read deadline
+				if err := client.conn.WriteControl(websocket.PingMessage, []byte{}, time.Now().Add(writeWait)); err != nil {
+					log.Printf("ping failure for %s: %v", client.id, err)
 					b.deregisterClient(client)
 					return
 				}
@@ -263,7 +301,7 @@ func main() {
 	// allowed origins
 	allowedOriginsDefault := os.Getenv("BROKER_ALLOWED_ORIGINS")
 
-	// max payload: env -> default, can be overridden by flag
+	// max payload default (env can override)
 	maxPayloadDefault := defaultMaxPayloadBytes
 	if envMax := os.Getenv("BROKER_MAX_PAYLOAD_BYTES"); envMax != "" {
 		if parsed, err := strconv.ParseInt(envMax, 10, 64); err != nil {
@@ -275,19 +313,22 @@ func main() {
 		}
 	}
 
+	// flags
 	allowedOriginsFlag := flag.String("allowed-origins", allowedOriginsDefault, "Comma-separated list of allowed origins for WebSocket connections")
 	addr := flag.String("addr", ":43127", "address to listen on") // default to match python client
-
-	// TLS flags
 	tlsCertDefault := os.Getenv("BROKER_TLS_CERT")
 	tlsKeyDefault := os.Getenv("BROKER_TLS_KEY")
 	tlsCert := flag.String("tls-cert", tlsCertDefault, "Path to the TLS certificate file")
 	tlsKey := flag.String("tls-key", tlsKeyDefault, "Path to the TLS private key file")
-
-	// payload flag
 	maxPayloadFlag := flag.Int64("max-payload-bytes", maxPayloadDefault, "Maximum size in bytes for inbound WebSocket messages")
-
+	pingFlag := flag.Duration("ping-interval", pingInterval, "interval between WebSocket ping frames for connection liveness")
 	flag.Parse()
+
+	// validate ping interval and apply
+	if *pingFlag <= 0 {
+		log.Fatalf("ping interval must be positive, got %v", *pingFlag)
+	}
+	pingInterval = *pingFlag
 
 	// origin policy
 	allowlist := parseAllowedOrigins(*allowedOriginsFlag)
