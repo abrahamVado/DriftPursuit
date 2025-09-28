@@ -11,11 +11,11 @@ DEFAULT_WS_URL = "ws://localhost:8080/ws"
 TICK = 1.0/30.0
 
 class Plane:
-    def __init__(self, id, x=0,y=0,z=1000, speed=120.0):
+    def __init__(self, id, x=0, y=0, z=1000, speed=120.0):
         self.id = id
-        self.pos = np.array([x,y,z], dtype=float)
-        self.vel = np.array([speed,0,0], dtype=float)
-        self.ori = [0,0,0]
+        self.pos = np.array([x, y, z], dtype=float)
+        self.vel = np.array([speed, 0, 0], dtype=float)
+        self.ori = [0, 0, 0]
         self.tags = []
 
     def step(self, dt):
@@ -23,7 +23,7 @@ class Plane:
 
 def mk_telemetry(plane, t):
     return json.dumps({
-        "type":"telemetry",
+        "type": "telemetry",
         "id": plane.id,
         "t": t,
         "pos": [float(plane.pos[0]), float(plane.pos[1]), float(plane.pos[2])],
@@ -34,42 +34,73 @@ def mk_telemetry(plane, t):
 
 def run(ws_url: str):
     print("Connecting to", ws_url)
-    try:
-        ws = create_connection(ws_url)
-    except Exception as e:
-        print("Failed to connect:", e)
-        return
     p = Plane("plane-1", x=0, y=0, z=1200, speed=140.0)
     p.tags.append("pastel:turquoise")
     t0 = time.time()
     last_cake = -10.0
-    try:
-        while True:
-            t = time.time() - t0
-            p.step(TICK)
-            try:
-                ws.send(mk_telemetry(p, t))
-            except WebSocketConnectionClosedException:
-                print("Connection closed"); break
-            # simple cake drop every ~8-12s randomly
-            if (t - last_cake) > 8.0 and random.random() < 0.02:
-                last_cake = t
-                cake_msg = json.dumps({
-                    "type":"cake_drop",
-                    "id": f"cake-{int(t)}",
-                    "from": p.id,
-                    "pos": [float(p.pos[0]), float(p.pos[1]), float(p.pos[2])],
-                    "landing_pos": [float(p.pos[0]+50), float(p.pos[1]-20), 0.0],
-                    "status":"in_flight"
-                })
+    backoff = 1.0
+    max_backoff = 10.0
+    should_stop = False
+
+    while not should_stop:
+        ws = None
+        try:
+            print("Connecting to", ws_url)
+            ws = create_connection(ws_url)
+            print("Connected to", ws_url)
+            backoff = 1.0
+
+            while True:
+                t = time.time() - t0
+                p.step(TICK)
                 try:
-                    ws.send(cake_msg)
-                    print("Sent cake_drop", cake_msg)
-                except Exception as e:
-                    print("send cake err", e)
-            time.sleep(TICK)
-    finally:
-        ws.close()
+                    ws.send(mk_telemetry(p, t))
+                except WebSocketConnectionClosedException:
+                    print("Connection closed while sending telemetry")
+                    raise
+
+                # simple cake drop every ~8-12s randomly
+                if (t - last_cake) > 8.0 and random.random() < 0.02:
+                    last_cake = t
+                    cake_msg = json.dumps({
+                        "type": "cake_drop",
+                        "id": f"cake-{int(t)}",
+                        "from": p.id,
+                        "pos": [float(p.pos[0]), float(p.pos[1]), float(p.pos[2])],
+                        "landing_pos": [float(p.pos[0] + 50), float(p.pos[1] - 20), 0.0],
+                        "status": "in_flight"
+                    })
+                    try:
+                        ws.send(cake_msg)
+                        print("Sent cake_drop", cake_msg)
+                    except WebSocketConnectionClosedException:
+                        print("Connection closed while sending cake_drop")
+                        raise
+                    except Exception as e:
+                        print("send cake err", e)
+
+                time.sleep(TICK)
+
+        except KeyboardInterrupt:
+            print("Stopping client")
+            should_stop = True
+        except WebSocketConnectionClosedException:
+            print("Lost connection to server")
+        except Exception as e:
+            print("Connection error:", e)
+        finally:
+            if ws is not None:
+                try:
+                    ws.close()
+                except Exception:
+                    pass
+
+        if should_stop:
+            break
+
+        print(f"Reconnecting in {backoff:.1f}s...")
+        time.sleep(backoff)
+        backoff = min(backoff * 2, max_backoff)
 
 def parse_args():
     parser = argparse.ArgumentParser(
@@ -88,7 +119,6 @@ def parse_args():
     )
     return parser.parse_args()
 
-
 def get_ws_url(cli_url: Optional[str]) -> str:
     if cli_url:
         return cli_url
@@ -96,7 +126,6 @@ def get_ws_url(cli_url: Optional[str]) -> str:
     if env_url:
         return env_url
     return DEFAULT_WS_URL
-
 
 if __name__ == '__main__':
     args = parse_args()
