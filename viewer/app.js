@@ -99,6 +99,11 @@ const UI_STRINGS = {
   },
 };
 
+function getConnectionStatusLabel(statusKey) {
+  const statusEntry = UI_STRINGS.connectionStatus[statusKey];
+  return statusEntry ? statusEntry.label : 'Connecting…';
+}
+
 const manualOverrideStateByPlane = new Map();
 const DEFAULT_CONTROL_DOCS = [
   {
