@@ -47,16 +47,20 @@ type Client struct {
 
 type Broker struct {
 	clients         map[*Client]bool
-	lock            sync.Mutex
+	lock            sync.RWMutex
 	stats           BrokerStats
 	maxPayloadBytes int64
 
 	// capacity limiting
 	maxClients     int
 	pendingClients int
+
+	stateMu    sync.RWMutex
+	startedAt  time.Time
+	startupErr error
 }
 
-func NewBroker(maxPayloadBytes int64, maxClients int) *Broker {
+func NewBroker(maxPayloadBytes int64, maxClients int, startedAt time.Time) *Broker {
 	if maxPayloadBytes <= 0 {
 		maxPayloadBytes = defaultMaxPayloadBytes
 	}
@@ -64,6 +68,7 @@ func NewBroker(maxPayloadBytes int64, maxClients int) *Broker {
 		clients:         make(map[*Client]bool),
 		maxPayloadBytes: maxPayloadBytes,
 		maxClients:      maxClients,
+		startedAt:       startedAt,
 	}
 }
 
@@ -119,9 +124,37 @@ func (b *Broker) broadcast(msg []byte) {
 }
 
 func (b *Broker) Stats() BrokerStats {
-	b.lock.Lock()
-	defer b.lock.Unlock()
+	b.lock.RLock()
+	defer b.lock.RUnlock()
 	return b.stats
+}
+
+func (b *Broker) snapshotClientCounts() (clients, pending int) {
+	b.lock.RLock()
+	defer b.lock.RUnlock()
+	return b.stats.Clients, b.pendingClients
+}
+
+func (b *Broker) setStartupError(err error) {
+	b.stateMu.Lock()
+	b.startupErr = err
+	b.stateMu.Unlock()
+}
+
+func (b *Broker) startupError() error {
+	b.stateMu.RLock()
+	defer b.stateMu.RUnlock()
+	return b.startupErr
+}
+
+func (b *Broker) uptime() time.Duration {
+	b.stateMu.RLock()
+	started := b.startedAt
+	b.stateMu.RUnlock()
+	if started.IsZero() {
+		return 0
+	}
+	return time.Since(started)
 }
 
 // --- Origin allowlist helpers ---
@@ -281,7 +314,7 @@ func (b *Broker) serveWS(w http.ResponseWriter, r *http.Request) {
 				continue
 			}
 
-                        b.broadcast(msg)
+			b.broadcast(msg)
 		}
 	}()
 
@@ -333,9 +366,45 @@ func statsHandler(provider statsProvider) http.HandlerFunc {
 	}
 }
 
+func healthzHandler(b *Broker) http.HandlerFunc {
+	type response struct {
+		Status         string  `json:"status"`
+		UptimeSeconds  float64 `json:"uptime_seconds"`
+		Clients        int     `json:"clients"`
+		PendingClients int     `json:"pending_clients"`
+	}
+
+	return func(w http.ResponseWriter, r *http.Request) {
+		clients, pending := b.snapshotClientCounts()
+		uptime := b.uptime().Seconds()
+		status := "ok"
+		code := http.StatusOK
+		if err := b.startupError(); err != nil {
+			status = "error"
+			code = http.StatusServiceUnavailable
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		if code != http.StatusOK {
+			w.WriteHeader(code)
+		}
+		resp := response{
+			Status:         status,
+			UptimeSeconds:  uptime,
+			Clients:        clients,
+			PendingClients: pending,
+		}
+		if err := json.NewEncoder(w).Encode(resp); err != nil {
+			log.Printf("encode healthz response: %v", err)
+		}
+	}
+}
+
 // --- main / static viewer resolution ---
 
 func main() {
+	startedAt := time.Now()
+
 	// allowed origins
 	allowedOriginsDefault := os.Getenv("BROKER_ALLOWED_ORIGINS")
 
@@ -412,9 +481,12 @@ func main() {
 		log.Fatalf("TLS configuration error: both --tls-cert and --tls-key (or BROKER_TLS_CERT/BROKER_TLS_KEY) must be provided together")
 	}
 
+	broker := NewBroker(maxPayloadBytes, maxClients, startedAt)
+
 	// build handler with consistent mux
-	handler, err := buildHandler(maxPayloadBytes, maxClients)
+	handler, err := buildHandler(broker)
 	if err != nil {
+		broker.setStartupError(err)
 		log.Fatalf("failed to build HTTP handler: %v", err)
 	}
 
@@ -429,14 +501,13 @@ func main() {
 	log.Fatal(server.ListenAndServe())
 }
 
-func buildHandler(maxPayloadBytes int64, maxClients int) (http.Handler, error) {
+func buildHandler(b *Broker) (http.Handler, error) {
 	mux := http.NewServeMux()
-
-	b := NewBroker(maxPayloadBytes, maxClients)
 
 	// Register everything on the same mux
 	mux.HandleFunc("/ws", b.serveWS)
 	mux.HandleFunc("/api/stats", statsHandler(b))
+	mux.HandleFunc("/healthz", healthzHandler(b))
 	registerControlDocEndpoints(mux) // no-op; extend as needed
 
 	// serve viewer static files (resolve relative to this source file)
@@ -465,4 +536,3 @@ func resolveViewerDir() (string, error) {
 	}
 	return viewerDir, nil
 }
-
