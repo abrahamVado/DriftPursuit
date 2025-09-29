@@ -1,10 +1,12 @@
-import * as THREE from 'https://cdn.jsdelivr.net/npm/three@0.152.2/build/three.module.js';
 import { InputManager, describeControls } from './InputManager.js';
 import { PlaneController, createPlaneMesh } from './PlaneController.js';
 import { ChaseCamera } from './ChaseCamera.js';
 import { WorldStreamer } from './WorldStreamer.js';
 import { CollisionSystem } from './CollisionSystem.js';
 import { HUD } from './HUD.js';
+
+const THREE = (typeof window !== 'undefined' ? window.THREE : globalThis?.THREE) ?? null;
+if (!THREE) throw new Error('Sandbox viewer requires THREE to be loaded globally');
 
 const SKY_CEILING = 1800;
 const ORIGIN_REBASE_DISTANCE = 1400;

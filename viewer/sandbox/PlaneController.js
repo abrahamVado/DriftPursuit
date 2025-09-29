@@ -1,4 +1,5 @@
-import * as THREE from 'https://cdn.jsdelivr.net/npm/three@0.152.2/build/three.module.js';
+const THREE = (typeof window !== 'undefined' ? window.THREE : globalThis?.THREE) ?? null;
+if (!THREE) throw new Error('Sandbox PlaneController requires THREE to be loaded globally');
 
 const FORWARD_AXIS = new THREE.Vector3(0, 1, 0);
 const TMP_VECTOR = new THREE.Vector3();

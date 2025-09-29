@@ -1,4 +1,5 @@
-import * as THREE from 'https://cdn.jsdelivr.net/npm/three@0.152.2/build/three.module.js';
+const THREE = (typeof window !== 'undefined' ? window.THREE : globalThis?.THREE) ?? null;
+if (!THREE) throw new Error('Sandbox ChaseCamera requires THREE to be loaded globally');
 
 const TMP_FORWARD = new THREE.Vector3();
 const TMP_UP = new THREE.Vector3(0, 0, 1);
