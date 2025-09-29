@@ -256,6 +256,7 @@ export class WorldStreamer {
         worldPosition: new THREE.Vector3(location.worldX, location.worldY, peakHeight),
         topHeight: peakHeight,
         baseHeight,
+        type: 'mountain',
       });
     }
   }
@@ -283,6 +284,7 @@ export class WorldStreamer {
         worldPosition: new THREE.Vector3(location.worldX, location.worldY, location.height + size),
         topHeight: location.height + size * 1.2,
         baseHeight: location.height,
+        type: 'rock',
       });
     }
   }
@@ -343,6 +345,7 @@ export class WorldStreamer {
         worldPosition: new THREE.Vector3(worldX, worldY, height + wallHeight),
         topHeight: height + wallHeight + roofHeight,
         baseHeight: height,
+        type: 'building',
       });
     }
   }

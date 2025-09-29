@@ -1,9 +1,10 @@
-import { WorldStreamer } from '../sandbox/WorldStreamer.js';
+import { TerraWorldStreamer } from './TerraWorldStreamer.js';
 import { TerraPlaneController, createPlaneMesh } from './PlaneController.js';
 import { CarController, createCarRig } from '../sandbox/CarController.js';
 import { ChaseCamera } from '../sandbox/ChaseCamera.js';
 import { CollisionSystem } from '../sandbox/CollisionSystem.js';
 import { HUD } from '../sandbox/HUD.js';
+import { ProjectileSystem } from './ProjectileSystem.js';
 import {
   createRenderer,
   createPerspectiveCamera,
@@ -39,8 +40,9 @@ sun.shadow.camera.bottom = -800;
 sun.shadow.camera.far = 2400;
 scene.add(sun);
 
-const world = new WorldStreamer({ scene, chunkSize: 640, radius: 3, seed: 982451653 });
+const world = new TerraWorldStreamer({ scene, chunkSize: 640, radius: 3, seed: 982451653 });
 const collisionSystem = new CollisionSystem({ world, crashMargin: 2.4, obstaclePadding: 3.2 });
+const projectileSystem = new ProjectileSystem({ world });
 
 const chaseCamera = new ChaseCamera(camera, {
   distance: 82,
@@ -605,6 +607,15 @@ function evaluateCollisions(vehicle){
   }
 }
 
+function handleProjectileImpact(impact){
+  if (!impact) return;
+  world.applyProjectileImpact?.(impact);
+}
+
+function spawnProjectile(shot){
+  projectileSystem.spawnProjectile(shot);
+}
+
 let lastTime = performance.now();
 let elapsedTime = 0;
 
@@ -634,6 +645,7 @@ function animate(now){
   }
 
   evaluateCollisions(activeVehicle);
+  projectileSystem.update(dt);
   updateHud(activeVehicle);
   updateTrackedVehicles();
 
@@ -660,4 +672,6 @@ window.DriftPursuitTerra = {
       velocity: entry.state.velocity.clone(),
     }));
   },
+  impact: handleProjectileImpact,
+  fireProjectile: spawnProjectile,
 };
