@@ -39,7 +39,9 @@ Controls:
 
 The HUD overlays throttle, airspeed, altitude, crash counter, and the same control reference. The world streams procedurally generated hills and mountain ridges around the aircraft, rebasing the origin automatically so you can keep flying without running into floating point precision issues. Colliding with terrain or props triggers an instant crash/restart and increments the counter.
 
+
 Looking for a friendlier fixed-camera layout for casual pilots? See [`docs/casual-flight-controls.md`](docs/casual-flight-controls.md) for a beginner-focused scheme with auto-stabilization assists and presentation tips.
+
 
 ## Prerequisites
 
