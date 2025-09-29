@@ -1,12 +1,11 @@
+// WorldStreamer.js
 import { NoiseGenerator } from './Noise.js';
+import { TERRAIN_PRESETS } from './terrainConfig.js';
 
 const THREE = (typeof window !== 'undefined' ? window.THREE : globalThis?.THREE) ?? null;
 if (!THREE) throw new Error('Sandbox WorldStreamer requires THREE to be loaded globally');
 
-
-function chunkKey(x, y){
-  return `${x}:${y}`;
-}
+function chunkKey(x, y){ return `${x}:${y}`; }
 
 function createRng(seed){
   let state = seed >>> 0;
@@ -19,125 +18,142 @@ function createRng(seed){
   };
 }
 
-const DEFAULT_GENERATOR_CONFIG = {
-  noise: {
-    hills: { frequency: 0.0012, offset: [0, 0], octaves: 4, persistence: 0.55, lacunarity: 2.1, amplitude: 55, exponent: 1 },
-    mountains: {
-      frequency: 0.00045,
-      offset: [40, -60],
-      octaves: 5,
-      persistence: 0.52,
-      lacunarity: 2.05,
-      amplitude: 340,
-      exponent: 3.2,
-    },
-    ridges: { frequency: 0.0025, offset: [0, 0], amplitude: 20, exponent: 1.6 },
-  },
-  plateau: { flatRadius: 160, blendRadius: 340, height: 8 },
-  features: { mountains: true, rocks: true, towns: true, rivers: true },
-  colors: {
-    low: '#2f5b2f',
-    mid: '#4e7741',
-    high: '#c2c5c7',
-    lowThreshold: 30,
-    highThreshold: 140,
-    highCap: 300,
-  },
-  mountains: {
-    noise: { frequency: 0.00032, offset: [300, -220], octaves: 5, persistence: 0.58, lacunarity: 2.18 },
-    threshold: 0.64,
-    clusterThreshold: 0.78,
-    clusterCount: 2,
-    minHeight: 120,
-    maxSlope: 0.55,
-    heightGain: { min: 120, max: 340 },
-    radius: { min: 60, max: 150 },
-    segments: { min: 8, max: 12 },
-  },
-  rocks: {
-    noise: { frequency: 0.0014, offset: [1200, -860] },
-    baseCount: 2,
-    densityScale: 6,
-    attempts: 6,
-    maxSlope: 0.45,
-    size: { min: 6, max: 24 },
-    detailThreshold: 0.55,
-  },
-  towns: {
-    noise: { frequency: 0.00022, offset: [1480, -930], octaves: 4, persistence: 0.6, lacunarity: 2.3 },
-    threshold: 0.66,
-    anchor: { attempts: 12, maxSlope: 0.18, maxHeight: 180 },
-    plazaRadius: { min: 16, max: 26 },
-    buildingCount: { min: 4, max: 8 },
-    buildingDistance: { offset: 8, range: 35 },
-    buildingWidth: { min: 12, max: 26 },
-    buildingDepth: { min: 10, max: 28 },
-    wallHeight: { min: 12, max: 22 },
-    roofHeightScale: 0.6,
-    buildingPlacementMaxSlope: 0.24,
-  },
-  rivers: {
-    noise: { frequency: 0.00038, offset: [-510, 740] },
-    threshold: 0.085,
-    lengthMultiplier: 1.5,
-    width: { min: 26, max: 58 },
-    meander: { frequency: 0.0012, scale: 0.6 },
-    angleNoise: { frequency: 0.00062, offset: [2200, -1800] },
-    depth: 2.8,
-    segments: 18,
-  },
-};
-
+// --------- MERGE UTILS (deep-ish; keeps your old semantics)
 function cloneGeneratorValue(value){
-  if (Array.isArray(value)){
-    return value.map((item) => cloneGeneratorValue(item));
-  }
+  if (Array.isArray(value)) return value.map(cloneGeneratorValue);
   if (value && typeof value === 'object'){
     const clone = {};
-    for (const key of Object.keys(value)){
-      clone[key] = cloneGeneratorValue(value[key]);
-    }
+    for (const k of Object.keys(value)) clone[k] = cloneGeneratorValue(value[k]);
     return clone;
   }
   return value;
 }
-
 function mergeGeneratorConfig(base, override){
-  if (!override || typeof override !== 'object'){
-    return cloneGeneratorValue(base);
-  }
+  if (!override || typeof override !== 'object') return cloneGeneratorValue(base);
   const result = Array.isArray(base) ? [] : {};
   const keys = new Set([...Object.keys(base ?? {}), ...Object.keys(override ?? {})]);
   keys.forEach((key) => {
-    const baseValue = base?.[key];
-    const overrideValue = override?.[key];
-    if (Array.isArray(baseValue)){
-      result[key] = Array.isArray(overrideValue) ? cloneGeneratorValue(overrideValue) : cloneGeneratorValue(baseValue);
-    } else if (baseValue && typeof baseValue === 'object'){
-      result[key] = mergeGeneratorConfig(baseValue, overrideValue);
-    } else if (overrideValue && typeof overrideValue === 'object'){
-      result[key] = cloneGeneratorValue(overrideValue);
-    } else {
-      result[key] = overrideValue ?? baseValue;
-    }
+    const b = base?.[key]; const o = override?.[key];
+    if (Array.isArray(b))             result[key] = Array.isArray(o) ? cloneGeneratorValue(o) : cloneGeneratorValue(b);
+    else if (b && typeof b==='object') result[key] = mergeGeneratorConfig(b, o);
+    else if (o && typeof o==='object') result[key] = cloneGeneratorValue(o);
+    else                                result[key] = (o ?? b);
   });
   return result;
 }
 
+// --------- HELPERS: query param → preset
+function getQueryPreset(){
+  try {
+    const p = new URLSearchParams(window.location.search).get('preset');
+    return p && (p in TERRAIN_PRESETS) ? p : null;
+  } catch { return null; }
+}
+
+// --------- COLOR HELPERS
+function lerpColorStops(colors, t){
+  // colors can be ['#a','#b','#c'] or [[0,'#a'],[0.5,'#b'],[1,'#c']]
+  const stops = Array.isArray(colors[0]) ? colors : colors.map((c,i,arr)=>[i/(arr.length-1), c]);
+  const tt = THREE.MathUtils.clamp(t, 0, 1);
+  for (let i=0;i<stops.length-1;i++){
+    const [t0,c0] = stops[i]; const [t1,c1] = stops[i+1];
+    if (tt >= t0 && tt <= t1){
+      const f = (tt - t0) / Math.max(1e-6, (t1 - t0));
+      const col0 = new THREE.Color(c0); const col1 = new THREE.Color(c1);
+      return col0.lerp(col1, f);
+    }
+  }
+  return new THREE.Color(stops[stops.length-1][1]);
+}
+
+// --------- DETERMINISTIC CELL RNG (for craters/lakes)
+function hash2i(x, y){
+  // 2D int hash → 32-bit
+  let h = x | 0;
+  h = Math.imul(h ^ 0x9e3779b9, 0x85ebca6b) ^ y | 0;
+  h ^= h >>> 16;
+  h = Math.imul(h, 0xc2b2ae35);
+  h ^= h >>> 16;
+  return h >>> 0;
+}
+function rngFromCell(cx, cy, seed){
+  return createRng(hash2i(hash2i(cx, cy), seed));
+}
+
 export class WorldStreamer {
   constructor({ scene, chunkSize = 600, radius = 3, seed = 1337, generator = null, procedural = null } = {}){
-    this.scene = scene;
-    this.chunkSize = chunkSize;
-    this.radius = radius;
-    this.seed = seed;
-    this.noise = new NoiseGenerator(seed);
+    // ----- pick preset → merge with overrides (keeps old fields if present)
+    const queryPreset = getQueryPreset();
+    const presetBase = TERRAIN_PRESETS[queryPreset ?? 'default'] ?? TERRAIN_PRESETS.default;
+
+    // If user passes generator.preset = 'ultra' (etc.), prefer that over query
+    const overridePresetName = generator?.preset || procedural?.preset || null;
+    const presetChosen = overridePresetName && TERRAIN_PRESETS[overridePresetName]
+      ? TERRAIN_PRESETS[overridePresetName] : presetBase;
+
     const overrides = generator ?? procedural ?? null;
-    this.generatorConfig = mergeGeneratorConfig(DEFAULT_GENERATOR_CONFIG, overrides);
-    this._colorGradient = {
-      low: new THREE.Color(this.generatorConfig.colors.low),
-      mid: new THREE.Color(this.generatorConfig.colors.mid),
-      high: new THREE.Color(this.generatorConfig.colors.high),
+    const merged = mergeGeneratorConfig(presetChosen, overrides);
+
+    // Wire globals from config if not explicitly provided
+    const worldCfg = merged.world ?? {};
+    this.scene = scene;
+    this.chunkSize = chunkSize ?? worldCfg.tileSize ?? 900;
+    this.radius = radius ?? worldCfg.visibleRadius ?? 3;
+    this.seed = seed ?? merged.seed ?? 1337;
+    this.scale = merged.scale ?? 1.0;
+
+    // Core noise + climate
+    this.noise = new NoiseGenerator(this.seed);
+    this.generatorConfig = merged;
+
+    this.world = {
+      waterLevel: worldCfg.waterLevel ?? 18,
+      snowline: worldCfg.snowline ?? 220,
+      beachBand: worldCfg.beachBand ?? 10,
+      bounds: worldCfg.bounds ?? null,
     };
+
+    // Precompute color ramps if present
+    const colors = this.generatorConfig.colors ?? {};
+    this._ramps = colors.ramps ?? null;
+    this._colorGradient = {
+      low: new THREE.Color(colors.low ?? '#2f5b2f'),
+      mid: new THREE.Color(colors.mid ?? '#4e7741'),
+      high: new THREE.Color(colors.high ?? '#c2c5c7'),
+      lowThreshold: colors.lowThreshold ?? 30,
+      highThreshold: colors.highThreshold ?? 140,
+      highCap: colors.highCap ?? 300,
+    };
+
+    // Volcano config cache
+    this.volcano = (this.generatorConfig.volcano ?? {});
+    this._volcanoHasCenter =
+      Array.isArray(this.volcano.center) && this.volcano.center.length >= 2;
+
+    // Optional stars
+    this.enableStars = this.generatorConfig.features?.stars ?? false;
+
+    // Craters pass (independent of volcano)
+    this.craterCfg = Object.assign({
+      enabled: true,
+      spacing: 1200,       // average cell size in world units
+      chance: 0.22,        // per-cell chance
+      radius: [120, 340],  // min..max
+      depth: [20, 120],    // bowl depth
+      rimSharpness: 1.8,   // profile exponent
+      jitter: 0.42,        // randomize center within cell
+    }, this.generatorConfig.craters || {});
+
+    // Lakes pass (independent of rivers)
+    this.lakeCfg = Object.assign({
+      enabled: !!(this.generatorConfig.rivers?.lakes?.enabled ?? true),
+      perChunk: 1,
+      noiseFrequency: 0.0009,
+      threshold: 0.58,
+      radius: [18, 80],
+      levelOffset: -2,
+    }, this.generatorConfig.rivers?.lakes || {});
+
     this.worldGroup = new THREE.Group();
     this.worldGroup.name = 'EndlessTerrain';
     this.originOffset = new THREE.Vector3();
@@ -147,6 +163,29 @@ export class WorldStreamer {
     this.sharedMaterials = new Set(Object.values(this.materials));
     this.disposables.push(...this.sharedMaterials);
     this.scene?.add(this.worldGroup);
+
+    // Optional: add an ocean sheet (simple, infinite feel)
+    if (this.generatorConfig.features?.ocean !== false){
+      this._ocean = this._createOcean();
+      this.worldGroup.add(this._ocean);
+    }
+
+    // Optional starfield
+    if (this.enableStars && this.scene){
+      this._stars = this._createStars();
+      this.scene.add(this._stars);
+    }
+
+    // — bind methods so they always exist as functions on the instance
+    [
+      'update','handleOriginShift','getHeightAt','getOriginOffset','getObstaclesNear','dispose',
+      '_positionChunk','_spawnChunk','_disposeChunk',
+      '_createTerrainMesh','_createSharedMaterials','_createOcean','_createStars','_disposeMaterialIfOwned',
+      '_scatterTerrainFeatures','_maybeAddMountain','_scatterRocks','_maybeAddTown','_maybeAddRiver','_maybeAddLakes',
+      '_findLocation','_sampleHeightBase','_sampleHeight','_slopeMagnitude',
+      '_sampleClimate','_pickBiome','_sampleBiomeColor','_sampleColorLegacy',
+      '_addVolcanoLavaIfNeeded','_craterContribution'
+    ].forEach((k) => { this[k] = this[k].bind(this); });
   }
 
   update(focusPosition){
@@ -179,16 +218,23 @@ export class WorldStreamer {
         this.chunkMap.delete(key);
       }
     });
+
+    // keep ocean under camera
+    if (this._ocean){
+      this._ocean.position.set(globalX - this.originOffset.x, globalY - this.originOffset.y, this.world.waterLevel - this.originOffset.z);
+    }
+    // keep stars centered
+    if (this._stars){
+      this._stars.position.set(-this.originOffset.x, -this.originOffset.y, -this.originOffset.z);
+    }
   }
 
   handleOriginShift(shift){
     if (!shift) return;
     this.originOffset.add(shift);
-    this.chunkMap.forEach((chunk) => {
-      if (chunk?.group){
-        chunk.group.position.sub(shift);
-      }
-    });
+    this.chunkMap.forEach((chunk) => { if (chunk?.group) chunk.group.position.sub(shift); });
+    if (this._ocean) this._ocean.position.sub(shift);
+    if (this._stars) this._stars.position.sub(shift);
   }
 
   getHeightAt(x, y){
@@ -197,9 +243,7 @@ export class WorldStreamer {
     return this._sampleHeight(worldX, worldY);
   }
 
-  getOriginOffset(){
-    return this.originOffset.clone();
-  }
+  getOriginOffset(){ return this.originOffset.clone(); }
 
   getObstaclesNear(x, y, radius = this.chunkSize){
     const globalX = x + this.originOffset.x;
@@ -211,13 +255,11 @@ export class WorldStreamer {
       for (let dy = -1; dy <= 1; dy += 1){
         const chunk = this.chunkMap.get(chunkKey(chunkX + dx, chunkY + dy));
         if (chunk?.obstacles){
-          chunk.obstacles.forEach((obstacle) => {
-            const dxWorld = obstacle.worldPosition.x - globalX;
-            const dyWorld = obstacle.worldPosition.y - globalY;
-            const horizontalSq = dxWorld * dxWorld + dyWorld * dyWorld;
-            if (horizontalSq <= (radius + obstacle.radius) * (radius + obstacle.radius)){
-              results.push(obstacle);
-            }
+          chunk.obstacles.forEach((o) => {
+            const dxw = o.worldPosition.x - globalX;
+            const dyw = o.worldPosition.y - globalY;
+            const horizontalSq = dxw * dxw + dyw * dyw;
+            if (horizontalSq <= (radius + o.radius) * (radius + o.radius)) results.push(o);
           });
         }
       }
@@ -228,9 +270,9 @@ export class WorldStreamer {
   dispose(){
     this.chunkMap.forEach((chunk) => this._disposeChunk(chunk));
     this.chunkMap.clear();
-    if (this.scene){
-      this.scene.remove(this.worldGroup);
-    }
+    if (this._ocean) this.worldGroup.remove(this._ocean);
+    if (this.scene) this.scene.remove(this.worldGroup);
+    if (this._stars && this.scene) this.scene.remove(this._stars);
     this.disposables.forEach((item) => item.dispose?.());
     this.disposables = [];
   }
@@ -249,6 +291,9 @@ export class WorldStreamer {
 
     const terrain = this._createTerrainMesh(chunkX, chunkY);
     group.add(terrain.mesh);
+
+    // volcano lava if this chunk contains the volcano center
+    this._addVolcanoLavaIfNeeded({ chunkX, chunkY, group });
 
     const { obstacles } = this._scatterTerrainFeatures({ chunkX, chunkY, rng, group });
 
@@ -269,7 +314,10 @@ export class WorldStreamer {
   }
 
   _createTerrainMesh(chunkX, chunkY){
-    const resolution = 64;
+    // Use perf controls if present
+    const detailScale = this.generatorConfig?.perf?.meshDetail ?? 1.0;
+    const baseRes = 64;
+    const resolution = Math.max(8, Math.round(baseRes * detailScale));
     const geometry = new THREE.PlaneGeometry(this.chunkSize, this.chunkSize, resolution, resolution);
     const colors = new Float32Array(geometry.attributes.position.count * 3);
     const positions = geometry.attributes.position;
@@ -285,10 +333,33 @@ export class WorldStreamer {
       positions.setZ(i, height);
 
       const colorIndex = i * 3;
-      const color = this._sampleColor(height);
+      const color = this._sampleBiomeColor(worldX, worldY, height);
       colors[colorIndex] = color.r;
       colors[colorIndex + 1] = color.g;
       colors[colorIndex + 2] = color.b;
+    }
+
+    // Optional: jagged rim displacement (visual spice) near volcano crater
+    if (this.volcano?.enabled && this._volcanoHasCenter){
+      const v = this.volcano;
+      const cx = v.center[0] ?? 0, cy = v.center[1] ?? 0;
+      const rc = v.craterRadius ?? 220;
+      const band = rc * 0.18;
+      const f = v.noise?.frequency ?? 0.0028;
+      const amp = (v.noise?.amplitude ?? 65) * 0.5;
+      for (let i = 0; i < positions.count; i++){
+        const lx = positions.getX(i);
+        const ly = positions.getY(i);
+        const wx = chunkOriginX + lx;
+        const wy = chunkOriginY + ly;
+        const r = Math.hypot(wx - cx, wy - cy);
+        const d = Math.abs(r - rc);
+        if (d < band){
+          const k = 1 - d / band;
+          const jag = (this.noise.perlin2(wx * f, wy * f) * 2 - 1) * amp * k;
+          positions.setZ(i, positions.getZ(i) + jag);
+        }
+      }
     }
 
     geometry.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3));
@@ -303,6 +374,7 @@ export class WorldStreamer {
     const mesh = new THREE.Mesh(geometry, material);
     mesh.receiveShadow = true;
     mesh.castShadow = false;
+    mesh.rotation.x = 0; // plane is already XY with Z up via setZ
 
     return { mesh, geometry, material };
   }
@@ -318,36 +390,62 @@ export class WorldStreamer {
     };
   }
 
+  _createOcean(){
+    const geo = new THREE.PlaneGeometry(this.chunkSize * (this.radius * 2 + 4), this.chunkSize * (this.radius * 2 + 4), 1, 1);
+    const mesh = new THREE.Mesh(geo, this.materials.water);
+    mesh.rotation.x = 0;
+    mesh.position.set(0, 0, this.world.waterLevel);
+    mesh.receiveShadow = false;
+    mesh.castShadow = false;
+    mesh.renderOrder = -10;
+    mesh.name = 'OceanSheet';
+    return mesh;
+  }
+
+  _createStars(){
+    // simple static starfield around world origin
+    const starCount = 2000;
+    const radius = this.chunkSize * (this.radius * 2 + 6);
+    const geom = new THREE.BufferGeometry();
+    const positions = new Float32Array(starCount * 3);
+    const rng = createRng(this.seed ^ 0xdeadbeef);
+    for (let i=0;i<starCount;i++){
+      // random on sphere
+      const u = rng(); const v = rng();
+      const theta = 2 * Math.PI * u;
+      const phi = Math.acos(2*v - 1);
+      const r = radius;
+      positions[i*3+0] = r * Math.sin(phi) * Math.cos(theta);
+      positions[i*3+1] = r * Math.sin(phi) * Math.sin(theta);
+      positions[i*3+2] = r * Math.cos(phi)    + 5000; // push above ground a bit
+    }
+    geom.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+    const mat = new THREE.PointsMaterial({ size: 2, sizeAttenuation: true, color: 0xffffff, transparent: true, opacity: 0.9 });
+    const pts = new THREE.Points(geom, mat);
+    pts.name = 'Starfield';
+    this.disposables.push(mat);
+    return pts;
+  }
+
   _disposeMaterialIfOwned(material){
     if (!material) return;
-    if (Array.isArray(material)){
-      material.forEach((mat) => this._disposeMaterialIfOwned(mat));
-      return;
-    }
+    if (Array.isArray(material)){ material.forEach((m)=>this._disposeMaterialIfOwned(m)); return; }
     if (this.sharedMaterials?.has(material)) return;
     material.dispose?.();
   }
 
   _scatterTerrainFeatures({ chunkX, chunkY, rng, group }){
     const obstacles = [];
-
     const features = this.generatorConfig.features ?? {};
-    if (features.mountains !== false){
-      this._maybeAddMountain({ chunkX, chunkY, rng, group, obstacles });
-    }
-    if (features.rocks !== false){
-      this._scatterRocks({ chunkX, chunkY, rng, group, obstacles });
-    }
-    if (features.towns !== false){
-      this._maybeAddTown({ chunkX, chunkY, rng, group, obstacles });
-    }
-    if (features.rivers !== false){
-      this._maybeAddRiver({ chunkX, chunkY, rng, group });
-    }
-
+    if (features.mountains !== false) this._maybeAddMountain({ chunkX, chunkY, rng, group, obstacles });
+    if (features.rocks !== false)     this._scatterRocks({ chunkX, chunkY, rng, group, obstacles });
+    if (features.towns !== false)     this._maybeAddTown({ chunkX, chunkY, rng, group, obstacles });
+    if (features.rivers !== false)    this._maybeAddRiver({ chunkX, chunkY, rng, group });
+    if (this.lakeCfg.enabled !== false) this._maybeAddLakes({ chunkX, chunkY, rng, group });
     return { obstacles };
   }
 
+  // ----------------- MOUNTAINS/ROCKS/TOWNS/RIVERS/LAKES -----------------
   _maybeAddMountain({ chunkX, chunkY, rng, group, obstacles }){
     const centerX = (chunkX + 0.5) * this.chunkSize;
     const centerY = (chunkY + 0.5) * this.chunkSize;
@@ -356,11 +454,7 @@ export class WorldStreamer {
     const noise = this.noise.fractal2(
       centerX * (noiseCfg.frequency ?? 0) + (noiseCfg.offset?.[0] ?? 0),
       centerY * (noiseCfg.frequency ?? 0) + (noiseCfg.offset?.[1] ?? 0),
-      {
-        octaves: noiseCfg.octaves ?? 5,
-        persistence: noiseCfg.persistence ?? 0.58,
-        lacunarity: noiseCfg.lacunarity ?? 2.18,
-      },
+      { octaves: noiseCfg.octaves ?? 5, persistence: noiseCfg.persistence ?? 0.58, lacunarity: noiseCfg.lacunarity ?? 2.18 },
     );
     const threshold = config.threshold ?? 0.64;
     if (noise < threshold) return;
@@ -371,12 +465,8 @@ export class WorldStreamer {
     const attempts = config.locationAttempts ?? 10;
     for (let c = 0; c < clusterCount; c += 1){
       const location = this._findLocation({
-        chunkX,
-        chunkY,
-        rng,
-        attempts,
-        minHeight: config.minHeight ?? 120,
-        maxSlope: config.maxSlope ?? 0.55,
+        chunkX, chunkY, rng, attempts,
+        minHeight: config.minHeight ?? 120, maxSlope: config.maxSlope ?? 0.55,
       });
       if (!location) break;
 
@@ -391,21 +481,18 @@ export class WorldStreamer {
       const segmentsMax = Math.max(segmentsMin, Math.round(config.segments?.max ?? 12));
       const segmentSpan = segmentsMax - segmentsMin + 1;
       const segments = segmentsMin + Math.floor(rng() * segmentSpan);
+
       const geometry = new THREE.ConeGeometry(radius, heightGain, segments);
       const mesh = new THREE.Mesh(geometry, this.materials.mountain);
-      mesh.castShadow = true;
-      mesh.receiveShadow = true;
+      mesh.castShadow = true; mesh.receiveShadow = true;
       mesh.position.set(location.localX, location.localY, baseHeight + heightGain / 2);
       group.add(mesh);
 
       const peakHeight = baseHeight + heightGain;
       obstacles.push({
-        mesh,
-        radius: radius * 0.95,
+        mesh, radius: radius * 0.95,
         worldPosition: new THREE.Vector3(location.worldX, location.worldY, peakHeight),
-        topHeight: peakHeight,
-        baseHeight,
-        type: 'mountain',
+        topHeight: peakHeight, baseHeight, type: 'mountain',
       });
     }
   }
@@ -425,11 +512,7 @@ export class WorldStreamer {
     const count = Math.max(0, rawCount);
     for (let i = 0; i < count; i += 1){
       const location = this._findLocation({
-        chunkX,
-        chunkY,
-        rng,
-        attempts: config.attempts ?? 6,
-        maxSlope: config.maxSlope ?? 0.45,
+        chunkX, chunkY, rng, attempts: config.attempts ?? 6, maxSlope: config.maxSlope ?? 0.45,
       });
       if (!location) break;
       const sizeMin = config.size?.min ?? 6;
@@ -439,18 +522,15 @@ export class WorldStreamer {
       const detail = rng() > detailThreshold ? 1 : 0;
       const geometry = new THREE.DodecahedronGeometry(size, detail);
       const mesh = new THREE.Mesh(geometry, this.materials.rock);
-      mesh.castShadow = true;
-      mesh.receiveShadow = true;
+      mesh.castShadow = true; mesh.receiveShadow = true;
       mesh.position.set(location.localX, location.localY, location.height + size * 0.45);
       group.add(mesh);
 
       obstacles.push({
-        mesh,
-        radius: size * 0.8,
+        mesh, radius: size * 0.8,
         worldPosition: new THREE.Vector3(location.worldX, location.worldY, location.height + size),
         topHeight: location.height + size * 1.2,
-        baseHeight: location.height,
-        type: 'rock',
+        baseHeight: location.height, type: 'rock',
       });
     }
   }
@@ -463,22 +543,14 @@ export class WorldStreamer {
     const settlementNoise = this.noise.fractal2(
       centerX * (noiseCfg.frequency ?? 0) + (noiseCfg.offset?.[0] ?? 0),
       centerY * (noiseCfg.frequency ?? 0) + (noiseCfg.offset?.[1] ?? 0),
-      {
-        octaves: noiseCfg.octaves ?? 4,
-        persistence: noiseCfg.persistence ?? 0.6,
-        lacunarity: noiseCfg.lacunarity ?? 2.3,
-      },
+      { octaves: noiseCfg.octaves ?? 4, persistence: noiseCfg.persistence ?? 0.6, lacunarity: noiseCfg.lacunarity ?? 2.3 },
     );
     if (settlementNoise < (config.threshold ?? 0.66)) return;
 
     const anchorCfg = config.anchor ?? {};
     const anchor = this._findLocation({
-      chunkX,
-      chunkY,
-      rng,
-      attempts: anchorCfg.attempts ?? 12,
-      maxSlope: anchorCfg.maxSlope ?? 0.18,
-      maxHeight: anchorCfg.maxHeight ?? 180,
+      chunkX, chunkY, rng,
+      attempts: anchorCfg.attempts ?? 12, maxSlope: anchorCfg.maxSlope ?? 0.18, maxHeight: anchorCfg.maxHeight ?? 180,
     });
     if (!anchor) return;
 
@@ -523,25 +595,21 @@ export class WorldStreamer {
       const localX = worldX - chunkX * this.chunkSize;
       const localY = worldY - chunkY * this.chunkSize;
       base.position.set(localX, localY, height + wallHeight / 2);
-      base.castShadow = true;
-      base.receiveShadow = true;
+      base.castShadow = true; base.receiveShadow = true;
       townGroup.add(base);
 
       const roofRadius = Math.max(width, depth) * 0.75;
       const roof = new THREE.Mesh(new THREE.ConeGeometry(roofRadius, roofHeight, 4), this.materials.roof);
       roof.position.set(localX, localY, height + wallHeight + roofHeight / 2);
       roof.rotation.y = Math.PI / 4;
-      roof.castShadow = true;
-      roof.receiveShadow = true;
+      roof.castShadow = true; roof.receiveShadow = true;
       townGroup.add(roof);
 
       obstacles.push({
-        mesh: base,
-        radius: Math.max(width, depth) * 0.6,
+        mesh: base, radius: Math.max(width, depth) * 0.6,
         worldPosition: new THREE.Vector3(worldX, worldY, height + wallHeight),
         topHeight: height + wallHeight + roofHeight,
-        baseHeight: height,
-        type: 'building',
+        baseHeight: height, type: 'building',
       });
     }
   }
@@ -605,10 +673,7 @@ export class WorldStreamer {
     }
 
     for (let i = 0; i < segments; i += 1){
-      const a = i * 2;
-      const b = a + 1;
-      const c = a + 2;
-      const d = a + 3;
+      const a = i * 2, b = a + 1, c = a + 2, d = a + 3;
       indices.push(a, b, d, a, d, c);
     }
 
@@ -618,9 +683,42 @@ export class WorldStreamer {
     geometry.computeVertexNormals();
 
     const mesh = new THREE.Mesh(geometry, this.materials.water);
-    mesh.receiveShadow = false;
-    mesh.castShadow = false;
+    mesh.receiveShadow = false; mesh.castShadow = false;
     group.add(mesh);
+  }
+
+  _maybeAddLakes({ chunkX, chunkY, rng, group }){
+    if (!this.lakeCfg.enabled) return;
+    const per = Math.max(0, Math.floor(this.lakeCfg.perChunk ?? 1));
+    if (per <= 0) return;
+
+    const cx = (chunkX + 0.5) * this.chunkSize;
+    const cy = (chunkY + 0.5) * this.chunkSize;
+    const f = this.lakeCfg.noiseFrequency ?? 0.0009;
+    const base = this.noise.perlin2(cx * f, cy * f);
+    if (base < (this.lakeCfg.threshold ?? 0.58)) return;
+
+    for (let i=0;i<per;i++){
+      // jitter position within chunk
+      const jx = (rng() - 0.5) * this.chunkSize * 0.6;
+      const jy = (rng() - 0.5) * this.chunkSize * 0.6;
+      const wx = cx + jx;
+      const wy = cy + jy;
+      const h = this._sampleHeight(wx, wy);
+      // only place in depressions near or below water
+      if (h > this.world.waterLevel + 6) continue;
+
+      const rmin = this.lakeCfg.minRadius ?? this.lakeCfg.radius?.[0] ?? 18;
+      const rmax = this.lakeCfg.maxRadius ?? this.lakeCfg.radius?.[1] ?? 80;
+      const r = rmin + rng() * Math.max(0, rmax - rmin);
+
+      const geo = new THREE.CircleGeometry(r, 32);
+      const mesh = new THREE.Mesh(geo, this.materials.water);
+      mesh.position.set(wx - chunkX * this.chunkSize, wy - chunkY * this.chunkSize, Math.min(h - 1, this.world.waterLevel + (this.lakeCfg.levelOffset ?? -2)));
+      mesh.receiveShadow = false; mesh.castShadow = false;
+      mesh.name = 'Lake';
+      group.add(mesh);
+    }
   }
 
   _findLocation({ chunkX, chunkY, rng, attempts = 8, minHeight = -Infinity, maxHeight = Infinity, maxSlope = 0.5 }){
@@ -638,62 +736,162 @@ export class WorldStreamer {
     return null;
   }
 
-  _sampleHeight(worldX, worldY){
-    const { noise, plateau } = this.generatorConfig;
-    const hillsSettings = noise?.hills ?? {};
-    const hillsFreq = hillsSettings.frequency ?? 0;
-    const hillsOffsetX = hillsSettings.offset?.[0] ?? 0;
-    const hillsOffsetY = hillsSettings.offset?.[1] ?? 0;
-    const hillsNoise = this.noise.fractal2(
-      worldX * hillsFreq + hillsOffsetX,
-      worldY * hillsFreq + hillsOffsetY,
-      {
-        octaves: hillsSettings.octaves ?? 4,
-        persistence: hillsSettings.persistence ?? 0.55,
-        lacunarity: hillsSettings.lacunarity ?? 2.1,
-      },
-    );
-    let height = hillsNoise * (hillsSettings.amplitude ?? 55);
+  // ----------------- HEIGHTFIELD -----------------
+  _sampleHeightBase(worldX, worldY){
+    const cfg = this.generatorConfig;
+    const { noise, plateau } = cfg;
 
-    const mountainSettings = noise?.mountains ?? {};
-    const mountainFreq = mountainSettings.frequency ?? 0;
-    const mountainOffsetX = mountainSettings.offset?.[0] ?? 0;
-    const mountainOffsetY = mountainSettings.offset?.[1] ?? 0;
-    const mountainNoise = this.noise.fractal2(
-      worldX * mountainFreq + mountainOffsetX,
-      worldY * mountainFreq + mountainOffsetY,
-      {
-        octaves: mountainSettings.octaves ?? 5,
-        persistence: mountainSettings.persistence ?? 0.52,
-        lacunarity: mountainSettings.lacunarity ?? 2.05,
-      },
-    );
-    const mountainExponent = mountainSettings.exponent ?? 1;
-    const mountainAmplitude = mountainSettings.amplitude ?? 0;
-    if (mountainAmplitude !== 0){
-      const strength = Math.pow(Math.max(0, mountainNoise), mountainExponent);
-      height += strength * mountainAmplitude;
+    // Domain warp
+    let sx = worldX, sy = worldY;
+    const warp = noise?.warp;
+    if (warp){
+      const wf = warp.frequency ?? 0;
+      const wo = warp.offset ?? [0,0];
+      const wx = this.noise.perlin2(worldX * wf + (wo[0] ?? 0), worldY * wf + (wo[1] ?? 0));
+      const wy = this.noise.perlin2((worldX + 1000) * wf + (wo[0] ?? 0), (worldY - 1000) * wf + (wo[1] ?? 0));
+      const wa = warp.amplitude ?? 0;
+      sx += wx * wa;
+      sy += wy * wa;
     }
 
-    const ridgeSettings = noise?.ridges ?? {};
-    const ridgeFreq = ridgeSettings.frequency ?? 0;
-    const ridgeOffsetX = ridgeSettings.offset?.[0] ?? 0;
-    const ridgeOffsetY = ridgeSettings.offset?.[1] ?? 0;
-    const ridgeBase = this.noise.perlin2(worldX * ridgeFreq + ridgeOffsetX, worldY * ridgeFreq + ridgeOffsetY);
-    const ridgeExponent = ridgeSettings.exponent ?? 1;
-    const ridgeAmplitude = ridgeSettings.amplitude ?? 0;
-    if (ridgeAmplitude !== 0){
-      const ridgeStrength = Math.pow(Math.abs(ridgeBase * 2 - 1), ridgeExponent);
-      height += ridgeStrength * ridgeAmplitude;
+    // Hills
+    const hills = noise?.hills ?? {};
+    const hn = this.noise.fractal2(
+      sx * (hills.frequency ?? 0) + (hills.offset?.[0] ?? 0),
+      sy * (hills.frequency ?? 0) + (hills.offset?.[1] ?? 0),
+      { octaves: hills.octaves ?? 4, persistence: hills.persistence ?? 0.55, lacunarity: hills.lacunarity ?? 2.1 }
+    );
+    let height = hn * (hills.amplitude ?? 55);
+
+    // Mountains
+    const m = noise?.mountains ?? {};
+    const mn = this.noise.fractal2(
+      sx * (m.frequency ?? 0) + (m.offset?.[0] ?? 0),
+      sy * (m.frequency ?? 0) + (m.offset?.[1] ?? 0),
+      { octaves: m.octaves ?? 5, persistence: m.persistence ?? 0.52, lacunarity: m.lacunarity ?? 2.05 }
+    );
+    if ((m.amplitude ?? 0) !== 0){
+      const exp = m.exponent ?? 1;
+      const strength = Math.pow(Math.max(0, mn), exp);
+      height += strength * (m.amplitude ?? 0);
     }
 
-    const plateauSettings = plateau ?? {};
-    const distance = Math.sqrt(worldX * worldX + worldY * worldY);
-    const flatRadius = plateauSettings.flatRadius ?? 160;
-    const blendRadius = plateauSettings.blendRadius ?? 340;
+    // Ridges
+    const r = noise?.ridges ?? {};
+    if ((r.amplitude ?? 0) !== 0){
+      const rb = this.noise.perlin2(sx * (r.frequency ?? 0) + (r.offset?.[0] ?? 0), sy * (r.frequency ?? 0) + (r.offset?.[1] ?? 0));
+      const rexp = r.exponent ?? 1;
+      const rstr = Math.pow(Math.abs(rb * 2 - 1), rexp);
+      height += rstr * (r.amplitude ?? 0);
+    }
+
+    // Fine detail
+    const d = noise?.detail;
+    if (d && (d.amplitude ?? 0) !== 0){
+      const dn = this.noise.fractal2(
+        sx * (d.frequency ?? 0), sy * (d.frequency ?? 0),
+        { octaves: d.octaves ?? 3, persistence: d.persistence ?? 0.45, lacunarity: d.lacunarity ?? 2.4 }
+      );
+      height += dn * (d.amplitude ?? 0);
+    }
+
+    // Plateau
+    const p = plateau ?? {};
+    const distance = Math.sqrt(sx * sx + sy * sy);
+    const flatRadius = p.flatRadius ?? 160;
+    const blendRadius = p.blendRadius ?? 340;
     if (distance < blendRadius){
       const t = THREE.MathUtils.clamp((distance - flatRadius) / Math.max(1, blendRadius - flatRadius), 0, 1);
-      height = THREE.MathUtils.lerp(plateauSettings.height ?? 8, height, t);
+      height = THREE.MathUtils.lerp(p.height ?? 8, height, t);
+    }
+
+    return height;
+  }
+
+  // crater shaping contribution for many scattered craters
+  _craterContribution(worldX, worldY){
+    const c = this.craterCfg;
+    if (!c?.enabled) return 0;
+
+    const S = Math.max(200, c.spacing | 0);
+    // find cell index
+    const cx = Math.floor(worldX / S);
+    const cy = Math.floor(worldY / S);
+
+    let contrib = 0;
+    // check this cell + neighbors to cover edge overlaps
+    for (let ox = -1; ox <= 1; ox++){
+      for (let oy = -1; oy <= 1; oy++){
+        const ix = cx + ox;
+        const iy = cy + oy;
+        const cellRng = rngFromCell(ix, iy, this.seed ^ 0x6b33);
+        if (cellRng() > (c.chance ?? 0.22)) continue;
+
+        // pick center within cell with jitter
+        const j = c.jitter ?? 0.42;
+        const centerX = (ix + 0.5 + (cellRng() - 0.5) * j) * S;
+        const centerY = (iy + 0.5 + (cellRng() - 0.5) * j) * S;
+
+        const rmin = c.radius?.[0] ?? 120;
+        const rmax = c.radius?.[1] ?? 340;
+        const R = rmin + cellRng() * (rmax - rmin);
+
+        const dmin = c.depth?.[0] ?? 20;
+        const dmax = c.depth?.[1] ?? 120;
+        const depth = dmin + cellRng() * (dmax - dmin);
+
+        const dx = worldX - centerX;
+        const dy = worldY - centerY;
+        const r = Math.hypot(dx, dy);
+        if (r > R) continue;
+
+        const t = 1 - r / Math.max(1, R);
+        const rimSharp = c.rimSharpness ?? 1.8;
+        // parabolic bowl; negative contribution (carve down)
+        contrib -= Math.pow(t, rimSharp) * depth;
+      }
+    }
+    return contrib;
+  }
+
+  _sampleHeight(worldX, worldY){
+    // base terrain
+    let height = this._sampleHeightBase(worldX, worldY);
+
+    // many small/medium craters
+    height += this._craterContribution(worldX, worldY);
+
+    // mega volcano shaping
+    const v = this.volcano;
+    if (v?.enabled && this._volcanoHasCenter){
+      const cx = v.center[0] ?? 0;
+      const cy = v.center[1] ?? 0;
+      const dx = worldX - cx;
+      const dy = worldY - cy;
+      const r = Math.hypot(dx, dy);
+      const R = v.baseRadius ?? 1100;
+      if (r <= R){
+        const rimSharp = v.rimSharpness ?? 2.2;
+        const t = THREE.MathUtils.clamp(1 - r / Math.max(1, R), 0, 1);
+        let add = Math.pow(t, rimSharp) * (v.height ?? 820);
+        // jaggedness
+        const n = v.noise ?? {};
+        if ((n.amplitude ?? 0) !== 0){
+          const f = n.frequency ?? 0.003;
+          const jag = this.noise.perlin2(worldX * f, worldY * f) * 2 - 1;
+          add += jag * (n.amplitude ?? 60) * t;
+        }
+        // crater bowl carve within volcano
+        const rc = v.craterRadius ?? 220;
+        if (r < rc){
+          const craterT = 1 - r / Math.max(1, rc);
+          const depth = v.craterDepth ?? 180;
+          const carve = (craterT * craterT) * depth;
+          add -= carve;
+          add += (v.floorLift ?? 40) * (1 - craterT);
+        }
+        height += add;
+      }
     }
 
     return height;
@@ -707,18 +905,115 @@ export class WorldStreamer {
     return Math.sqrt(dx * dx + dy * dy) / delta;
   }
 
-  _sampleColor(height){
-    const colors = this.generatorConfig.colors ?? {};
-    const lowThreshold = colors.lowThreshold ?? 30;
-    const highThreshold = colors.highThreshold ?? 140;
-    if (height < lowThreshold){
-      return this._colorGradient.low.clone();
+  // ----------------- BIOME & COLOR -----------------
+  _sampleClimate(worldX, worldY){
+    const c = this.generatorConfig.climate ?? {};
+    const t = c.temperature ?? null;
+    const m = c.moisture ?? null;
+    const temp = t ? (this.noise.perlin2(worldX * (t.frequency ?? 0) + (t.offset?.[0] ?? 0), worldY * (t.frequency ?? 0) + (t.offset?.[1] ?? 0)) * 2 - 1) : 0;
+    const moist = m ? (this.noise.perlin2(worldX * (m.frequency ?? 0) + (m.offset?.[0] ?? 0), worldY * (m.frequency ?? 0) + (m.offset?.[1] ?? 0)) * 2 - 1) : 0;
+    return { temp, moist };
+  }
+
+  _pickBiome(height, temp, moist){
+    const rules = this.generatorConfig.biomes?.rules;
+    if (Array.isArray(rules) && rules.length){
+      for (const r of rules){
+        const w = r.when ?? {};
+        if (w.default) return r.name;
+        if (w.heightBelow != null && !(height < w.heightBelow)) continue;
+        if (w.heightAbove != null && !(height > w.heightAbove)) continue;
+        if (w.heightBetween && !(height >= w.heightBetween[0] && height <= w.heightBetween[1])) continue;
+        if (w.temperatureBelow != null && !(temp < w.temperatureBelow)) continue;
+        if (w.temperatureAbove != null && !(temp > w.temperatureAbove)) continue;
+        if (w.moistureBelow != null && !(moist < w.moistureBelow)) continue;
+        if (w.moistureAbove != null && !(moist > w.moistureAbove)) continue;
+        return r.name;
+      }
     }
-    if (height < highThreshold){
-      const t = THREE.MathUtils.clamp((height - lowThreshold) / Math.max(1, highThreshold - lowThreshold), 0, 1);
-      return this._colorGradient.low.clone().lerp(this._colorGradient.mid, t);
+    // fallback: ocean/beach/snow/grass from world settings
+    if (height < this.world.waterLevel) return 'ocean';
+    if (height < this.world.waterLevel + this.world.beachBand) return 'beach';
+    if (height > this.world.snowline) return 'snow';
+    return 'grass';
+  }
+
+  _sampleBiomeColor(worldX, worldY, height){
+    // If ramps exist, use them; else fallback to old low/mid/high gradient
+    if (this._ramps){
+      const { temp, moist } = this._sampleClimate(worldX, worldY);
+      const biome = this._pickBiome(height, temp, moist);
+      const ramp = this._ramps[biome];
+      if (ramp){
+        // map height into a simple local range per biome
+        let t = 0.5;
+        if (biome === 'ocean'){
+          const wl = this.world.waterLevel;
+          t = THREE.MathUtils.clamp( (height - (wl - 40)) / 40, 0, 1 );
+        } else if (biome === 'beach'){
+          t = THREE.MathUtils.clamp( (height - this.world.waterLevel) / Math.max(1, this.world.beachBand), 0, 1 );
+        } else if (biome === 'snow'){
+          t = THREE.MathUtils.clamp( (height - this.world.snowline) / 100, 0, 1 );
+        } else {
+          // generic: scale between lowThreshold and highCap
+          const lo = this._colorGradient.lowThreshold, hi = this._colorGradient.highCap;
+          t = THREE.MathUtils.clamp((height - lo) / Math.max(1, hi - lo), 0, 1);
+        }
+        return lerpColorStops(ramp, t);
+      }
     }
-    const t = THREE.MathUtils.clamp((height - highThreshold) / Math.max(1, (colors.highCap ?? highThreshold + 160) - highThreshold), 0, 1);
-    return this._colorGradient.mid.clone().lerp(this._colorGradient.high, t);
+    // fallback legacy gradient
+    return this._sampleColorLegacy(height);
+  }
+
+  _sampleColorLegacy(height){
+    const g = this._colorGradient;
+    if (height < g.lowThreshold) return g.low.clone();
+    if (height < g.highThreshold){
+      const t = THREE.MathUtils.clamp((height - g.lowThreshold) / Math.max(1, g.highThreshold - g.lowThreshold), 0, 1);
+      return g.low.clone().lerp(g.mid, t);
+    }
+    const t = THREE.MathUtils.clamp((height - g.highThreshold) / Math.max(1, (g.highCap) - g.highThreshold), 0, 1);
+    return g.mid.clone().lerp(g.high, t);
+  }
+
+  // ----------------- Volcano visuals (lava disk) -----------------
+  _addVolcanoLavaIfNeeded({ chunkX, chunkY, group }){
+    const v = this.volcano;
+    if (!v?.enabled || !this._volcanoHasCenter) return;
+    if (group.userData.__lavaAdded) return;
+
+    const cx = v.center[0] ?? 0;
+    const cy = v.center[1] ?? 0;
+
+    // is the center in this chunk?
+    const x0 = chunkX * this.chunkSize;
+    const y0 = chunkY * this.chunkSize;
+    const x1 = x0 + this.chunkSize;
+    const y1 = y0 + this.chunkSize;
+    if (cx < x0 || cx >= x1 || cy < y0 || cy >= y1) return;
+
+    // sample height at center (with volcano shaping) and place lava a bit lower
+    const craterHeight = this._sampleHeight(cx, cy);
+    const lavaLevel = craterHeight + (v.lava?.levelOffset ?? -12);
+
+    const radius = (v.craterRadius ?? 220) * 0.92;
+    const geo = new THREE.CircleGeometry(radius, 48);
+    const mat = new THREE.MeshStandardMaterial({
+      color: new THREE.Color(v.lava?.color ?? '#ff5a1f'),
+      emissive: new THREE.Color(v.lava?.emissive ?? '#ff8a00'),
+      emissiveIntensity: v.lava?.emissiveIntensity ?? 1.6,
+      roughness: 0.35,
+      metalness: 0.1,
+    });
+    const mesh = new THREE.Mesh(geo, mat);
+    mesh.position.set(cx - x0, cy - y0, lavaLevel);
+    mesh.receiveShadow = false;
+    mesh.castShadow = false;
+    mesh.name = 'VolcanoLava';
+    group.add(mesh);
+
+    (this.disposables ?? (this.disposables = [])).push(mat);
+    group.userData.__lavaAdded = true;
   }
 }

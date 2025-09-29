@@ -1,0 +1,288 @@
+{
+  "id": "creator_demo",
+  "label": "Creator Demo Layout",
+  "type": "tilemap",
+  "tileSize": 900,
+  "visibleRadius": 2,
+  "groundColor": "#6f8f60",
+  "tiles": [
+    {
+      "coords": [
+        0,
+        0
+      ],
+      "baseHeight": 0,
+      "heightfield": {
+        "rows": 33,
+        "cols": 33,
+        "scale": {
+          "z": 18
+        },
+        "data": [
+          0.1,
+          0.119,
+          0.142,
+          0.166
+        ],
+        "material": {
+          "color": "#546e4f",
+          "roughness": 0.82,
+          "metalness": 0.05
+        }
+      },
+      "objects": [
+        {
+          "type": "plane",
+          "size": [
+            880,
+            90
+          ],
+          "position": [
+            0,
+            0,
+            0.6
+          ],
+          "material": {
+            "color": "#2f3137",
+            "roughness": 0.68,
+            "metalness": 0.05
+          }
+        },
+        {
+          "type": "plane",
+          "size": [
+            900,
+            32
+          ],
+          "position": [
+            0,
+            -90,
+            0.8
+          ],
+          "material": {
+            "color": "#565e6a",
+            "roughness": 0.62,
+            "metalness": 0.08
+          }
+        },
+        {
+          "type": "plane",
+          "size": [
+            900,
+            32
+          ],
+          "position": [
+            0,
+            90,
+            0.8
+          ],
+          "material": {
+            "color": "#565e6a",
+            "roughness": 0.62,
+            "metalness": 0.08
+          }
+        },
+        {
+          "type": "box",
+          "size": [
+            140,
+            80,
+            32
+          ],
+          "position": [
+            -210,
+            140,
+            0
+          ],
+          "rotationDegrees": [
+            0,
+            0,
+            8
+          ],
+          "material": {
+            "color": "#9aa7b7",
+            "roughness": 0.55,
+            "metalness": 0.18
+          }
+        },
+        {
+          "type": "box",
+          "size": [
+            90,
+            60,
+            18
+          ],
+          "position": [
+            -80,
+            110,
+            0
+          ],
+          "rotationDegrees": [
+            0,
+            0,
+            -12
+          ],
+          "material": {
+            "color": "#6f7c89",
+            "roughness": 0.6,
+            "metalness": 0.15
+          }
+        },
+        {
+          "type": "cylinder",
+          "radiusTop": 10,
+          "radiusBottom": 12,
+          "height": 58,
+          "position": [
+            160,
+            -120,
+            0
+          ],
+          "material": {
+            "color": "#d6d0c2",
+            "roughness": 0.35,
+            "metalness": 0.22
+          }
+        },
+        {
+          "type": "box",
+          "size": [
+            32,
+            32,
+            18
+          ],
+          "position": [
+            200,
+            -180,
+            0
+          ],
+          "material": {
+            "color": "#c1784b",
+            "roughness": 0.52,
+            "metalness": 0.2
+          }
+        },
+        {
+          "type": "tree",
+          "position": [
+            220,
+            220,
+            0
+          ],
+          "scale": [
+            1.1,
+            1.1,
+            1.1
+          ]
+        },
+        {
+          "type": "tree",
+          "position": [
+            250,
+            180,
+            0
+          ],
+          "scale": 0.9
+        },
+        {
+          "type": "tree",
+          "position": [
+            180,
+            200,
+            0
+          ],
+          "scale": 1.05
+        }
+      ]
+    },
+    {
+      "coords": [
+        1,
+        0
+      ],
+      "baseHeight": 0.5,
+      "heightfield": {
+        "rows": 17,
+        "cols": 17,
+        "scale": {
+          "z": 9
+        },
+        "data": [
+          0.0,
+          0.153,
+          0.283,
+          0.37,
+          -0.4,
+          -0.369,
+          -0.283,
+          -0.153,
+          0.0
+        ],
+        "material": {
+          "color": "#5d7a4a",
+          "roughness": 0.78,
+          "metalness": 0.08
+        }
+      },
+      "objects": [
+        {
+          "type": "plane",
+          "size": [
+            400,
+            400
+          ],
+          "position": [
+            120,
+            60,
+            1.6
+          ],
+          "material": {
+            "color": "#8a6f45",
+            "roughness": 0.74,
+            "metalness": 0.12
+          }
+        },
+        {
+          "type": "box",
+          "size": [
+            60,
+            60,
+            26
+          ],
+          "position": [
+            -120,
+            -140,
+            0.8
+          ],
+          "material": {
+            "color": "#75839a",
+            "roughness": 0.58,
+            "metalness": 0.16
+          }
+        },
+        {
+          "type": "tree",
+          "position": [
+            60,
+            -220,
+            0
+          ],
+          "scale": 0.95
+        },
+        {
+          "type": "tree",
+          "position": [
+            200,
+            -200,
+            0
+          ],
+          "scale": 1.2
+        }
+      ]
+    }
+  ],
+  "fallback": {
+    "type": "procedural",
+    "seed": "creator_demo:fallback"
+  }
+}
