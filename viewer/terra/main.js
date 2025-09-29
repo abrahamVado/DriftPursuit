@@ -1,4 +1,5 @@
 import { TerraWorldStreamer } from './TerraWorldStreamer.js';
+import { TileMapWorld } from './TileMapWorld.js';
 import { TerraPlaneController, createPlaneMesh } from './PlaneController.js';
 import { CarController, createCarRig } from '../sandbox/CarController.js';
 import { ChaseCamera } from '../sandbox/ChaseCamera.js';
@@ -29,6 +30,7 @@ const FALLBACK_MAPS = [
     id: 'aurora-basin',
     name: 'Aurora Basin',
     description: 'Rolling terrain under bright aurora skies.',
+    type: 'procedural',
     seed: 982451653,
     chunkSize: 640,
     radius: 3,
@@ -104,7 +106,31 @@ async function loadMapDefinitions(requestedId){
       throw new Error(`Failed to fetch maps.json: ${response.status}`);
     }
     const data = await response.json();
-    const maps = Array.isArray(data?.maps) ? data.maps : Array.isArray(data) ? data : [];
+    const rawMaps = Array.isArray(data?.maps) ? data.maps : Array.isArray(data) ? data : [];
+    const maps = await Promise.all(
+      rawMaps.map(async (entry) => {
+        const mapEntry = entry ? { ...entry } : null;
+        if (!mapEntry) return mapEntry;
+        if (mapEntry.type === 'tilemap' && mapEntry.path && typeof fetch === 'function'){
+          try {
+            const baseUrl = new URL(MAPS_ENDPOINT, window.location.href);
+            const descriptorUrl = new URL(mapEntry.path, baseUrl);
+            const descriptorResponse = await fetch(descriptorUrl.toString(), { cache: 'no-cache' });
+            if (!descriptorResponse.ok){
+              console.warn(`Failed to load tile-map descriptor for ${mapEntry.id}: HTTP ${descriptorResponse.status}`);
+            } else {
+              const descriptor = await descriptorResponse.json();
+              mapEntry.descriptor = { ...descriptor };
+            }
+          } catch (descriptorError){
+            console.warn(`Failed to load tile-map descriptor for ${mapEntry.id}`, descriptorError);
+          }
+        } else if (mapEntry.type === 'tilemap' && mapEntry.descriptor){
+          mapEntry.descriptor = { ...mapEntry.descriptor };
+        }
+        return mapEntry;
+      }),
+    );
     const defaultId = typeof data?.default === 'string' ? data.default : maps[0]?.id ?? null;
     return { maps, defaultId };
   } catch (error){
@@ -114,7 +140,7 @@ async function loadMapDefinitions(requestedId){
 }
 
 function selectMapDefinition(maps, requestedId, fallbackId){
-  const mapList = Array.isArray(maps) && maps.length > 0 ? maps : [...FALLBACK_MAPS];
+  const mapList = Array.isArray(maps) && maps.length > 0 ? maps.map((entry) => ({ ...entry })) : [...FALLBACK_MAPS].map((entry) => ({ ...entry }));
   const registry = new Map();
   mapList.forEach((entry) => {
     if (entry?.id){
@@ -133,7 +159,7 @@ function selectMapDefinition(maps, requestedId, fallbackId){
 }
 
 function applyMapEnvironment(map){
-  const environment = map?.environment ?? {};
+  const environment = map?.descriptor?.environment ?? map?.environment ?? {};
   document.body.style.background = environment.bodyBackground ?? DEFAULT_BODY_BACKGROUND;
   const background = environment.background ?? DEFAULT_BACKGROUND_COLOR;
   scene.background = new THREE.Color(background);
@@ -165,10 +191,55 @@ function initializeWorldForMap(map){
   if (world){
     world.dispose();
   }
-  const chunkSize = Number.isFinite(mapDefinition?.chunkSize) ? mapDefinition.chunkSize : 640;
-  const radius = Number.isFinite(mapDefinition?.radius) ? mapDefinition.radius : 3;
-  const seed = Number.isFinite(mapDefinition?.seed) ? mapDefinition.seed : 982451653;
-  world = new TerraWorldStreamer({ scene, chunkSize, radius, seed });
+  let descriptor = null;
+  if (mapDefinition?.descriptor && typeof mapDefinition.descriptor === 'object'){
+    descriptor = { ...mapDefinition.descriptor };
+    descriptor.id = descriptor.id ?? mapDefinition.id;
+    descriptor.type = descriptor.type ?? mapDefinition.type;
+    if (!descriptor.tileSize && Number.isFinite(mapDefinition.tileSize)){
+      descriptor.tileSize = mapDefinition.tileSize;
+    }
+    if (!descriptor.visibleRadius){
+      const fallbackRadius = Number.isFinite(mapDefinition.visibleRadius)
+        ? mapDefinition.visibleRadius
+        : Number.isFinite(mapDefinition.radius)
+          ? mapDefinition.radius
+          : null;
+      if (Number.isFinite(fallbackRadius)){
+        descriptor.visibleRadius = fallbackRadius;
+      }
+    }
+  } else if (mapDefinition?.type === 'tilemap'){
+    descriptor = { ...mapDefinition };
+  }
+
+  if (descriptor?.type === 'tilemap'){
+    if (!Array.isArray(descriptor.tiles)){
+      descriptor.tiles = Array.isArray(mapDefinition?.tiles) ? [...mapDefinition.tiles] : [];
+    }
+    if (!descriptor.tileSize){
+      descriptor.tileSize = Number.isFinite(mapDefinition?.tileSize)
+        ? mapDefinition.tileSize
+        : Number.isFinite(mapDefinition?.chunkSize)
+          ? mapDefinition.chunkSize
+          : 640;
+    }
+    mapDefinition.descriptor = descriptor;
+    world = new TileMapWorld({ scene, descriptor });
+  } else {
+    const chunkSize = Number.isFinite(mapDefinition?.chunkSize)
+      ? mapDefinition.chunkSize
+      : Number.isFinite(descriptor?.chunkSize)
+        ? descriptor.chunkSize
+        : 640;
+    const radius = Number.isFinite(mapDefinition?.radius)
+      ? mapDefinition.radius
+      : Number.isFinite(descriptor?.radius)
+        ? descriptor.radius
+        : 3;
+    const seed = Number.isFinite(mapDefinition?.seed) ? mapDefinition.seed : 982451653;
+    world = new TerraWorldStreamer({ scene, chunkSize, radius, seed });
+  }
   collisionSystem.setWorld(world);
   projectileManager.setWorld(world);
   applyMapEnvironment(mapDefinition);
