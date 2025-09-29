@@ -218,13 +218,19 @@ export class InputManager {
     const brake = (this.keyBindings.brake || []).some((key) => this.activeKeys.has(key));
 
     // --- Analog (pointer) contributions ---
-    const yaw = applyDeadzone(this.pointer.x * this.pointerSensitivity.yaw);
-    const pitchFromMouse = this.pointer.y * this.pointerSensitivity.pitch;
+    const pointerYaw = applyDeadzone(this.pointer.x * this.pointerSensitivity.yaw);
+    const pointerPitch = this.pointer.y * this.pointerSensitivity.pitch;
 
     // Plane controls rely on keyboard by default. Pointer remains available for other systems.
-    const pitch = applyDeadzone((this.useKeyboardPitch ? pitchFromMouse : 0) + pitchDigital);
+    const pitch = applyDeadzone((this.useKeyboardPitch ? pointerPitch : 0) + pitchDigital);
     const roll = yawDigital;
     const yaw = yawDigital;
+    const planeAim = {
+      x: applyDeadzone(this.pointer.x),
+      y: applyDeadzone(this.pointer.y),
+      yawAnalog: pointerYaw,
+      pitchAnalog: pointerPitch,
+    };
 
     // Throttle adjust combines continuous digital + bursty wheel
     const throttleAdjust = throttleDigital + throttleImpulse;
@@ -238,7 +244,7 @@ export class InputManager {
     this.cameraOrbitDelta.y = 0;
 
     return {
-      plane: { pitch, roll, yaw, throttleAdjust, brake },
+      plane: { pitch, roll, yaw, throttleAdjust, brake, aim: planeAim },
       car: {
         throttle: pitchDigital,
         steer: yawDigital,
