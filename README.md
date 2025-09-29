@@ -119,8 +119,9 @@ Follow these steps to bring the entire stack up locally on one machine:
 5. **Open the viewer** to visualize entities streaming from the simulation:
    - Navigate to `http://localhost:8080/viewer/index.html` in your browser.
    - You should see the 3D scene update in real time as telemetry arrives.
-   - Use the **Aircraft Model** dropdown to hot-swap between model sets. The HUD and console panel reflect loading progress so you know when a kit is ready.
-   - A Quickstart panel in the lower-left corner summarizes manual controls, keyboard shortcuts, and the autopilot loop toggle.
+- Use the **Aircraft Model** dropdown to hot-swap between model sets. The HUD and console panel reflect loading progress so you know when a kit is ready.
+- Use the **Tracked Aircraft** dropdown (or press `]` / `[`) to cycle the camera between active planes. The viewer keeps your selection even as new telemetry arrives, and stale planes are flagged in the list until they drop out.
+- A Quickstart panel in the lower-left corner summarizes manual controls, keyboard shortcuts, and the autopilot loop toggle.
 
 ## Development
 
