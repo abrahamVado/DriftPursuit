@@ -30,6 +30,7 @@ Map entries live under `viewer/assets/maps`. The `manifest.json` file declares w
 * `label` – user facing name.
 * `type` – currently `procedural` or `tilemap`.
 * `seed` / `chunkSize` / `visibleRadius` – optional overrides for procedural maps.
+* `procedural` (alias `generator`) – optional object that customizes the procedural world streamer (noise curves, feature toggles, color palette, etc.).
 * `path` – relative path to the tilemap descriptor.
 
 The `default` value controls which option is selected when the viewer boots.
@@ -92,3 +93,40 @@ Any tile that is not listed in the descriptor automatically falls back to the pr
 * Map assets are fetched on demand; descriptors are cached per session once loaded.
 
 Creators can duplicate the demo folder, adjust `map.json`, or point `manifest.json` at their own layout directory to iterate on custom maps.
+
+## Procedural overrides
+
+Procedural entries can provide a `procedural` (or `generator`) block to tune Terra's endless terrain without forking the source. Any omitted values fall back to the defaults that ship with the viewer, so you can override a single field at a time.
+
+```jsonc
+{
+  "id": "ember-canyon",
+  "type": "procedural",
+  "seed": 147852369,
+  "procedural": {
+    "noise": {
+      "hills": { "amplitude": 28, "frequency": 0.001 },
+      "mountains": { "amplitude": 190, "exponent": 2.6 }
+    },
+    "colors": {
+      "low": "#7a4730",
+      "mid": "#c37b3b",
+      "high": "#f1d38b",
+      "lowThreshold": 12,
+      "highThreshold": 86
+    },
+    "features": { "rivers": false },
+    "rocks": { "densityScale": 8, "size": { "min": 8, "max": 32 } }
+  }
+}
+```
+
+Available sections:
+
+* `noise.hills` / `noise.mountains` / `noise.ridges` – per-layer frequency, amplitude, persistence, lacunarity, exponent, and optional XY offsets that drive elevation.
+* `plateau` – adjust the flat launch pad radius and blend distances near the world origin.
+* `features` – toggle `mountains`, `rocks`, `towns`, or `rivers` on/off.
+* `colors` – configure the low/mid/high gradient stops and height thresholds (`highCap` controls when the gradient tops out).
+* `mountains`, `rocks`, `towns`, `rivers` – fine-tune feature-specific placement thresholds, spawn counts, and size ranges.
+
+See `viewer/terra/maps.json` for a full example. The `ember-canyon` preset disables rivers and skews the palette toward warm ochres, producing a noticeably drier biome than the balanced default.

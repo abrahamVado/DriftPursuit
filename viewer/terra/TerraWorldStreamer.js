@@ -27,7 +27,8 @@ const DEFAULT_CRATER_RADIUS = 0.55; // meters, scaled up slightly so it is visib
 
 export class TerraWorldStreamer extends BaseWorldStreamer {
   constructor(options = {}){
-    super(options);
+    const { generator = null, procedural = null, ...rest } = options ?? {};
+    super({ ...rest, generator, procedural });
     this.chunkDeformations = new Map();
     this.craterMaterial = new THREE.MeshStandardMaterial({
       color: 0x3a3a3a,

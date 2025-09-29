@@ -29,6 +29,30 @@
         "fog": { "color": "#f2c28a", "near": 1200, "far": 3600 },
         "sun": { "position": [260, 520, 680], "intensity": 1.2, "color": "#ffd9a0" },
         "hemisphere": { "skyColor": "#ffe3c2", "groundColor": "#4b2d1a", "intensity": 0.9 }
+      },
+      "procedural": {
+        "noise": {
+          "hills": { "amplitude": 28, "frequency": 0.001, "persistence": 0.48 },
+          "mountains": { "amplitude": 190, "exponent": 2.6 },
+          "ridges": { "amplitude": 14 }
+        },
+        "plateau": { "flatRadius": 90, "blendRadius": 240, "height": 6 },
+        "colors": {
+          "low": "#7a4730",
+          "mid": "#c37b3b",
+          "high": "#f1d38b",
+          "lowThreshold": 12,
+          "highThreshold": 86,
+          "highCap": 220
+        },
+        "features": { "rivers": false, "mountains": true, "rocks": true, "towns": true },
+        "mountains": {
+          "threshold": 0.58,
+          "clusterThreshold": 0.7,
+          "heightGain": { "min": 80, "max": 220 },
+          "radius": { "min": 40, "max": 120 }
+        },
+        "rocks": { "densityScale": 8, "size": { "min": 8, "max": 32 } }
       }
     },
     {
