@@ -1,13 +1,20 @@
 // viewer/app.js - minimal three.js viewer that connects to ws://localhost:8080/ws
 const HUD = document.getElementById('hud');
 const MANUAL_BUTTON = document.getElementById('manual-toggle');
+const INVERT_AXES_BUTTON = document.getElementById('invert-axes-toggle');
 const ACCELERATE_BUTTON = document.getElementById('accelerate-forward');
 const REROUTE_BUTTON = document.getElementById('reroute-waypoints');
 const MODEL_SET_SELECT = document.getElementById('model-set-select');
 const MODEL_SET_STATUS = document.getElementById('model-set-status');
 const CONTROL_INSTRUCTIONS_LIST = document.getElementById('control-instructions');
+
 const PLANE_FOLLOW_SELECT = document.getElementById('plane-follow-select');
 const PLANE_SELECTOR_STATUS = document.getElementById('plane-selector-status');
+
+const CONNECTION_BANNER = document.getElementById('connection-banner');
+const CONNECTION_BANNER_MESSAGE = document.getElementById('connection-banner-message');
+const CONNECTION_RECONNECT_BUTTON = document.getElementById('connection-reconnect');
+
 const WS_URL = (location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + '/ws';
 
 const PLANE_STALE_TIMEOUT_MS = 5000;
@@ -26,6 +33,7 @@ const MODEL_SETS = {
 };
 const DEFAULT_MODEL_SET_KEY = 'high_fidelity';
 const MODEL_SET_STORAGE_KEY = 'driftpursuit:modelSet';
+const INVERT_AXES_STORAGE_KEY = 'driftpursuit:invertAxes';
 const modelSetAssetCache = new Map();
 let modelSetStorageUnavailable = false;
 let runtimeModelSetKey = null;
@@ -36,6 +44,8 @@ if (!MODEL_SETS[currentModelSetKey]) {
   currentModelSet = MODEL_SETS[DEFAULT_MODEL_SET_KEY];
 }
 persistModelSetKey(currentModelSetKey);
+let invertAxesStorageUnavailable = false;
+let invertAxesEnabled = readPersistedInvertAxesPreference();
 const MOVEMENT_KEY_CODES = new Set([
   'KeyW','KeyA','KeyS','KeyD',      // planar translation
   'KeyR','KeyF',                    // altitude adjustments
@@ -58,6 +68,47 @@ const NATURAL_DECEL = 35; // drag applied when thrust released
 const SCENE_TO_SIM_SCALE = { x: 2, y: 2, z: 50 };
 const MANUAL_VELOCITY_EPSILON = 0.5;
 const MANUAL_ORIENTATION_EPSILON = 0.005;
+
+const CONNECTION_STATUS_KEYS = {
+  CONNECTING: 'connecting',
+  CONNECTED: 'connected',
+  DISCONNECTED: 'disconnected',
+  ERROR: 'error',
+  RECONNECTING: 'reconnecting',
+};
+
+const UI_STRINGS = {
+  connectionStatus: {
+    connecting: {
+      label: 'Connecting…',
+      banner: 'Attempting to reach the broker.',
+    },
+    connected: {
+      label: 'Connected to broker',
+      banner: '',
+    },
+    disconnected: {
+      label: 'Connection lost',
+      banner: 'The viewer lost contact with the broker. Try reconnecting.',
+    },
+    error: {
+      label: 'Connection error',
+      banner: 'The broker connection encountered an error. Retry when ready.',
+    },
+    reconnecting: {
+      label: 'Reconnecting…',
+      banner: 'Trying to restore the connection.',
+    },
+  },
+  buttons: {
+    reconnect: 'Reconnect',
+  },
+};
+
+function getConnectionStatusLabel(statusKey) {
+  const statusEntry = UI_STRINGS.connectionStatus[statusKey];
+  return statusEntry ? statusEntry.label : 'Connecting…';
+}
 
 const manualOverrideStateByPlane = new Map();
 const DEFAULT_CONTROL_DOCS = [
@@ -87,6 +138,7 @@ const DEFAULT_CONTROL_DOCS = [
     description: 'Send preset waypoint loops to the simulator via the set_waypoints command.'
   }
 ];
+let currentControlDocs = DEFAULT_CONTROL_DOCS;
 
 let scene, camera, renderer;
 const planeMeshes = new Map();   // id -> THREE.Object3D
@@ -115,7 +167,8 @@ const planeResources = new Map();
 const pressedKeys = new Set();
 let manualControlEnabled = false;
 let manualMovementActive = false;
-let connectionStatus = 'Connecting…';
+let connectionStatusKey = CONNECTION_STATUS_KEYS.CONNECTING;
+let connectionStatus = getConnectionStatusLabel(connectionStatusKey);
 let lastFrameTime = null;
 let accelerationEngaged = false;
 let forwardSpeed = 0;
@@ -170,6 +223,13 @@ const AUTOPILOT_PRESETS = [
   },
 ];
 
+if (CONNECTION_RECONNECT_BUTTON){
+  CONNECTION_RECONNECT_BUTTON.textContent = UI_STRINGS.buttons.reconnect;
+  CONNECTION_RECONNECT_BUTTON.addEventListener('click', () => {
+    reconnectToBroker();
+  });
+}
+
 updateHudStatus();
 wireButtonHandlers();
 setupModelSetPicker();
@@ -183,6 +243,7 @@ initThree();
 beginAircraftLoad();
 
 connect();
+
 
 function connect(){
   clearReconnectScheduling();
@@ -226,6 +287,12 @@ function onSocketMessage(event){
   } catch (err) {
     console.warn('bad msg', err);
   }
+}
+
+// Small shim so the UI "Reconnect" button still works.
+function reconnectToBroker(){
+  clearReconnectScheduling();
+  connect();
 }
 
 function handleSocketInterrupted(options = {}){
@@ -307,6 +374,7 @@ function computeReconnectDelay(attempt){
   const delay = RECONNECT_BASE_DELAY_MS * Math.pow(1.5, exponent);
   return Math.min(RECONNECT_MAX_DELAY_MS, Math.round(delay));
 }
+
 
 function handleMsg(msg){
   if (msg.type === 'telemetry'){
@@ -1086,6 +1154,16 @@ function setManualControlEnabled(enabled){
   updateHudStatus();
 }
 
+function setInvertAxesEnabled(enabled){
+  const shouldEnable = Boolean(enabled);
+  if (invertAxesEnabled === shouldEnable) return;
+  invertAxesEnabled = shouldEnable;
+  persistInvertAxesPreference(shouldEnable);
+  updateInvertAxesButtonState();
+  updateHudStatus();
+  renderControlDocs(currentControlDocs);
+}
+
 function setAccelerationEngaged(enabled, options = {}){
   const shouldEnable = Boolean(enabled);
   if (accelerationEngaged === shouldEnable) return;
@@ -1214,12 +1292,15 @@ function updateManualControl(delta){
   let rotated = false;
   if (mesh){
     const rot = mesh.rotation;
-    if (pressedKeys.has('KeyQ')){ rot.z += ROTATION_SPEED * d; rotated = true; }
-    if (pressedKeys.has('KeyE')){ rot.z -= ROTATION_SPEED * d; rotated = true; }
-    if (pressedKeys.has('ArrowUp')){ rot.y += ROTATION_SPEED * d; rotated = true; }
-    if (pressedKeys.has('ArrowDown')){ rot.y -= ROTATION_SPEED * d; rotated = true; }
-    if (pressedKeys.has('ArrowLeft')){ rot.x += ROTATION_SPEED * d; rotated = true; }
-    if (pressedKeys.has('ArrowRight')){ rot.x -= ROTATION_SPEED * d; rotated = true; }
+    const rotationDelta = ROTATION_SPEED * d;
+    const pitchFactor = invertAxesEnabled ? -1 : 1;
+    const rollFactor = invertAxesEnabled ? -1 : 1;
+    if (pressedKeys.has('KeyQ')){ rot.z += rotationDelta; rotated = true; }
+    if (pressedKeys.has('KeyE')){ rot.z -= rotationDelta; rotated = true; }
+    if (pressedKeys.has('ArrowUp')){ rot.y += rotationDelta * pitchFactor; rotated = true; }
+    if (pressedKeys.has('ArrowDown')){ rot.y -= rotationDelta * pitchFactor; rotated = true; }
+    if (pressedKeys.has('ArrowLeft')){ rot.x += rotationDelta * rollFactor; rotated = true; }
+    if (pressedKeys.has('ArrowRight')){ rot.x -= rotationDelta * rollFactor; rotated = true; }
 
     rot.x = clamp(rot.x, -MAX_ROLL, MAX_ROLL);
     rot.y = clamp(rot.y, -MAX_PITCH, MAX_PITCH);
@@ -1346,15 +1427,31 @@ function updateHudStatus(){
   const simOverrideLabel = simManualOverrideActive
     ? 'Simulator override: MANUAL'
     : 'Simulator override: autopilot';
+  const invertStatusLabel = invertAxesEnabled
+    ? 'Pitch/Roll controls: inverted'
+    : 'Pitch/Roll controls: standard';
   const modelStatus = computeModelSetStatus();
   const modelLine = modelStatus.note
     ? `${modelStatus.label} ${modelStatus.note}`.trim()
     : modelStatus.label;
-  HUD.innerText = `${connectionStatus}\nMode: ${controlMode}\nModel set: ${modelLine}\n${accelLabel}\n${simOverrideLabel}\n[M] toggle manual · [T] toggle thrust · WASD/RF move · QE yaw · arrows pitch/roll`;
+  const arrowInstructions = invertAxesEnabled
+    ? 'arrows pitch/roll (inverted)'
+    : 'arrows pitch/roll';
+
+  HUD.innerText =
+    `${connectionStatus}\n` +
+    `Mode: ${controlMode}\n` +
+    `Model set: ${modelLine}\n` +
+    `${accelLabel}\n` +
+    `${simOverrideLabel}\n` +
+    `${invertStatusLabel}\n` +
+    `[M] toggle manual · [T] toggle thrust · WASD/RF move · QE yaw · ${arrowInstructions}`;
+
   if (MODEL_SET_STATUS){
     MODEL_SET_STATUS.textContent = `Active aircraft: ${modelLine}`.trim();
   }
   syncModelSetPicker();
+  updateConnectionBanner(); // keep the banner in sync with connectionStatus
 }
 
 function computeModelSetStatus(){
@@ -1382,12 +1479,54 @@ function syncModelSetPicker(){
   }
 }
 
+// Minimal banner updater driven by the plain `connectionStatus` string.
+function updateConnectionBanner(){
+  if (!CONNECTION_BANNER) return;
+
+  // Show the banner when we’re not cleanly connected.
+  const shouldShow = /Reconnecting|Connection lost|Connection error|Connecting…/i.test(connectionStatus);
+  if (shouldShow){
+    CONNECTION_BANNER.removeAttribute('hidden');
+  } else {
+    CONNECTION_BANNER.setAttribute('hidden', '');
+  }
+
+  if (CONNECTION_BANNER_MESSAGE){
+    CONNECTION_BANNER_MESSAGE.textContent = connectionStatus;
+  }
+
+  if (CONNECTION_RECONNECT_BUTTON){
+    // Disable during the automatic countdown phase (user sees remaining seconds)
+    const disabled = /Reconnecting in \d+s/.test(connectionStatus);
+    CONNECTION_RECONNECT_BUTTON.textContent = UI_STRINGS?.buttons?.reconnect || 'Reconnect';
+    CONNECTION_RECONNECT_BUTTON.disabled = disabled;
+  }
+
+  // Optional: reflect status as a data-attribute for CSS hooks
+  // (maps to coarse states based on text)
+  const statusKey =
+    /Connected/.test(connectionStatus) ? 'connected' :
+    /Reconnecting/.test(connectionStatus) ? 'reconnecting' :
+    /Connecting/.test(connectionStatus) ? 'connecting' :
+    /error/i.test(connectionStatus) ? 'error' :
+    /lost/i.test(connectionStatus) ? 'disconnected' :
+    'unknown';
+  CONNECTION_BANNER.dataset.status = statusKey;
+}
+
+
 function wireButtonHandlers(){
   // Bind UI buttons to the same logic used by the keyboard shortcuts so the
   // behaviour is always synchronized no matter how the pilot interacts.
   if (MANUAL_BUTTON){
     MANUAL_BUTTON.addEventListener('click', () => {
       setManualControlEnabled(!manualControlEnabled);
+    });
+  }
+
+  if (INVERT_AXES_BUTTON){
+    INVERT_AXES_BUTTON.addEventListener('click', () => {
+      setInvertAxesEnabled(!invertAxesEnabled);
     });
   }
 
@@ -1404,6 +1543,7 @@ function wireButtonHandlers(){
   }
 
   updateManualButtonState();
+  updateInvertAxesButtonState();
   updateAccelerationButtonState();
   updateRerouteButtonState();
 }
@@ -1573,10 +1713,19 @@ function loadControlDocs(){
 
 function renderControlDocs(docs){
   if (!CONTROL_INSTRUCTIONS_LIST) return;
+  const docsToRender = Array.isArray(docs) && docs.length ? docs : DEFAULT_CONTROL_DOCS;
+  currentControlDocs = docsToRender;
   CONTROL_INSTRUCTIONS_LIST.innerHTML = '';
-  docs.forEach((doc) => {
+  const inversionNote = invertAxesEnabled ? 'Pitch/Roll inverted' : 'Pitch/Roll standard';
+  docsToRender.forEach((doc) => {
     const li = document.createElement('li');
-    li.textContent = `${doc.label}: ${doc.description}`;
+    const label = doc?.label || 'Control';
+    const description = doc?.description || '';
+    const baseText = `${label}: ${description}`.trim();
+    const shouldAnnotate = (doc && doc.id === 'keyboard') || /flight keys/i.test(label);
+    li.textContent = shouldAnnotate && baseText
+      ? `${baseText} [${inversionNote}]`
+      : (baseText || label || '');
     CONTROL_INSTRUCTIONS_LIST.appendChild(li);
   });
 }
@@ -1585,6 +1734,13 @@ function updateManualButtonState(){
   if (!MANUAL_BUTTON) return;
   MANUAL_BUTTON.textContent = manualControlEnabled ? 'Disable Manual Control' : 'Enable Manual Control';
   MANUAL_BUTTON.classList.toggle('is-active', manualControlEnabled);
+}
+
+function updateInvertAxesButtonState(){
+  if (!INVERT_AXES_BUTTON) return;
+  const label = invertAxesEnabled ? 'Invert Pitch/Roll: On' : 'Invert Pitch/Roll: Off';
+  INVERT_AXES_BUTTON.textContent = label;
+  INVERT_AXES_BUTTON.classList.toggle('is-active', invertAxesEnabled);
 }
 
 function updateAccelerationButtonState(){
@@ -1661,6 +1817,40 @@ function persistModelSetKey(key){
       console.warn('Unable to persist model set selection', err);
     }
     modelSetStorageUnavailable = true;
+  }
+}
+
+function readPersistedInvertAxesPreference(){
+  if (invertAxesStorageUnavailable) return false;
+  try {
+    if (typeof window === 'undefined' || !window.localStorage){
+      invertAxesStorageUnavailable = true;
+      return false;
+    }
+    const stored = window.localStorage.getItem(INVERT_AXES_STORAGE_KEY);
+    return stored === 'true';
+  } catch (err) {
+    if (!invertAxesStorageUnavailable) {
+      console.warn('Unable to read invert axes preference', err);
+    }
+    invertAxesStorageUnavailable = true;
+  }
+  return false;
+}
+
+function persistInvertAxesPreference(enabled){
+  if (invertAxesStorageUnavailable) return;
+  try {
+    if (typeof window === 'undefined' || !window.localStorage){
+      invertAxesStorageUnavailable = true;
+      return;
+    }
+    window.localStorage.setItem(INVERT_AXES_STORAGE_KEY, enabled ? 'true' : 'false');
+  } catch (err) {
+    if (!invertAxesStorageUnavailable) {
+      console.warn('Unable to persist invert axes preference', err);
+    }
+    invertAxesStorageUnavailable = true;
   }
 }
 

@@ -7,6 +7,8 @@ import sys
 from pathlib import Path
 from queue import Queue
 
+import pytest
+
 
 THIS_DIR = Path(__file__).resolve().parent
 if str(THIS_DIR) not in sys.path:
@@ -107,3 +109,29 @@ def test_set_speed_command_updates_cruise_controller():
     assert status["status"] == "ok"
     assert status["result"]["max_speed"] == 310
     assert status["result"]["acceleration"] == 25
+
+
+def test_parse_args_defaults_to_30_hz_tick():
+    args = client.parse_args([])
+
+    assert args.tick_rate == client.DEFAULT_TICK_RATE
+    assert client.tick_rate_to_interval(args.tick_rate) == pytest.approx(1.0 / 30.0)
+
+
+def test_parse_args_allows_tick_rate_override():
+    args = client.parse_args(["--tick-rate", "60"])
+
+    assert args.tick_rate == 60.0
+    assert client.tick_rate_to_interval(args.tick_rate) == pytest.approx(1.0 / 60.0)
+
+
+def test_parse_args_rejects_invalid_tick_rate(capfd):
+    with pytest.raises(SystemExit):
+        client.parse_args(["--tick-rate", "0"])
+    err = capfd.readouterr().err
+    assert "Tick rate must be positive" in err
+
+    with pytest.raises(SystemExit):
+        client.parse_args(["--tick-rate", "5000"])
+    err = capfd.readouterr().err
+    assert "Tick rate must be between" in err

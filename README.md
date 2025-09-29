@@ -7,6 +7,16 @@ This starter project wires together three pieces so you can focus on gameplay an
 - `viewer/`: A minimal three.js web client that subscribes to the broker feed.
   - Switch between available aircraft kits with the **Aircraft Model** dropdown in the viewer. Assets are cached locally so toggling sets is instant, your last choice is remembered in `localStorage`, and the legacy `?modelSet=` query parameter still works for deep links.
 
+## Viewer connection banner
+
+The viewer shows a status banner while it connects to the Go broker. Earlier revisions of this documentation embedded a PNG screenshot from `docs/images/connection-banner.png`, but that asset is no longer versioned with the project. To capture a fresh banner image for release notes or runbooks:
+
+1. Start the broker and viewer locally (see **Local Setup** below).
+2. Launch the viewer at `http://localhost:8080/viewer/index.html`.
+3. Grab a screenshot once the HUD panel reads “DriftPursuit Viewer – connecting…”.
+
+Store the screenshot wherever you publish your documentation or knowledge base—keeping it out of the repository avoids unnecessary binary churn.
+
 ## Prerequisites
 
 - Go 1.20 or newer
@@ -21,18 +31,19 @@ Follow these steps to bring the entire stack up locally on one machine:
    ```bash
    cd go-broker
    go mod tidy
-   go run main.go
+   go run .
    ```
    The broker will start on port `8080` and serve both HTTP and WebSocket traffic.
    A JSON summary of the broker status is exposed at `http://localhost:8080/api/stats`.
+   A lightweight health endpoint is available at `http://localhost:8080/healthz` and reports HTTP 200 when the broker is healthy or 503 if a fatal startup issue was recorded.
 
    To enable HTTPS/WSS, provide a certificate and key (CLI flags take precedence over the matching environment variables):
    ```bash
-   go run main.go --tls-cert=/path/to/cert.pem --tls-key=/path/to/key.pem
+   go run . --tls-cert=/path/to/cert.pem --tls-key=/path/to/key.pem
    # or
    export BROKER_TLS_CERT=/path/to/cert.pem
    export BROKER_TLS_KEY=/path/to/key.pem
-   go run main.go
+   go run .
    ```
    With TLS enabled the viewer is available at `https://localhost:8080/viewer/index.html` and WebSocket clients should connect to `wss://localhost:8080/ws`.
 
@@ -40,10 +51,10 @@ Follow these steps to bring the entire stack up locally on one machine:
    - By default the broker accepts local origins such as `http://localhost` and `http://127.0.0.1` so development "just works".
    - Supply a comma-separated allow list through the CLI flag or environment variable when you need additional origins:
      ```bash
-     go run main.go -allowed-origins="http://localhost:5173,https://viewer.example.com"
+     go run . -allowed-origins="http://localhost:5173,https://viewer.example.com"
      # or
      export BROKER_ALLOWED_ORIGINS="https://viewer.example.com,https://tools.example.com"
-     go run main.go
+     go run .
      ```
    - The CLI flag takes precedence over the environment variable. Requests from origins not in the allow list (and not local) are rejected during the WebSocket upgrade.
 
@@ -55,10 +66,10 @@ Follow these steps to bring the entire stack up locally on one machine:
    - The broker rejects individual WebSocket messages larger than **1 MiB** by default to prevent runaway publishers from exhausting memory.
    - Override the limit with the CLI flag or the `BROKER_MAX_PAYLOAD_BYTES` environment variable when your protocol needs larger payloads:
      ```bash
-     go run main.go -max-payload-bytes=2097152
+     go run . -max-payload-bytes=2097152
      # or
      export BROKER_MAX_PAYLOAD_BYTES=2097152
-     go run main.go
+     go run .
      ```
    - As with other settings, the CLI flag takes precedence when both are supplied.
 
@@ -79,6 +90,13 @@ Follow these steps to bring the entire stack up locally on one machine:
    export SIM_ORIGIN=https://example.com
    python client.py
    ```
+   Adjust the simulation cadence with ``--tick-rate`` (in Hertz) to slow down or
+   speed up the autopilot loop:
+
+   ```bash
+   python client.py --tick-rate 60  # run at 60 Hz instead of the 30 Hz default
+   ```
+
    To supply a custom autopilot loop, pass a waypoint file (see `docs/waypoints-format.md` for details):
    ```bash
    python client.py --waypoints-file path/to/loop.yaml
@@ -128,6 +146,12 @@ Once everything is running locally, you can visit these URLs:
 | WebSocket endpoint | `ws://localhost:8080/ws` |
 | Broker statistics API | `http://localhost:8080/api/stats` |
 | Protocol documentation | `docs/protocol.md` (local file) |
+
+## Viewer connection banner
+
+The viewer now surfaces connection health directly in the HUD and exposes a **Reconnect** action when the WebSocket is interrupted. Error and disconnect states render a prominent banner across the top of the screen so operators can recover quickly without reloading the page.
+
+To document the feature for operators, capture an updated screenshot from a local build and attach it to your release notes or runbook as needed. The project intentionally avoids tracking large binary assets in Git, so add any reference imagery outside the repository (for example in your deployment docs wiki).
 
 ## Next Steps
 

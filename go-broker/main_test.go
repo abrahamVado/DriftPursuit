@@ -9,6 +9,7 @@ import (
 	"crypto/x509/pkix"
 	"encoding/json"
 	"encoding/pem"
+	"errors"
 	"fmt"
 	"math/big"
 	"net"
@@ -135,8 +136,9 @@ func TestBrokerServesViewerOverTLS(t *testing.T) {
 
 	certFile, keyFile := generateSelfSignedCert(t)
 
-	// buildHandler now expects (maxPayloadBytes, maxClients)
-	handler, err := buildHandler(defaultMaxPayloadBytes, 256)
+	broker := NewBroker(defaultMaxPayloadBytes, 256, time.Now())
+
+	handler, err := buildHandler(broker)
 	if err != nil {
 		t.Fatalf("buildHandler: %v", err)
 	}
@@ -284,6 +286,73 @@ func TestStatsHandlerHonorsLocking(t *testing.T) {
 	}
 }
 
+func TestHealthzHandlerHealthy(t *testing.T) {
+	started := time.Now().Add(-2 * time.Second)
+	broker := NewBroker(defaultMaxPayloadBytes, 5, started)
+	broker.lock.Lock()
+	broker.stats.Clients = 3
+	broker.pendingClients = 1
+	broker.lock.Unlock()
+
+	req := httptest.NewRequest(http.MethodGet, "/healthz", nil)
+	rr := httptest.NewRecorder()
+
+	healthzHandler(broker).ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("unexpected status: got %d", rr.Code)
+	}
+	if ct := rr.Header().Get("Content-Type"); ct != "application/json" {
+		t.Fatalf("unexpected content type: got %q", ct)
+	}
+
+	var resp struct {
+		Status         string  `json:"status"`
+		UptimeSeconds  float64 `json:"uptime_seconds"`
+		Clients        int     `json:"clients"`
+		PendingClients int     `json:"pending_clients"`
+	}
+	if err := json.Unmarshal(rr.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("unmarshal healthz response: %v", err)
+	}
+	if resp.Status != "ok" {
+		t.Fatalf("unexpected status payload: %+v", resp)
+	}
+	if resp.UptimeSeconds < 1 {
+		t.Fatalf("expected uptime >= 1s, got %f", resp.UptimeSeconds)
+	}
+	if resp.Clients != 3 {
+		t.Fatalf("expected client count 3, got %d", resp.Clients)
+	}
+	if resp.PendingClients != 1 {
+		t.Fatalf("expected pending clients 1, got %d", resp.PendingClients)
+	}
+}
+
+func TestHealthzHandlerStartupError(t *testing.T) {
+	broker := NewBroker(defaultMaxPayloadBytes, 0, time.Now())
+	broker.setStartupError(errors.New("boom"))
+
+	req := httptest.NewRequest(http.MethodGet, "/healthz", nil)
+	rr := httptest.NewRecorder()
+
+	healthzHandler(broker).ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusServiceUnavailable {
+		t.Fatalf("expected status %d, got %d", http.StatusServiceUnavailable, rr.Code)
+	}
+
+	var resp struct {
+		Status string `json:"status"`
+	}
+	if err := json.Unmarshal(rr.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("unmarshal healthz response: %v", err)
+	}
+	if resp.Status != "error" {
+		t.Fatalf("expected status error in payload, got %+v", resp)
+	}
+}
+
 /***********************
  * Tests: WS behavior
  ***********************/
@@ -314,7 +383,7 @@ func listenOnce(conn *websocket.Conn) <-chan wsReadResult {
 
 func TestServeWSDropsInvalidMessages(t *testing.T) {
 	upgrader.CheckOrigin = func(*http.Request) bool { return true }
-	broker := NewBroker(defaultMaxPayloadBytes, 0)
+	broker := NewBroker(defaultMaxPayloadBytes, 0, time.Now())
 
 	server := httptest.NewServer(http.HandlerFunc(broker.serveWS))
 	defer server.Close()
@@ -366,7 +435,7 @@ func TestServeWSDropsInvalidMessages(t *testing.T) {
 
 func TestServeWSRejectsOversizedMessages(t *testing.T) {
 	upgrader.CheckOrigin = func(*http.Request) bool { return true }
-	broker := NewBroker(64, 0) // very small limit for the test
+	broker := NewBroker(64, 0, time.Now()) // very small limit for the test
 
 	server := httptest.NewServer(http.HandlerFunc(broker.serveWS))
 	defer server.Close()
@@ -445,7 +514,7 @@ func TestServeWSRejectsOversizedMessages(t *testing.T) {
 
 func TestServeWSRejectsWhenAtCapacity(t *testing.T) {
 	// Limit to 1 client
-	b := NewBroker(defaultMaxPayloadBytes, 1)
+	b := NewBroker(defaultMaxPayloadBytes, 1, time.Now())
 
 	// Pretend one client is already connected
 	existing := &Client{send: make(chan []byte, 1)}

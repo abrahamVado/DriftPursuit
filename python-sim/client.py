@@ -1,10 +1,13 @@
 """Minimal simulation client that sends telemetry to a DriftPursuit broker.
 
 The client can optionally persist every telemetry and cake_drop payload to a log
-file using ``--log-file`` (defaulting to JSON Lines output).
+file using ``--log-file`` (defaulting to JSON Lines output). Control the
+simulation update frequency with ``--tick-rate`` (in Hertz) when you need
+slower or faster loops than the 30 Hz default.
 """
 
 import argparse
+import math
 import os
 import json
 import random
@@ -27,7 +30,9 @@ from navigation import (
 )
 
 DEFAULT_WS_URL = "ws://localhost:43127/ws"  # match Go broker default
-TICK = 1.0 / 30.0
+DEFAULT_TICK_RATE = 30.0
+MIN_TICK_RATE = 1.0
+MAX_TICK_RATE = 240.0
 ORIGIN_ENV_VAR = "SIM_ORIGIN"
 
 PayloadLogger = Callable[[str], None]
@@ -353,6 +358,12 @@ def resolve_waypoints(waypoints: Optional[Sequence[Waypoint]]) -> List[Waypoint]
     return list(waypoints)
 
 
+def tick_rate_to_interval(tick_rate_hz: float) -> float:
+    """Convert a tick frequency in Hz to the corresponding interval in seconds."""
+
+    return 1.0 / tick_rate_hz
+
+
 def run(
     ws_url: str,
     origin: Optional[str] = None,
@@ -363,6 +374,7 @@ def run(
     pos_noise: float = 0.0,
     vel_noise: float = 0.0,
     random_seed: Optional[int] = None,
+    tick_rate_hz: float = DEFAULT_TICK_RATE,
 ):
     print("Connecting to", ws_url)
     p = Plane("plane-1", x=0, y=0, z=1200, speed=140.0)
@@ -384,6 +396,11 @@ def run(
 
     log_handle = None
     payload_logger: Optional[PayloadLogger] = None
+
+    if tick_rate_hz <= 0:
+        raise ValueError("tick_rate_hz must be positive")
+
+    tick_interval = tick_rate_to_interval(tick_rate_hz)
 
     try:
         if log_file:
@@ -417,19 +434,19 @@ def run(
                     t = time.time() - t0
 
                     # Update autopilot first so telemetry mirrors controls.
-                    desired_direction = planner.tick(p.pos, TICK)
+                    desired_direction = planner.tick(p.pos, tick_interval)
                     if p.manual_override.enabled:
                         override = p.manual_override
                         p.vel = override.velocity.copy()
-                        p.step(TICK)
+                        p.step(tick_interval)
                         if override.orientation is not None:
                             p.ori = list(override.orientation)
                         else:
                             p.ori = list(CruiseController.orientation_from_velocity(p.vel))
                     else:
-                        p.vel = cruise.apply(p.vel, desired_direction, TICK)
+                        p.vel = cruise.apply(p.vel, desired_direction, tick_interval)
                         p.ori = list(CruiseController.orientation_from_velocity(p.vel))
-                        p.step(TICK)
+                        p.step(tick_interval)
 
                     # Handle incoming commands
                     process_pending_commands(p, planner, cruise, ws, command_queue, payload_logger)
@@ -466,7 +483,7 @@ def run(
                         except Exception as e:
                             print("send cake err", e)
 
-                    time.sleep(TICK)
+                    time.sleep(tick_interval)
 
             except KeyboardInterrupt:
                 print("Stopping client")
@@ -511,7 +528,24 @@ def non_negative_float(value: str) -> float:
     return parsed
 
 
-def parse_args():
+def tick_rate_value(value: str) -> float:
+    try:
+        rate = float(value)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(f"'{value}' is not a valid tick rate") from exc
+
+    if not math.isfinite(rate):
+        raise argparse.ArgumentTypeError("Tick rate must be a finite number")
+    if rate <= 0:
+        raise argparse.ArgumentTypeError("Tick rate must be positive")
+    if rate < MIN_TICK_RATE or rate > MAX_TICK_RATE:
+        raise argparse.ArgumentTypeError(
+            f"Tick rate must be between {MIN_TICK_RATE:g} and {MAX_TICK_RATE:g} Hz"
+        )
+    return rate
+
+
+def parse_args(argv: Optional[Sequence[str]] = None):
     parser = argparse.ArgumentParser(
         description=(
             "Minimal simulation client that sends telemetry and occasional "
@@ -558,12 +592,22 @@ def parse_args():
         default=None,
         help="Seed for the telemetry noise RNG (default: random).",
     )
+    parser.add_argument(
+        "--tick-rate",
+        type=tick_rate_value,
+        default=DEFAULT_TICK_RATE,
+        metavar="HZ",
+        help=(
+            "Simulation update frequency in Hertz (default: 30). "
+            f"Valid range: {MIN_TICK_RATE:g}-{MAX_TICK_RATE:g}."
+        ),
+    )
     # Waypoints
     parser.add_argument(
         "--waypoints-file",
         help="Path to a JSON or YAML file describing a custom waypoint loop for the autopilot.",
     )
-    return parser.parse_args()
+    return parser.parse_args(argv)
 
 
 def get_ws_url(cli_url: Optional[str]) -> str:
@@ -614,4 +658,5 @@ if __name__ == '__main__':
         pos_noise=args.pos_noise,
         vel_noise=args.vel_noise,
         random_seed=args.random_seed,
+        tick_rate_hz=args.tick_rate,
     )
