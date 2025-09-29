@@ -116,6 +116,40 @@ class CollisionSystem:
 
         return float(self._ground_fn(float(x), float(y)))
 
+    def reset_world(
+        self,
+        *,
+        spawn_position: Optional[Sequence[float]] = None,
+        spawn_orientation: Optional[Sequence[float]] = None,
+        ground_height_fn: Optional[Callable[[float, float], float]] = None,
+        start_time: Optional[float] = None,
+    ) -> None:
+        """Reset checkpoints and optionally replace the ground callback."""
+
+        if ground_height_fn is not None:
+            self._ground_fn = ground_height_fn
+
+        if spawn_position is not None:
+            spawn_pos = np.array(spawn_position, dtype=float)
+        else:
+            spawn_pos = self.spawn_position.copy()
+
+        if spawn_orientation is not None:
+            orientation = list(spawn_orientation)
+        else:
+            orientation = self.spawn_orientation[:]
+
+        self.spawn_position = spawn_pos
+        self.spawn_orientation = orientation
+        self._last_safe_position = spawn_pos.copy()
+        self._last_safe_velocity = np.zeros(3, dtype=float)
+        self._last_safe_orientation = orientation[:]
+        self._has_safe_state = spawn_position is not None
+        reference_time = start_time if start_time is not None else time.time()
+        self._cooldown_until = reference_time + self.grace_period
+        self._last_position = None
+        self._obstacles.clear()
+
     # ------------------------------------------------------------------
     # Core step logic
     # ------------------------------------------------------------------

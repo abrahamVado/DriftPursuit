@@ -22,6 +22,7 @@ import numpy as np
 from websocket import create_connection, WebSocketConnectionClosedException
 
 from collision import CollisionSystem
+from world import MapDescriptor, WorldStreamer
 from navigation import (
     CruiseController,
     FlightPathPlanner,
@@ -246,17 +247,42 @@ def receiver_loop(ws, command_queue, stop_event: threading.Event):
 
 
 def process_pending_commands(
-    plane, planner, cruise, ws, command_queue: Queue, payload_logger: Optional[PayloadLogger]
+    plane,
+    planner,
+    cruise,
+    ws,
+    command_queue: Queue,
+    payload_logger: Optional[PayloadLogger],
+    world_streamer: Optional[WorldStreamer] = None,
+    collision_system: Optional[CollisionSystem] = None,
 ):
     while True:
         try:
             command = command_queue.get_nowait()
         except Empty:
             break
-        handle_command(command, plane, planner, cruise, ws, payload_logger)
+        handle_command(
+            command,
+            plane,
+            planner,
+            cruise,
+            ws,
+            payload_logger,
+            world_streamer,
+            collision_system,
+        )
 
 
-def handle_command(command, plane, planner, cruise, ws, payload_logger: Optional[PayloadLogger]):
+def handle_command(
+    command,
+    plane,
+    planner,
+    cruise,
+    ws,
+    payload_logger: Optional[PayloadLogger],
+    world_streamer: Optional[WorldStreamer] = None,
+    collision_system: Optional[CollisionSystem] = None,
+):
     cmd_name = command.get("cmd")
     cmd_from = command.get("from")
     print(f"Handling command '{cmd_name}' from '{cmd_from}' with payload: {command}")
@@ -339,6 +365,35 @@ def handle_command(command, plane, planner, cruise, ws, payload_logger: Optional
 
             send_command_status(ws, plane.id, command, "ok", detail=detail, result=result_payload)
 
+        elif cmd_name == "set_map":
+            if world_streamer is None or collision_system is None:
+                raise ValueError("World streaming is unavailable")
+
+            descriptor_payload = params.get("descriptor") or params.get("map")
+            if not isinstance(descriptor_payload, dict):
+                raise ValueError("params.descriptor must be a mapping")
+
+            descriptor = MapDescriptor.from_mapping(descriptor_payload)
+            world_streamer.apply_descriptor(descriptor)
+            world_streamer.update(plane.pos[:2])
+            adjusted_position, snapped = world_streamer.ensure_position_within_bounds(plane.pos)
+            if snapped:
+                plane.pos = adjusted_position
+                plane.vel = np.zeros_like(plane.vel)
+
+            collision_system.reset_world(
+                spawn_position=plane.pos.copy(),
+                spawn_orientation=plane.ori,
+                ground_height_fn=world_streamer.sample_ground_height,
+            )
+            world_streamer.update(plane.pos[:2])
+
+            result_payload = dict(world_streamer.summary())
+            if snapped:
+                result_payload["position"] = [float(component) for component in plane.pos]
+                result_payload["snapped"] = True
+            send_command_status(ws, plane.id, command, "ok", detail="map updated", result=result_payload)
+
         else:
             detail = f"No handler for command '{cmd_name}'"
             print(detail)
@@ -387,11 +442,14 @@ def run(
     planner = FlightPathPlanner(waypoint_list, loop=True, arrival_tolerance=80.0)
     cruise = CruiseController(acceleration=18.0, max_speed=250.0)
 
+    world_streamer = WorldStreamer()
     collision_system = CollisionSystem(
         spawn_position=p.pos.copy(),
         spawn_orientation=p.ori,
         start_time=time.time(),
+        ground_height_fn=world_streamer.sample_ground_height,
     )
+    world_streamer.update(p.pos[:2])
 
     rng = np.random.default_rng(random_seed)
 
@@ -457,12 +515,23 @@ def run(
 
                     # Handle collisions before processing commands so resets
                     # happen with the freshest aircraft state.
+                    world_streamer.update(p.pos[:2])
+
                     hit, crashed = collision_system.handle_step(p, ensure_tag_fn=ensure_tag)
                     if crashed:
                         print("Collision detected – resetting aircraft to last safe checkpoint")
 
                     # Handle incoming commands
-                    process_pending_commands(p, planner, cruise, ws, command_queue, payload_logger)
+                    process_pending_commands(
+                        p,
+                        planner,
+                        cruise,
+                        ws,
+                        command_queue,
+                        payload_logger,
+                        world_streamer,
+                        collision_system,
+                    )
 
                     # Send telemetry (with optional noise)
                     pos_delta, vel_delta = apply_noise(p, rng, pos_noise, vel_noise)
