@@ -86,10 +86,28 @@ function cloneTileDescriptor(tile){
   return clone;
 }
 
+function cloneProceduralConfig(config){
+  if (!config || typeof config !== 'object') return null;
+  try {
+    return JSON.parse(JSON.stringify(config));
+  } catch (error){
+    console.warn('Failed to clone procedural configuration', error);
+    return null;
+  }
+}
+
 function cloneMapDescriptor(descriptor){
   if (!descriptor || typeof descriptor !== 'object') return null;
   const clone = { ...descriptor };
   if (descriptor.environment) clone.environment = cloneEnvironment(descriptor.environment);
+  if (descriptor.procedural && typeof descriptor.procedural === 'object'){
+    const proceduralClone = cloneProceduralConfig(descriptor.procedural);
+    if (proceduralClone) clone.procedural = proceduralClone;
+  }
+  if (descriptor.generator && typeof descriptor.generator === 'object'){
+    const generatorClone = cloneProceduralConfig(descriptor.generator);
+    if (generatorClone) clone.generator = generatorClone;
+  }
   if (Array.isArray(descriptor.tiles)){
     clone.tiles = descriptor.tiles.map((tile) => cloneTileDescriptor(tile));
   }
@@ -103,6 +121,16 @@ function cloneMapDefinition(entry){
   if (!entry || typeof entry !== 'object') return null;
   const clone = { ...entry };
   if (clone.environment) clone.environment = cloneEnvironment(clone.environment);
+  if (clone.procedural && typeof clone.procedural === 'object'){
+    const proceduralClone = cloneProceduralConfig(clone.procedural);
+    if (proceduralClone) clone.procedural = proceduralClone;
+    else delete clone.procedural;
+  }
+  if (clone.generator && typeof clone.generator === 'object'){
+    const generatorClone = cloneProceduralConfig(clone.generator);
+    if (generatorClone) clone.generator = generatorClone;
+    else delete clone.generator;
+  }
   if (Array.isArray(clone.tiles)) clone.tiles = clone.tiles.map((tile) => cloneTileDescriptor(tile));
   if (clone.descriptor) clone.descriptor = cloneMapDescriptor(clone.descriptor);
   if (clone.fallback && typeof clone.fallback === 'object') clone.fallback = { ...clone.fallback };
@@ -372,6 +400,10 @@ function initializeWorldForMap(map){
     mapDefinition.tileSize = descriptor.tileSize;
     world = new TileMapWorld({ scene, descriptor });
   } else {
+    if (!mapDefinition.procedural && descriptor?.procedural){
+      const descriptorProcedural = cloneProceduralConfig(descriptor.procedural);
+      if (descriptorProcedural) mapDefinition.procedural = descriptorProcedural;
+    }
     const chunkSize = Number.isFinite(mapDefinition?.chunkSize)
       ? mapDefinition.chunkSize
       : Number.isFinite(descriptor?.chunkSize)
@@ -383,7 +415,12 @@ function initializeWorldForMap(map){
         ? descriptor.radius
         : 3;
     const seed = Number.isFinite(mapDefinition?.seed) ? mapDefinition.seed : 982451653;
-    world = new TerraWorldStreamer({ scene, chunkSize, radius, seed });
+    const generatorConfig = mapDefinition?.procedural
+      ?? mapDefinition?.generator
+      ?? descriptor?.procedural
+      ?? descriptor?.generator
+      ?? null;
+    world = new TerraWorldStreamer({ scene, chunkSize, radius, seed, generator: generatorConfig });
   }
   collisionSystem.setWorld(world);
   projectileManager.setWorld(world);
