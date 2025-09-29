@@ -25,7 +25,7 @@ document.body.style.background = 'linear-gradient(180deg, #79a7ff 0%, #cfe5ff 45
 
 const scene = new THREE.Scene();
 scene.background = new THREE.Color(0x90b6ff);
-scene.fog = new THREE.Fog(0xa4c6ff, 1200, 2800);
+scene.fog = new THREE.Fog(0xa4c6ff, 1500, 4200);
 
 const camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.1, 20000);
 
@@ -43,7 +43,7 @@ sun.shadow.camera.bottom = -800;
 sun.shadow.camera.far = 2200;
 scene.add(sun);
 
-const world = new WorldStreamer({ scene, chunkSize: 640, radius: 2, seed: 982451653 });
+const world = new WorldStreamer({ scene, chunkSize: 640, radius: 3, seed: 982451653 });
 
 const planeMesh = createPlaneMesh();
 scene.add(planeMesh);
