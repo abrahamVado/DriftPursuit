@@ -8,6 +8,7 @@ import {
   setThrottleHold as inputSetThrottleHold,
 } from './control/Input.js';
 import { createSandboxWorld } from './world/SandboxWorldAdapter.js';
+import { loadGLTFAsset } from './terra/glbLoader.js';
 
 const HUD = document.getElementById('hud');
 const MANUAL_BUTTON = document.getElementById('manual-toggle');
@@ -1097,8 +1098,68 @@ function createEndlessWorld({ scene: targetScene, chunkSize, visibleRadius, seed
     });
   }
 
+  function getHeightAt(x, y){
+    const originOffset = ensureWorldOriginOffset();
+    const globalX = x + originOffset.x;
+    const globalY = y + originOffset.y;
+    const chunkX = Math.floor(globalX / chunkSize);
+    const chunkY = Math.floor(globalY / chunkSize);
+    const key = chunkKey(chunkX, chunkY);
+    const tile = tiles.get(key);
+    const chunkOriginX = chunkX * chunkSize;
+    const chunkOriginY = chunkY * chunkSize;
+    const localX = globalX - chunkOriginX;
+    const localY = globalY - chunkOriginY;
+    if (tile?.heightSampler){
+      return tile.heightSampler(localX, localY);
+    }
+    if (tile){
+      return Number(tile.baseHeight || 0) || 0;
+    }
+    if (fallbackType === 'procedural'){
+      return getTerrainHeight(globalX, globalY);
+    }
+    return 0;
+  }
+
+  function getOriginOffset(){
+    return ensureWorldOriginOffset().clone();
+  }
+
+  function getObstaclesNear(x, y, radius = chunkSize){
+    const originOffset = ensureWorldOriginOffset();
+    const globalX = x + originOffset.x;
+    const globalY = y + originOffset.y;
+    const chunkX = Math.floor(globalX / chunkSize);
+    const chunkY = Math.floor(globalY / chunkSize);
+    const results = [];
+    for (let dx = -1; dx <= 1; dx += 1){
+      for (let dy = -1; dy <= 1; dy += 1){
+        const entry = chunkMap.get(chunkKey(chunkX + dx, chunkY + dy));
+        if (!entry?.obstacles?.length) continue;
+        entry.obstacles.forEach((obstacle) => {
+          if (!obstacle?.worldPosition) return;
+          const dxWorld = obstacle.worldPosition.x - globalX;
+          const dyWorld = obstacle.worldPosition.y - globalY;
+          const combined = (radius + (obstacle.radius ?? 0));
+          if (dxWorld * dxWorld + dyWorld * dyWorld <= combined * combined){
+            results.push(obstacle);
+          }
+        });
+      }
+    }
+    return results;
+  }
+
   function disposeChunk(chunkEntry){
     if (!chunkEntry) return;
+    chunkEntry.disposed = true;
+    if (Array.isArray(chunkEntry.pending)){
+      chunkEntry.pending.length = 0;
+    }
+    if (Array.isArray(chunkEntry.obstacles)){
+      chunkEntry.obstacles.length = 0;
+    }
     if (chunkEntry.group){
       worldRoot.remove(chunkEntry.group);
       if (typeof chunkEntry.group.clear === 'function'){
@@ -1120,7 +1181,7 @@ function createEndlessWorld({ scene: targetScene, chunkSize, visibleRadius, seed
     targetScene.remove(worldRoot);
   }
 
-  return { update, handleOriginShift, dispose: disposeAll };
+  return { update, handleOriginShift, dispose: disposeAll, getHeightAt, getOriginOffset, getObstaclesNear };
 }
 
 function buildChunkContents({ coords, chunkSize, rng }){
@@ -2932,7 +2993,7 @@ async function ensureMapDescriptor(mapId){
       throw new Error(`Failed to load map descriptor ${mapId}: HTTP ${response.status}`);
     }
     const descriptor = await response.json();
-    const normalized = normalizeMapDescriptor(descriptor, entry);
+    const normalized = normalizeMapDescriptor(descriptor, { ...entry, assetRoot: entry.assetRoot || deriveAssetRootFromUrl(url) });
     mapDescriptorCache.set(mapId, normalized);
     return normalized;
   }
@@ -2940,6 +3001,24 @@ async function ensureMapDescriptor(mapId){
   const normalized = normalizeMapDescriptor(entry, entry);
   mapDescriptorCache.set(mapId, normalized);
   return normalized;
+}
+
+function normalizeAssetRootPath(value){
+  if (!value) return '';
+  const normalized = String(value).replace(/\\/g, '/').trim();
+  if (!normalized) return '';
+  if (/^https?:\/\//i.test(normalized) || normalized.startsWith('/')){
+    return normalized.replace(/\/?$/, '/');
+  }
+  return `${normalized.replace(/\/?$/, '')}/`;
+}
+
+function deriveAssetRootFromUrl(url){
+  if (!url) return '';
+  const normalized = String(url).replace(/\\/g, '/');
+  const index = normalized.lastIndexOf('/');
+  if (index === -1) return '';
+  return normalizeAssetRootPath(normalized.slice(0, index + 1));
 }
 
 function normalizeMapDescriptor(descriptor, entry){
@@ -2956,12 +3035,25 @@ function normalizeMapDescriptor(descriptor, entry){
     base.visibleRadius = Number.isFinite(radius) ? radius : WORLD_CHUNK_RADIUS;
     base.fallback = base.fallback || entry?.fallback || { type: 'procedural', seed: WORLD_SEED };
     base.tiles = Array.isArray(base.tiles) ? base.tiles : [];
+    const explicitAssetRoot = normalizeAssetRootPath(base.assetRoot || entry?.assetRoot || descriptor?.assetRoot || '');
+    if (explicitAssetRoot){
+      base.assetRoot = explicitAssetRoot;
+    } else if (entry?.path){
+      const resourcePath = `assets/maps/${String(entry.path).replace(/\\/g, '/')}`;
+      base.assetRoot = deriveAssetRootFromUrl(resourcePath);
+    } else if (descriptor?.path){
+      base.assetRoot = deriveAssetRootFromUrl(String(descriptor.path));
+    } else {
+      base.assetRoot = '';
+    }
   } else {
     base.type = 'procedural';
     base.seed = base.seed || entry?.seed || WORLD_SEED;
     base.chunkSize = Number(base.chunkSize || entry?.chunkSize || WORLD_CHUNK_SIZE) || WORLD_CHUNK_SIZE;
     const radius = Number(base.visibleRadius ?? entry?.visibleRadius ?? WORLD_CHUNK_RADIUS);
     base.visibleRadius = Number.isFinite(radius) ? radius : WORLD_CHUNK_RADIUS;
+    const explicitAssetRoot = normalizeAssetRootPath(base.assetRoot || entry?.assetRoot || descriptor?.assetRoot || '');
+    base.assetRoot = explicitAssetRoot;
   }
 
   return base;
@@ -3000,7 +3092,7 @@ function createTileMapWorld({ scene: targetScene, descriptor }){
     const coords = Array.isArray(tile.coords) ? tile.coords : tile.coordinates;
     if (!coords || coords.length < 2) return;
     const key = chunkKey(coords[0], coords[1]);
-    tiles.set(key, { ...tile, coords: { x: coords[0], y: coords[1] } });
+    tiles.set(key, prepareTileDefinition({ tile, coords: { x: coords[0], y: coords[1] }, chunkSize, assetRoot: descriptor.assetRoot }));
   });
 
   const worldRoot = new THREE.Group();
@@ -3048,10 +3140,58 @@ function createTileMapWorld({ scene: targetScene, descriptor }){
     const coords = { x, y };
     const tile = tiles.get(key);
     if (tile){
-      const { group, disposables } = buildTileChunk({ descriptor, tile, chunkSize });
+      const { group, disposables = [], pendingReady = [], obstacles: initialObstacles = [] } = buildTileChunk({
+        descriptor,
+        tile,
+        chunkSize,
+        assetRoot: tile.assetRoot || descriptor.assetRoot,
+      });
       group.name = `Tile_${x}_${y}`;
       positionChunk({ coords, group });
-      return { coords, group, disposables };
+      const chunkEntry = {
+        coords,
+        group,
+        disposables: Array.isArray(disposables) ? [...disposables] : [],
+        obstacles: Array.isArray(initialObstacles) ? [...initialObstacles] : [],
+        pending: [],
+        disposed: false,
+      };
+
+      if (Array.isArray(pendingReady)){
+        pendingReady.forEach((promise) => {
+          if (!promise || typeof promise.then !== 'function') return;
+          const tracked = promise.then((readyState) => {
+            if (!readyState) return;
+            const resources = Array.isArray(readyState.disposables) ? readyState.disposables : [];
+            if (chunkEntry.disposed){
+              resources.forEach((resource) => resource?.dispose?.());
+              if (readyState.root?.parent){
+                readyState.root.parent.remove(readyState.root);
+              }
+              return;
+            }
+            resources.forEach((resource) => {
+              if (resource) chunkEntry.disposables.push(resource);
+            });
+            if (readyState.collidable && readyState.loaded && readyState.root){
+              const records = collectMeshObstacles({
+                root: readyState.root,
+                chunkWorldOrigin: readyState.chunkWorldOrigin || { x: coords.x * chunkSize, y: coords.y * chunkSize },
+                type: readyState.collision?.type || readyState.type,
+                collision: readyState.collision,
+              });
+              if (records?.length){
+                chunkEntry.obstacles.push(...records);
+              }
+            }
+          }).catch((err) => {
+            console.warn('Failed to finalize tile map object', err);
+          });
+          chunkEntry.pending.push(tracked);
+        });
+      }
+
+      return chunkEntry;
     }
 
     if (fallbackType === 'procedural'){
@@ -3059,13 +3199,13 @@ function createTileMapWorld({ scene: targetScene, descriptor }){
       const { group, disposables } = buildChunkContents({ coords, chunkSize, rng });
       group.name = `TileFallback_${x}_${y}`;
       positionChunk({ coords, group });
-      return { coords, group, disposables };
+      return { coords, group, disposables, obstacles: [], pending: [], disposed: false };
     }
 
     const group = new THREE.Group();
     group.name = `TileEmpty_${x}_${y}`;
     positionChunk({ coords, group });
-    return { coords, group, disposables: [] };
+    return { coords, group, disposables: [], obstacles: [], pending: [], disposed: false };
   }
 
   function positionChunk(chunkEntry){
@@ -3085,8 +3225,67 @@ function createTileMapWorld({ scene: targetScene, descriptor }){
     });
   }
 
+  function getHeightAt(x, y){
+    const originOffset = ensureWorldOriginOffset();
+    const globalX = x + originOffset.x;
+    const globalY = y + originOffset.y;
+    const chunkX = Math.floor(globalX / chunkSize);
+    const chunkY = Math.floor(globalY / chunkSize);
+    const tile = tiles.get(chunkKey(chunkX, chunkY));
+    const chunkOriginX = chunkX * chunkSize;
+    const chunkOriginY = chunkY * chunkSize;
+    const localX = globalX - chunkOriginX;
+    const localY = globalY - chunkOriginY;
+    if (tile?.heightSampler){
+      return tile.heightSampler(localX, localY);
+    }
+    if (tile){
+      return Number(tile.baseHeight || 0) || 0;
+    }
+    if (fallbackType === 'procedural'){
+      return getTerrainHeight(globalX, globalY);
+    }
+    return 0;
+  }
+
+  function getOriginOffset(){
+    return ensureWorldOriginOffset().clone();
+  }
+
+  function getObstaclesNear(x, y, radius = chunkSize){
+    const originOffset = ensureWorldOriginOffset();
+    const globalX = x + originOffset.x;
+    const globalY = y + originOffset.y;
+    const chunkX = Math.floor(globalX / chunkSize);
+    const chunkY = Math.floor(globalY / chunkSize);
+    const results = [];
+    for (let dx = -1; dx <= 1; dx += 1){
+      for (let dy = -1; dy <= 1; dy += 1){
+        const entry = chunkMap.get(chunkKey(chunkX + dx, chunkY + dy));
+        if (!entry?.obstacles?.length) continue;
+        entry.obstacles.forEach((obstacle) => {
+          if (!obstacle?.worldPosition) return;
+          const dxWorld = obstacle.worldPosition.x - globalX;
+          const dyWorld = obstacle.worldPosition.y - globalY;
+          const combined = radius + (obstacle.radius ?? 0);
+          if (dxWorld * dxWorld + dyWorld * dyWorld <= combined * combined){
+            results.push(obstacle);
+          }
+        });
+      }
+    }
+    return results;
+  }
+
   function disposeChunk(chunkEntry){
     if (!chunkEntry) return;
+    chunkEntry.disposed = true;
+    if (Array.isArray(chunkEntry.pending)){
+      chunkEntry.pending.length = 0;
+    }
+    if (Array.isArray(chunkEntry.obstacles)){
+      chunkEntry.obstacles.length = 0;
+    }
     if (chunkEntry.group){
       worldRoot.remove(chunkEntry.group);
       if (typeof chunkEntry.group.clear === 'function'){
@@ -3108,15 +3307,20 @@ function createTileMapWorld({ scene: targetScene, descriptor }){
     targetScene.remove(worldRoot);
   }
 
-  return { update, handleOriginShift, dispose: disposeAll };
+  return { update, handleOriginShift, dispose: disposeAll, getHeightAt, getOriginOffset, getObstaclesNear };
 }
 
-function buildTileChunk({ descriptor, tile, chunkSize }){
+function buildTileChunk({ descriptor, tile, chunkSize, assetRoot }){
   const group = new THREE.Group();
   const disposables = [];
+  const pendingReady = [];
+  const chunkWorldOrigin = {
+    x: (tile?.coords?.x ?? 0) * chunkSize,
+    y: (tile?.coords?.y ?? 0) * chunkSize,
+  };
 
   const baseColor = resolveColor(tile.groundColor || descriptor.groundColor, '#6a8b5d');
-  const elevation = Number(tile.baseHeight || tile.elevation || 0) || 0;
+  const elevation = Number(tile.baseHeight ?? tile.elevation ?? 0) || 0;
 
   if (tile.heightfield){
     const heightMesh = createHeightfieldMesh({
@@ -3137,7 +3341,12 @@ function buildTileChunk({ descriptor, tile, chunkSize }){
 
   if (Array.isArray(tile.objects)){
     tile.objects.forEach((objectDescriptor, index) => {
-      const created = createMapObject({ descriptor: objectDescriptor, chunkSize, seed: `${descriptor.id || 'map'}:${tile.coords?.x}:${tile.coords?.y}:${index}` });
+      const created = createMapObject({
+        descriptor: objectDescriptor,
+        chunkSize,
+        seed: `${descriptor.id || 'map'}:${tile.coords?.x}:${tile.coords?.y}:${index}`,
+        assetRoot: objectDescriptor.assetRoot || tile.assetRoot || assetRoot,
+      });
       if (created){
         group.add(created.object);
         if (Array.isArray(created.disposables)){
@@ -3145,11 +3354,36 @@ function buildTileChunk({ descriptor, tile, chunkSize }){
             if (resource) disposables.push(resource);
           });
         }
+        const collisionSettings = objectDescriptor?.collision || {};
+        const type = created.type;
+        const collidable = collisionSettings.enabled !== false
+          && (type === 'glb' || type === 'gltf' || collisionSettings.enabled === true);
+        if (created.ready && typeof created.ready.then === 'function'){
+          pendingReady.push(created.ready.then((readyState) => ({
+            root: readyState?.root ?? created.object,
+            loaded: readyState?.loaded !== false,
+            disposables: Array.isArray(readyState?.disposables) ? readyState.disposables.filter(Boolean) : [],
+            collidable,
+            collision: collisionSettings,
+            type,
+            chunkWorldOrigin,
+          })));
+        } else {
+          pendingReady.push(Promise.resolve({
+            root: created.object,
+            loaded: true,
+            disposables: [],
+            collidable,
+            collision: collisionSettings,
+            type,
+            chunkWorldOrigin,
+          }));
+        }
       }
     });
   }
 
-  return { group, disposables };
+  return { group, disposables, pendingReady, obstacles: [] };
 }
 
 function createGroundPlane({ chunkSize, color, elevation = 0 }){
@@ -3202,11 +3436,70 @@ function createHeightfieldMesh({ descriptor, chunkSize, elevation = 0, color }){
   return { mesh, geometry, material };
 }
 
-function createMapObject({ descriptor, chunkSize, seed }){
+function prepareTileDefinition({ tile, coords, chunkSize, assetRoot }){
+  const prepared = { ...(tile || {}) };
+  prepared.coords = coords || { x: 0, y: 0 };
+  const baseHeight = Number(tile?.baseHeight ?? tile?.elevation ?? 0) || 0;
+  prepared.baseHeight = baseHeight;
+  const effectiveRoot = normalizeAssetRootPath(tile?.assetRoot || assetRoot || '');
+  if (effectiveRoot){
+    prepared.assetRoot = effectiveRoot;
+  }
+  if (typeof tile?.heightSampler === 'function'){
+    prepared.heightSampler = tile.heightSampler;
+  } else {
+    prepared.heightSampler = createTileHeightSampler(tile, chunkSize, baseHeight);
+  }
+  return prepared;
+}
+
+function createTileHeightSampler(tile, chunkSize, baseHeight = 0){
+  const descriptor = tile?.heightfield;
+  if (!descriptor || !Array.isArray(descriptor.data)){
+    return () => baseHeight;
+  }
+  const rows = Number(descriptor.rows) || Number(descriptor.height);
+  const cols = Number(descriptor.cols) || Number(descriptor.width);
+  if (!rows || !cols || descriptor.data.length !== rows * cols){
+    return () => baseHeight;
+  }
+  const scale = descriptor.scale || descriptor.metersPerSample || {};
+  const scaleZ = typeof scale === 'number'
+    ? scale
+    : Number(scale.z ?? scale[2] ?? descriptor.scaleZ ?? descriptor.heightScale ?? 1) || 1;
+
+  return (localX, localY) => {
+    if (rows === 1 && cols === 1){
+      return baseHeight + Number(descriptor.data[0] || 0) * scaleZ;
+    }
+    const u = Math.max(0, Math.min(0.999999, (localX / chunkSize) + 0.5));
+    const v = Math.max(0, Math.min(0.999999, (localY / chunkSize) + 0.5));
+    const col = u * (cols - 1);
+    const row = v * (rows - 1);
+    const c0 = Math.floor(col);
+    const c1 = Math.min(cols - 1, c0 + 1);
+    const r0 = Math.floor(row);
+    const r1 = Math.min(rows - 1, r0 + 1);
+    const tx = col - c0;
+    const ty = row - r0;
+    const index = (r, c) => Number(descriptor.data[r * cols + c]) || 0;
+    const h00 = index(r0, c0);
+    const h01 = index(r0, c1);
+    const h10 = index(r1, c0);
+    const h11 = index(r1, c1);
+    const h0 = h00 * (1 - tx) + h01 * tx;
+    const h1 = h10 * (1 - tx) + h11 * tx;
+    return baseHeight + ((h0 * (1 - ty) + h1 * ty) * scaleZ);
+  };
+}
+
+function createMapObject({ descriptor, chunkSize, seed, assetRoot }){
   if (!descriptor) return null;
-  const type = descriptor.type || descriptor.kind || 'box';
+  const typeValue = descriptor.type || descriptor.kind || 'box';
+  const type = typeof typeValue === 'string' ? typeValue.toLowerCase() : typeValue;
   const disposables = [];
-  let object = null;
+  let innerObject = null;
+  let readyPromise = null;
 
   if (type === 'box'){
     const size = Array.isArray(descriptor.size) ? descriptor.size : [descriptor.width, descriptor.depth, descriptor.height];
@@ -3223,7 +3516,7 @@ function createMapObject({ descriptor, chunkSize, seed }){
     mesh.castShadow = descriptor.castShadow !== false;
     mesh.receiveShadow = descriptor.receiveShadow !== false;
     mesh.position.set(0, 0, height / 2);
-    object = mesh;
+    innerObject = mesh;
     disposables.push(geometry, material);
   } else if (type === 'cylinder' || type === 'tower'){
     const radiusTop = Number(descriptor.radiusTop ?? descriptor.radius ?? 8) || 8;
@@ -3240,7 +3533,7 @@ function createMapObject({ descriptor, chunkSize, seed }){
     mesh.castShadow = descriptor.castShadow !== false;
     mesh.receiveShadow = descriptor.receiveShadow !== false;
     mesh.position.set(0, 0, height / 2);
-    object = mesh;
+    innerObject = mesh;
     disposables.push(geometry, material);
   } else if (type === 'plane'){
     const size = Array.isArray(descriptor.size) ? descriptor.size : [descriptor.width, descriptor.depth];
@@ -3258,24 +3551,186 @@ function createMapObject({ descriptor, chunkSize, seed }){
     mesh.rotation.x = -Math.PI / 2;
     mesh.receiveShadow = descriptor.receiveShadow !== false;
     mesh.castShadow = descriptor.castShadow === true;
-    object = mesh;
+    innerObject = mesh;
     disposables.push(geometry, material);
   } else if (type === 'tree' || type === 'preset:tree'){
     const rng = createSeededRng(seed || 'tree', descriptor.position?.[0] || 0, descriptor.position?.[1] || 0);
     const tree = createProceduralTree({ rng, position: { x: 0, y: 0 } });
-    object = tree.object;
-    object.position.set(0, 0, 0);
+    innerObject = tree.object;
+    innerObject.position.set(0, 0, 0);
     if (Array.isArray(tree.disposables)){
       tree.disposables.forEach((resource) => disposables.push(resource));
     }
+  } else if (type === 'gltf' || type === 'glb'){
+    const placeholder = new THREE.Group();
+    placeholder.name = descriptor.name || descriptor.label || 'GLTFObject';
+    const source = descriptor.url || descriptor.path || descriptor.src || descriptor.file;
+    const effectiveRoot = descriptor.assetRoot || assetRoot;
+    if (!source){
+      console.warn('Map object missing glTF path', descriptor);
+      readyPromise = Promise.resolve({ root: placeholder, loaded: false, disposables: [] });
+    } else {
+      readyPromise = loadGLTFAsset(source, { assetRoot: effectiveRoot }).then((gltf) => {
+        if (!gltf || !gltf.scene){
+          return { root: placeholder, loaded: false, disposables: [] };
+        }
+        const scene = gltf.scene;
+        placeholder.add(scene);
+        const resources = [];
+        scene.traverse((node) => {
+          if (!node?.isMesh) return;
+          node.castShadow = descriptor.castShadow !== false;
+          node.receiveShadow = descriptor.receiveShadow !== false;
+          if (descriptor.frustumCulled === false){
+            node.frustumCulled = false;
+          }
+          if (node.geometry){
+            const clonedGeometry = node.geometry.clone();
+            node.geometry = clonedGeometry;
+            resources.push(clonedGeometry);
+          }
+          const materials = Array.isArray(node.material) ? node.material : [node.material];
+          const clonedMaterials = materials.map((material) => {
+            if (!material) return material;
+            const clone = material.clone();
+            const override = pickMaterialOverride({ overrides: descriptor.materialOverrides, mesh: node, material })
+              || descriptor.material;
+            applyMaterialOptions(clone, override);
+            gatherMaterialTextures(clone).forEach((texture) => {
+              if (texture) resources.push(texture);
+            });
+            resources.push(clone);
+            return clone;
+          });
+          if (Array.isArray(node.material)){
+            node.material = clonedMaterials;
+          } else if (clonedMaterials.length){
+            node.material = clonedMaterials[0];
+          }
+        });
+        return { root: placeholder, loaded: true, disposables: resources };
+      }).catch((err) => {
+        console.warn('Failed to load glTF asset', source, err);
+        return { root: placeholder, loaded: false, disposables: [] };
+      });
+    }
+    innerObject = placeholder;
   }
 
-  if (!object) return null;
+  if (!innerObject) return null;
 
   const holder = new THREE.Group();
-  holder.add(object);
+  holder.name = descriptor.name || `MapObject_${type}`;
+  holder.userData = holder.userData || {};
+  holder.userData.mapObjectType = type;
+  if (descriptor.visible === false){
+    holder.visible = false;
+  }
+  holder.add(innerObject);
   applyTransform(holder, descriptor.transform || descriptor);
-  return { object: holder, disposables };
+
+  if (readyPromise){
+    readyPromise = readyPromise.then((result) => ({ ...(result || {}), root: holder }));
+  }
+
+  const ready = readyPromise
+    ? readyPromise.then((result) => normalizeLoadedObjectResult(result, holder))
+    : Promise.resolve({ root: holder, loaded: true, disposables: [] });
+
+  return { object: holder, disposables, ready, type };
+}
+
+function normalizeLoadedObjectResult(result, fallbackRoot){
+  const root = result?.root ?? fallbackRoot;
+  const loaded = result?.loaded !== false;
+  const disposables = Array.isArray(result?.disposables)
+    ? result.disposables.filter(Boolean)
+    : [];
+  return { root, loaded, disposables };
+}
+
+function pickMaterialOverride({ overrides, mesh, material } = {}){
+  if (!overrides) return null;
+
+  const sanitize = (override) => {
+    if (!override || typeof override !== 'object') return override;
+    const { target, name, mesh: meshName, material: matName, ...rest } = override;
+    if (override.override && typeof override.override === 'object'){
+      return sanitize(override.override);
+    }
+    if (Object.keys(rest).length === 0) return null;
+    return rest;
+  };
+
+  if (Array.isArray(overrides)){
+    for (const entry of overrides){
+      if (!entry) continue;
+      const target = entry.target || entry.name || entry.mesh || entry.material;
+      if (!target) continue;
+      if ((mesh?.name && mesh.name === target) || (material?.name && material.name === target)){
+        return sanitize(entry);
+      }
+    }
+    const fallback = overrides.find((entry) => entry?.default);
+    return fallback ? sanitize(fallback.default || fallback) : null;
+  }
+
+  if (mesh?.name && overrides[mesh.name]){
+    return sanitize(overrides[mesh.name]);
+  }
+  if (material?.name && overrides[material.name]){
+    return sanitize(overrides[material.name]);
+  }
+  if (overrides.default){
+    return sanitize(overrides.default);
+  }
+  return null;
+}
+
+function applyMaterialOptions(material, override){
+  if (!material || !override) return;
+  if (override.color !== undefined && material.color){
+    material.color.set(new THREE.Color(resolveColor(override.color, material.color.getHexString?.() ? `#${material.color.getHexString()}` : '#ffffff')));
+  }
+  if (override.emissive !== undefined && material.emissive){
+    material.emissive.set(new THREE.Color(resolveColor(override.emissive, material.emissive.getHexString?.() ? `#${material.emissive.getHexString()}` : '#000000')));
+  }
+  if (override.emissiveIntensity !== undefined && material.emissiveIntensity !== undefined){
+    material.emissiveIntensity = Number(override.emissiveIntensity);
+  }
+  if (override.metalness !== undefined && material.metalness !== undefined){
+    material.metalness = Number(override.metalness);
+  }
+  if (override.roughness !== undefined && material.roughness !== undefined){
+    material.roughness = Number(override.roughness);
+  }
+  if (override.opacity !== undefined && material.opacity !== undefined){
+    material.opacity = Number(override.opacity);
+  }
+  if (override.transparent !== undefined){
+    material.transparent = Boolean(override.transparent);
+  }
+  if (override.side !== undefined && material.side !== undefined){
+    material.side = override.side;
+  }
+  material.needsUpdate = true;
+}
+
+const MATERIAL_TEXTURE_KEYS = [
+  'map', 'normalMap', 'metalnessMap', 'roughnessMap', 'aoMap', 'emissiveMap', 'alphaMap', 'bumpMap',
+  'displacementMap', 'lightMap', 'clearcoatMap', 'clearcoatNormalMap', 'clearcoatRoughnessMap',
+  'sheenColorMap', 'sheenRoughnessMap', 'transmissionMap', 'thicknessMap', 'specularMap', 'specularColorMap',
+];
+
+function gatherMaterialTextures(material){
+  const textures = [];
+  MATERIAL_TEXTURE_KEYS.forEach((key) => {
+    const value = material[key];
+    if (value && typeof value.dispose === 'function'){
+      textures.push(value);
+    }
+  });
+  return textures;
 }
 
 function applyTransform(target, descriptor){
@@ -3317,6 +3772,57 @@ function resolveColor(input, fallback){
     if (typeof input.hex === 'string') return input.hex;
   }
   return fallback || '#ffffff';
+}
+
+const TMP_OBSTACLE_BOX = new THREE.Box3();
+const TMP_OBSTACLE_SIZE = new THREE.Vector3();
+const TMP_OBSTACLE_CENTER = new THREE.Vector3();
+
+function collectMeshObstacles({ root, chunkWorldOrigin, type, collision } = {}){
+  if (!root) return [];
+  const originX = chunkWorldOrigin?.x ?? 0;
+  const originY = chunkWorldOrigin?.y ?? 0;
+  const obstacles = [];
+  root.updateWorldMatrix(true, true);
+  root.traverse((node) => {
+    if (!node?.isMesh) return;
+    TMP_OBSTACLE_BOX.setFromObject(node);
+    if (!Number.isFinite(TMP_OBSTACLE_BOX.min.x) || !Number.isFinite(TMP_OBSTACLE_BOX.max.x)) return;
+    TMP_OBSTACLE_BOX.getSize(TMP_OBSTACLE_SIZE);
+    TMP_OBSTACLE_BOX.getCenter(TMP_OBSTACLE_CENTER);
+    let radius = Math.max(TMP_OBSTACLE_SIZE.x, TMP_OBSTACLE_SIZE.y) * 0.5;
+    if (collision?.radius != null){
+      const specified = Number(collision.radius);
+      if (Number.isFinite(specified)){
+        radius = specified;
+      }
+    }
+    const worldPosition = new THREE.Vector3(
+      originX + TMP_OBSTACLE_CENTER.x,
+      originY + TMP_OBSTACLE_CENTER.y,
+      TMP_OBSTACLE_CENTER.z,
+    );
+    if (Array.isArray(collision?.offset)){
+      worldPosition.x += Number(collision.offset[0]) || 0;
+      worldPosition.y += Number(collision.offset[1]) || 0;
+      worldPosition.z += Number(collision.offset[2]) || 0;
+    }
+    const topHeight = collision?.topHeight != null
+      ? Number(collision.topHeight)
+      : TMP_OBSTACLE_BOX.max.z;
+    const baseHeight = collision?.baseHeight != null
+      ? Number(collision.baseHeight)
+      : TMP_OBSTACLE_BOX.min.z;
+    obstacles.push({
+      mesh: node,
+      radius: Math.max(0, radius),
+      worldPosition,
+      topHeight,
+      baseHeight,
+      type: collision?.type || type || 'generic',
+    });
+  });
+  return obstacles;
 }
 
 function createStylizedLowpolyTemplate(){
