@@ -5,22 +5,22 @@ import { ChaseCamera } from './ChaseCamera.js';
 import { WorldStreamer } from './WorldStreamer.js';
 import { CollisionSystem } from './CollisionSystem.js';
 import { HUD } from './HUD.js';
+import {
+  createRenderer,
+  createPerspectiveCamera,
+  enableWindowResizeHandling,
+  requireTHREE,
+} from '../shared/threeSetup.js';
 
-const THREE = (typeof window !== 'undefined' ? window.THREE : globalThis?.THREE) ?? null;
-if (!THREE) throw new Error('Sandbox viewer requires THREE to be loaded globally');
+const THREE = requireTHREE();
 
 const SKY_CEILING = 1800;
 const ORIGIN_REBASE_DISTANCE = 1400;
 const ORIGIN_REBASE_DISTANCE_SQ = ORIGIN_REBASE_DISTANCE * ORIGIN_REBASE_DISTANCE;
 
-const renderer = new THREE.WebGLRenderer({ antialias: true });
-renderer.setSize(window.innerWidth, window.innerHeight);
-renderer.setPixelRatio(window.devicePixelRatio || 1);
-renderer.shadowMap.enabled = true;
-renderer.shadowMap.type = THREE.PCFSoftShadowMap;
 document.body.style.margin = '0';
 document.body.style.overflow = 'hidden';
-document.body.appendChild(renderer.domElement);
+const renderer = createRenderer();
 
 document.body.style.background = 'linear-gradient(180deg, #79a7ff 0%, #cfe5ff 45%, #f6fbff 100%)';
 
@@ -28,7 +28,7 @@ const scene = new THREE.Scene();
 scene.background = new THREE.Color(0x90b6ff);
 scene.fog = new THREE.Fog(0xa4c6ff, 1500, 4200);
 
-const camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.1, 20000);
+const camera = createPerspectiveCamera({ fov: 60, near: 0.1, far: 20000 });
 
 const hemisphere = new THREE.HemisphereLight(0xdce9ff, 0x2b4a2e, 0.85);
 scene.add(hemisphere);
@@ -154,11 +154,7 @@ function focusCameraOnCar(){
 resetPlane();
 resetCar();
 
-window.addEventListener('resize', () => {
-  camera.aspect = window.innerWidth / window.innerHeight;
-  camera.updateProjectionMatrix();
-  renderer.setSize(window.innerWidth, window.innerHeight);
-});
+enableWindowResizeHandling({ renderer, camera });
 
 function clampAltitude(controller, ground){
   if (controller.position.z > SKY_CEILING){
