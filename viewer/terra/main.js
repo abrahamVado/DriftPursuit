@@ -4,6 +4,7 @@ import { CarController, createCarRig } from '../sandbox/CarController.js';
 import { ChaseCamera } from '../sandbox/ChaseCamera.js';
 import { CollisionSystem } from '../sandbox/CollisionSystem.js';
 import { HUD } from '../sandbox/HUD.js';
+import { TerraProjectileManager } from './Projectiles.js';
 import {
   createRenderer,
   createPerspectiveCamera,
@@ -64,6 +65,7 @@ const hudPresets = {
     items: [
       { label: 'Cycle', detail: '[ / ] — change player' },
       { label: 'Focus', detail: 'F — snap to focus' },
+      { label: 'Fire', detail: 'Click / Space — fire turret' },
     ],
   },
   car: {
@@ -78,11 +80,13 @@ const hudPresets = {
     items: [
       { label: 'Cycle', detail: '[ / ] — change player' },
       { label: 'Focus', detail: 'F — snap to focus' },
+      { label: 'Fire', detail: 'Click / Space — fire turret' },
     ],
   },
 };
 
 const hud = new HUD({ controls: hudPresets.plane });
+const projectileManager = new TerraProjectileManager({ scene });
 
 const SKY_CEILING = 1800;
 const MAX_DEFAULT_VEHICLES = 5;
@@ -110,6 +114,12 @@ let activeVehicleId = null;
 
 const trackedVehicles = [];
 
+const FIRE_COOLDOWN = 0.35;
+const MIN_FAILED_FIRE_DELAY = 0.12;
+const activeFireSources = new Set();
+let fireInputHeld = false;
+let fireCooldownTimer = 0;
+
 function updateTrackedVehicles(){
   trackedVehicles.length = 0;
   for (const [id, vehicle] of vehicles.entries()){
@@ -117,6 +127,21 @@ function updateTrackedVehicles(){
     if (!state) continue;
     trackedVehicles.push({ id, mode: vehicle.mode, state });
   }
+}
+
+function setFireSourceActive(source, active){
+  if (!source) return;
+  if (active){
+    activeFireSources.add(source);
+  } else {
+    activeFireSources.delete(source);
+  }
+  fireInputHeld = activeFireSources.size > 0;
+}
+
+function resetFireInput(){
+  activeFireSources.clear();
+  fireInputHeld = false;
 }
 
 function getVehicleState(vehicle){
@@ -254,11 +279,13 @@ function createVehicleEntry(id, { isBot = false, initialMode = 'plane', spawnInd
         controller: planeController,
         mesh: planeMesh,
         cameraConfig: planeCameraConfig,
+        muzzle: planeMesh.userData?.turretMuzzle ?? null,
       },
       car: {
         controller: carController,
         rig: carRig,
         cameraConfig: carCameraConfig,
+        muzzle: carRig.carMesh.userData?.turretMuzzle ?? null,
       },
     },
     stats: {
@@ -270,6 +297,16 @@ function createVehicleEntry(id, { isBot = false, initialMode = 'plane', spawnInd
       lastPosition: transform.plane.position.clone(),
     },
     behaviorSeed: Math.random() * Math.PI * 2,
+    spawnTransform: {
+      plane: {
+        position: transform.plane.position.clone(),
+        yaw: transform.plane.yaw,
+      },
+      car: {
+        position: transform.car.position.clone(),
+        yaw: transform.car.yaw,
+      },
+    },
   };
 
   vehicles.set(id, entry);
@@ -290,6 +327,7 @@ function createVehicleEntry(id, { isBot = false, initialMode = 'plane', spawnInd
 function removeVehicle(id){
   const entry = vehicles.get(id);
   if (!entry) return;
+  projectileManager.clearByOwner(id);
   if (entry.modes.plane?.mesh){
     scene.remove(entry.modes.plane.mesh);
   }
@@ -401,6 +439,73 @@ function resetVehicleStats(vehicle){
   vehicle.stats.distance = 0;
   vehicle.stats.lastPosition.copy(state.position);
   vehicle.stats.crashCount = 0;
+}
+
+function registerVehicleCrash(vehicle, { message = 'Impact detected' } = {}){
+  if (!vehicle) return;
+  if (vehicle.stats){
+    vehicle.stats.crashCount = (vehicle.stats.crashCount ?? 0) + 1;
+  }
+  if (message){
+    hud.showMessage(message);
+  }
+  if (vehicle.id === activeVehicleId){
+    focusCameraOnVehicle(vehicle);
+  }
+}
+
+function resetCarAfterCrash(vehicle){
+  if (!vehicle) return;
+  const spawn = vehicle.spawnTransform?.car;
+  const carMode = vehicle.modes?.car;
+  if (!spawn || !carMode?.controller) return;
+  carMode.controller.reset({ position: spawn.position, yaw: spawn.yaw });
+  syncControllerVisual(carMode.controller);
+  if (vehicle.stats){
+    if (vehicle.stats.lastPosition){
+      vehicle.stats.lastPosition.copy(carMode.controller.position);
+    } else {
+      vehicle.stats.lastPosition = carMode.controller.position.clone();
+    }
+    vehicle.stats.speed = 0;
+    vehicle.stats.throttle = 0;
+  }
+}
+
+function handleProjectileHit(vehicle){
+  if (!vehicle) return;
+  registerVehicleCrash(vehicle, { message: 'Direct hit!' });
+  if (vehicle.mode === 'car'){
+    resetCarAfterCrash(vehicle);
+  }
+}
+
+function fireActiveVehicleProjectile(){
+  if (!activeVehicleId) return false;
+  const vehicle = vehicles.get(activeVehicleId);
+  if (!vehicle) return false;
+  const modeName = vehicle.mode;
+  const mode = vehicle.modes?.[modeName];
+  if (!mode) return false;
+
+  let muzzle = null;
+  let controller = mode.controller ?? null;
+
+  if (modeName === 'plane'){
+    muzzle = mode.mesh?.userData?.turretMuzzle ?? mode.muzzle ?? null;
+  } else if (modeName === 'car'){
+    const carMesh = mode.rig?.carMesh ?? null;
+    muzzle = carMesh?.userData?.turretMuzzle ?? mode.muzzle ?? null;
+  }
+
+  if (!muzzle) return false;
+
+  const inheritVelocity = controller?.velocity ?? null;
+  const projectile = projectileManager.spawnFromMuzzle(muzzle, {
+    ownerId: vehicle.id,
+    inheritVelocity,
+  });
+  return !!projectile;
 }
 
 function updateVehicleStats(vehicle, dt){
@@ -557,7 +662,39 @@ window.addEventListener('keydown', (event) => {
     cycleActiveVehicle(-1);
   } else if (event.code === 'KeyF'){
     handleFocusShortcut();
+  } else if ((event.code === 'Space' || event.code === 'KeyX' || event.code === 'Enter') && !event.repeat){
+    setFireSourceActive(event.code, true);
+    event.preventDefault();
   }
+});
+
+window.addEventListener('keyup', (event) => {
+  if (event.code === 'Space' || event.code === 'KeyX' || event.code === 'Enter'){
+    setFireSourceActive(event.code, false);
+    event.preventDefault();
+  }
+});
+
+window.addEventListener('mousedown', (event) => {
+  if (event.button === 0){
+    setFireSourceActive(`mouse-${event.button}`, true);
+    event.preventDefault();
+  }
+});
+
+window.addEventListener('mouseup', (event) => {
+  if (event.button === 0){
+    setFireSourceActive(`mouse-${event.button}`, false);
+    event.preventDefault();
+  }
+});
+
+window.addEventListener('mouseleave', () => {
+  setFireSourceActive('mouse-0', false);
+});
+
+window.addEventListener('blur', () => {
+  resetFireInput();
 });
 
 function cycleActiveVehicle(delta){
@@ -599,9 +736,7 @@ function evaluateCollisions(vehicle){
   if (!state) return;
   const result = collisionSystem.evaluate(state);
   if (result.crashed){
-    vehicle.stats.crashCount += 1;
-    hud.showMessage('Impact detected');
-    focusCameraOnVehicle(vehicle);
+    registerVehicleCrash(vehicle, { message: 'Impact detected' });
   }
 }
 
@@ -621,6 +756,18 @@ function animate(now){
   }
 
   selectActiveVehicle();
+
+  fireCooldownTimer = Math.max(0, fireCooldownTimer - dt);
+  if (fireInputHeld && fireCooldownTimer <= 0){
+    const fired = fireActiveVehicleProjectile();
+    fireCooldownTimer = fired ? FIRE_COOLDOWN : MIN_FAILED_FIRE_DELAY;
+  }
+
+  projectileManager.update(dt, {
+    vehicles,
+    onVehicleHit: handleProjectileHit,
+  });
+
   const activeVehicle = activeVehicleId ? vehicles.get(activeVehicleId) : null;
   if (activeVehicle){
     const state = getVehicleState(activeVehicle);
