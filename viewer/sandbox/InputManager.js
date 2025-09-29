@@ -11,6 +11,8 @@ const DEFAULT_KEY_BINDINGS = {
   pitchUp: ['KeyW'],
   pitchDown: ['KeyS'],
   brake: ['Space'],
+  throttleUp: [],
+  throttleDown: [],
 };
 
 const DEADZONE = 0.06;
@@ -52,12 +54,13 @@ export class InputManager {
   constructor({
     element = window,
     useMouseWheelThrottle = true,
-    useKeyboardThrottle = true,
+    useKeyboardThrottle = false,
     useKeyboardPitch = false,
     pointerSmoothing = 9,
     pointerSensitivity = { yaw: 0.9, pitch: 0.8 },
     rollAssist = 0.55,
     keyBindings = {},
+    cameraOrbitSensitivity = { yaw: 0.0032, pitch: 0.0026 },
   } = {}) {
     this.element = element;
 
@@ -85,11 +88,22 @@ export class InputManager {
     // throttle impulses (mouse wheel adds bursts)
     this.throttleImpulse = 0;
 
+    // camera orbit
+    this.cameraOrbitSensitivity = {
+      yaw: cameraOrbitSensitivity.yaw ?? 0.0032,
+      pitch: cameraOrbitSensitivity.pitch ?? 0.0026,
+    };
+    this.cameraOrbitDelta = { x: 0, y: 0 };
+    this.pointerDown = false;
+    this.lastButtons = 0;
+
     // bind handlers
     this._onKeyDown = this.handleKeyDown.bind(this);
     this._onKeyUp = this.handleKeyUp.bind(this);
     this._onPointerMove = this.handlePointerMove.bind(this);
     this._onPointerLeave = this.handlePointerLeave.bind(this);
+    this._onPointerDown = this.handlePointerDown.bind(this);
+    this._onPointerUp = this.handlePointerUp.bind(this);
     this._onWheel = this.handleWheel.bind(this);
 
     // listeners
@@ -97,6 +111,8 @@ export class InputManager {
     element.addEventListener('keyup', this._onKeyUp);
     element.addEventListener('pointermove', this._onPointerMove);
     element.addEventListener('pointerleave', this._onPointerLeave);
+    element.addEventListener('pointerdown', this._onPointerDown);
+    element.addEventListener('pointerup', this._onPointerUp);
     if (this.useMouseWheelThrottle) {
       element.addEventListener('wheel', this._onWheel, { passive: false });
     }
@@ -108,6 +124,8 @@ export class InputManager {
     this.element.removeEventListener('keyup', this._onKeyUp);
     this.element.removeEventListener('pointermove', this._onPointerMove);
     this.element.removeEventListener('pointerleave', this._onPointerLeave);
+    this.element.removeEventListener('pointerdown', this._onPointerDown);
+    this.element.removeEventListener('pointerup', this._onPointerUp);
     if (this.useMouseWheelThrottle) {
       this.element.removeEventListener('wheel', this._onWheel);
     }
@@ -139,11 +157,33 @@ export class InputManager {
 
     this.pointerTarget.x = THREE.MathUtils.clamp(nx, -1.2, 1.2);
     this.pointerTarget.y = THREE.MathUtils.clamp(ny, -1.2, 1.2);
+
+    const movementX = event.movementX ?? event.mozMovementX ?? event.webkitMovementX ?? 0;
+    const movementY = event.movementY ?? event.mozMovementY ?? event.webkitMovementY ?? 0;
+    const buttons = event.buttons ?? this.lastButtons;
+    if ((buttons & 1) === 1) {
+      this.cameraOrbitDelta.x += movementX;
+      this.cameraOrbitDelta.y += movementY;
+    }
+    this.lastButtons = buttons;
   }
 
   handlePointerLeave() {
     this.pointerTarget.x = 0;
     this.pointerTarget.y = 0;
+    this.pointerDown = false;
+  }
+
+  handlePointerDown(event) {
+    if (event.button === 0) {
+      this.pointerDown = true;
+    }
+  }
+
+  handlePointerUp(event) {
+    if (event.button === 0) {
+      this.pointerDown = false;
+    }
   }
 
   handleWheel(event) {
@@ -162,12 +202,9 @@ export class InputManager {
     this.pointer.y += (this.pointerTarget.y - this.pointer.y) * blend;
 
     // --- Digital axes ---
-    const rollDigital = applyDeadzone(applyDigitalAxis(this.keyBindings.rollRight, this.keyBindings.rollLeft, this.activeKeys));
+    const yawDigital = applyDeadzone(applyDigitalAxis(this.keyBindings.rollRight, this.keyBindings.rollLeft, this.activeKeys));
 
-    // Optional keyboard pitch (e.g., W/S also pitch in addition to mouse)
-    const pitchDigital = this.useKeyboardPitch
-      ? applyDeadzone(applyDigitalAxis(this.keyBindings.pitchUp, this.keyBindings.pitchDown, this.activeKeys))
-      : 0;
+    const pitchDigital = applyDeadzone(applyDigitalAxis(this.keyBindings.pitchUp, this.keyBindings.pitchDown, this.activeKeys));
 
     // Keyboard throttle (continuous while held)
     const throttleDigital = this.useKeyboardThrottle
@@ -184,35 +221,63 @@ export class InputManager {
     const yaw = applyDeadzone(this.pointer.x * this.pointerSensitivity.yaw);
     const pitchFromMouse = this.pointer.y * this.pointerSensitivity.pitch;
 
-    const pitch = applyDeadzone(pitchFromMouse + pitchDigital);
-    const roll = applyDeadzone(this.pointer.x * this.rollAssist + rollDigital);
+    // Plane controls rely on keyboard by default. Pointer remains available for other systems.
+    const pitch = applyDeadzone((this.useKeyboardPitch ? pitchFromMouse : 0) + pitchDigital);
+    const roll = yawDigital;
+    const yaw = yawDigital;
 
     // Throttle adjust combines continuous digital + bursty wheel
     const throttleAdjust = throttleDigital + throttleImpulse;
 
-    return { pitch, roll, yaw, throttleAdjust, brake };
+    const cameraOrbit = {
+      yawDelta: this.cameraOrbitDelta.x * this.cameraOrbitSensitivity.yaw,
+      pitchDelta: this.cameraOrbitDelta.y * this.cameraOrbitSensitivity.pitch,
+      active: this.pointerDown,
+    };
+    this.cameraOrbitDelta.x = 0;
+    this.cameraOrbitDelta.y = 0;
+
+    return {
+      plane: { pitch, roll, yaw, throttleAdjust, brake },
+      car: {
+        throttle: pitchDigital,
+        steer: yawDigital,
+        brake,
+        aim: { x: this.pointer.x, y: this.pointer.y },
+      },
+      cameraOrbit,
+    };
   }
 }
 
-export function describeControls({ useMouseWheelThrottle = true, useKeyboardThrottle = true, useKeyboardPitch = false } = {}) {
-  const lines = [
-    { label: 'Aim', detail: 'Move mouse to steer nose (yaw/pitch)' },
-    { label: 'Roll', detail: 'A banks left · D banks right' },
-  ];
-
-  if (useKeyboardPitch) {
-    lines.push({ label: 'Pitch (keys)', detail: 'W climbs · S descends' });
+export function describeControls(mode = 'plane') {
+  if (mode === 'car') {
+    return {
+      title: 'Drive Controls',
+      throttleLabel: 'PWR',
+      metricLabels: { time: 'Drive Time', distance: 'Distance', speed: 'Speed', crashes: 'Crashes' },
+      items: [
+        { label: 'Drive', detail: 'W accelerate · S reverse' },
+        { label: 'Steer', detail: 'A turn left · D turn right' },
+        { label: 'Brake', detail: 'Space for handbrake' },
+        { label: 'Stick', detail: 'Move mouse to sway tower' },
+        { label: 'Camera', detail: 'Hold Left Mouse to orbit view' },
+        { label: 'Mode', detail: 'Press 1 for plane · 2 for car' },
+      ],
+    };
   }
 
-  if (useMouseWheelThrottle) {
-    lines.push({ label: 'Throttle', detail: 'Mouse wheel to adjust thrust' });
-  }
-
-  if (useKeyboardThrottle) {
-    lines.push({ label: 'Throttle (keys)', detail: 'Hold W to accelerate · S to decelerate' });
-  }
-
-  lines.push({ label: 'Brake', detail: 'Space for airbrake' });
-
-  return lines;
+  return {
+    title: 'Flight Controls',
+    throttleLabel: 'THR',
+    metricLabels: { time: 'Flight Time', distance: 'Distance', speed: 'Speed', crashes: 'Crashes' },
+    items: [
+      { label: 'Pitch', detail: 'W climbs · S dives' },
+      { label: 'Turn', detail: 'A yaw & roll left · D yaw & roll right' },
+      { label: 'Throttle', detail: 'Mouse wheel to adjust thrust' },
+      { label: 'Brake', detail: 'Space for airbrake' },
+      { label: 'Camera', detail: 'Hold Left Mouse to orbit view' },
+      { label: 'Mode', detail: 'Press 1 for plane · 2 for car' },
+    ],
+  };
 }
