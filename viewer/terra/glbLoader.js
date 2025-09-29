@@ -18,6 +18,9 @@ function normalizeAssetRoot(root){
 function resolveAssetUrl(path, assetRoot){
   if (!path) return null;
   const normalizedPath = String(path).replace(/\\/g, '/').replace(/^\.\//, '');
+  if (/^data:/i.test(normalizedPath)){
+    return normalizedPath;
+  }
   if (/^https?:\/\//i.test(normalizedPath) || normalizedPath.startsWith('/')){
     return normalizedPath;
   }

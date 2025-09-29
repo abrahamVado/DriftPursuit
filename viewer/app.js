@@ -3815,11 +3815,17 @@ function collectMeshObstacles({ root, chunkWorldOrigin, type, collision } = {}){
       : TMP_OBSTACLE_BOX.min.z;
     obstacles.push({
       mesh: node,
+      meshId: node.uuid,
       radius: Math.max(0, radius),
       worldPosition,
       topHeight,
       baseHeight,
       type: collision?.type || type || 'generic',
+      bounds: {
+        min: TMP_OBSTACLE_BOX.min.clone(),
+        max: TMP_OBSTACLE_BOX.max.clone(),
+        size: TMP_OBSTACLE_SIZE.clone(),
+      },
     });
   });
   return obstacles;
