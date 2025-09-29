@@ -5,6 +5,7 @@ import { ChaseCamera } from '../sandbox/ChaseCamera.js';
 import { CollisionSystem } from '../sandbox/CollisionSystem.js';
 import { TerraHUD } from './TerraHUD.js';
 import { TerraProjectileManager } from './Projectiles.js';
+import { TerraInputManager } from './InputManager.js';
 import {
   createRenderer,
   createPerspectiveCamera,
@@ -44,7 +45,7 @@ const world = new TerraWorldStreamer({ scene, chunkSize: 640, radius: 3, seed: 9
 const collisionSystem = new CollisionSystem({ world, crashMargin: 2.4, obstaclePadding: 3.2 });
 
 // 🔧 Standardize on TerraProjectileManager
-const projectileManager = new TerraProjectileManager({ scene });
+const projectileManager = new TerraProjectileManager({ scene, world });
 const ammoPresets = projectileManager.getAmmoTypes();
 
 const chaseCamera = new ChaseCamera(camera, {
@@ -122,6 +123,10 @@ const carCameraConfig = {
   pitchInfluence: 0.22,
 };
 
+const input = new TerraInputManager();
+const LOCAL_PLAYER_ID = 'pilot-local';
+const ORIGIN_FALLBACK = new THREE.Vector3(0, 0, 0);
+
 const vehicles = new Map();
 let activeVehicleId = null;
 
@@ -170,6 +175,18 @@ function ensureVehicleVisibility(vehicle){
   const { plane, car } = vehicle.modes;
   if (plane?.mesh) plane.mesh.visible = vehicle.mode === 'plane';
   if (car?.rig?.carMesh) car.rig.carMesh.visible = vehicle.mode === 'car';
+}
+
+function switchVehicleMode(vehicle, mode){
+  if (!vehicle || !mode) return;
+  if (vehicle.mode === mode) return;
+  if (!vehicle.modes?.[mode]) return;
+  vehicle.mode = mode;
+  ensureVehicleVisibility(vehicle);
+  if (vehicle.id === activeVehicleId){
+    applyHudControls(vehicle);
+    focusCameraOnVehicle(vehicle);
+  }
 }
 
 function applyHudControls(vehicle){
@@ -577,7 +594,48 @@ function updateCarBot(vehicle, dt, elapsedTime){
   });
 }
 
-function updateVehicleController(vehicle, dt, elapsedTime){
+function updateLocalVehicle(vehicle, dt, inputSample){
+  if (!vehicle) return;
+  const modeRequest = inputSample?.modeRequest;
+  if (modeRequest && vehicle.modes?.[modeRequest]){
+    switchVehicleMode(vehicle, modeRequest);
+    if (vehicle.id === LOCAL_PLAYER_ID && activeVehicleId !== LOCAL_PLAYER_ID){
+      setActiveVehicle(LOCAL_PLAYER_ID);
+    }
+  }
+
+  const currentMode = vehicle.mode;
+  if (currentMode === 'plane'){
+    const controller = vehicle.modes.plane.controller;
+    if (!controller) return;
+    const planeInput = inputSample?.plane ?? {};
+    controller.update(dt, {
+      pitch: planeInput.pitch ?? 0,
+      roll: planeInput.roll ?? 0,
+      yaw: planeInput.yaw ?? 0,
+      throttleAdjust: planeInput.throttleAdjust ?? 0,
+      brake: planeInput.brake ?? false,
+      aim: planeInput.aim ?? { x: 0, y: 0 },
+    }, {
+      clampAltitude: clampPlaneAltitude,
+      sampleGroundHeight: (x, y) => world.getHeightAt(x, y),
+    });
+  } else if (currentMode === 'car'){
+    const controller = vehicle.modes.car.controller;
+    if (!controller) return;
+    const carInput = inputSample?.car ?? {};
+    controller.update(dt, {
+      throttle: carInput.throttle ?? 0,
+      steer: carInput.steer ?? 0,
+      brake: carInput.brake ?? false,
+      aim: carInput.aim ?? { x: 0, y: 0 },
+    }, {
+      sampleGroundHeight: (x, y) => world.getHeightAt(x, y),
+    });
+  }
+}
+
+function updateVehicleController(vehicle, dt, elapsedTime, inputSample){
   if (!vehicle) return;
   if (vehicle.isBot){
     if (vehicle.mode === 'plane'){
@@ -585,6 +643,8 @@ function updateVehicleController(vehicle, dt, elapsedTime){
     } else {
       updateCarBot(vehicle, dt, elapsedTime);
     }
+  } else if (vehicle.id === LOCAL_PLAYER_ID){
+    updateLocalVehicle(vehicle, dt, inputSample);
   }
 }
 
@@ -764,8 +824,10 @@ function animate(now){
   lastTime = now;
   elapsedTime += dt;
 
+  const inputSample = input.readState(dt);
+
   for (const vehicle of vehicles.values()){
-    updateVehicleController(vehicle, dt, elapsedTime);
+    updateVehicleController(vehicle, dt, elapsedTime, inputSample);
     stepVehicleAttachments(vehicle, dt);
     updateVehicleStats(vehicle, dt);
   }
@@ -782,7 +844,11 @@ function animate(now){
   projectileManager.update(dt, {
     vehicles,
     onVehicleHit: handleProjectileHit,
-    // Optionally: add onImpact callback in TerraProjectileManager to call world.applyProjectileImpact?.(impact)
+    onImpact: (impact) => {
+      if (typeof world.applyProjectileImpact === 'function'){
+        world.applyProjectileImpact(impact);
+      }
+    },
   });
 
   const activeVehicle = activeVehicleId ? vehicles.get(activeVehicleId) : null;
@@ -790,11 +856,11 @@ function animate(now){
     const state = getVehicleState(activeVehicle);
     if (state){
       chaseCamera.setConfig(activeVehicle.modes[activeVehicle.mode]?.cameraConfig ?? planeCameraConfig);
-      chaseCamera.update(state, dt, null);
+      chaseCamera.update(state, dt, inputSample?.cameraOrbit ?? null);
       world.update(state.position);
     }
   } else {
-    world.update(new THREE.Vector3(0, 0, 0));
+    world.update(ORIGIN_FALLBACK);
   }
 
   evaluateCollisions(activeVehicle);
@@ -805,8 +871,19 @@ function animate(now){
 }
 
 spawnDefaultVehicles();
-focusCameraOnVehicle(activeVehicleId ? vehicles.get(activeVehicleId) : vehicles.values().next().value ?? null);
-world.update(new THREE.Vector3(0, 0, 0));
+handlePlayerJoin(LOCAL_PLAYER_ID, { initialMode: 'plane' });
+const initialVehicle = activeVehicleId ? vehicles.get(activeVehicleId) : vehicles.get(LOCAL_PLAYER_ID) ?? vehicles.values().next().value ?? null;
+if (initialVehicle){
+  focusCameraOnVehicle(initialVehicle);
+  const state = getVehicleState(initialVehicle);
+  if (state){
+    world.update(state.position);
+  } else {
+    world.update(ORIGIN_FALLBACK);
+  }
+} else {
+  world.update(ORIGIN_FALLBACK);
+}
 requestAnimationFrame(animate);
 
 // 🔧 Public API: rewire to current systems
