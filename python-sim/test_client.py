@@ -7,6 +7,7 @@ import sys
 from pathlib import Path
 from queue import Queue
 
+import numpy as np
 import pytest
 
 
@@ -15,11 +16,13 @@ if str(THIS_DIR) not in sys.path:
     sys.path.append(str(THIS_DIR))
 
 import client  # noqa: E402  - imported after path adjustments
+from collision import CollisionSystem  # noqa: E402
 from navigation import (  # noqa: E402
     CruiseController,
     FlightPathPlanner,
     build_default_waypoints,
 )
+from world import WorldStreamer  # noqa: E402
 
 
 class DummyWebSocket:
@@ -38,7 +41,14 @@ def _build_sim_context():
     cruise = CruiseController(acceleration=18.0, max_speed=250.0)
     ws = DummyWebSocket()
     queue: Queue = Queue()
-    return plane, planner, cruise, ws, queue
+    streamer = WorldStreamer()
+    collision_system = CollisionSystem(
+        spawn_position=plane.pos.copy(),
+        spawn_orientation=plane.ori,
+        ground_height_fn=streamer.sample_ground_height,
+    )
+    streamer.update(plane.pos[:2])
+    return plane, planner, cruise, ws, queue, streamer, collision_system
 
 
 def _last_status(ws: DummyWebSocket) -> dict:
@@ -51,11 +61,33 @@ def _last_status(ws: DummyWebSocket) -> dict:
     return status_payloads[-1]
 
 
+def _send_command(
+    plane,
+    planner,
+    cruise,
+    ws,
+    queue,
+    payload_logger,
+    streamer,
+    collision_system,
+):
+    client.process_pending_commands(
+        plane,
+        planner,
+        cruise,
+        ws,
+        queue,
+        payload_logger,
+        streamer,
+        collision_system,
+    )
+
+
 def test_process_pending_commands_handles_drop_cake():
-    plane, planner, cruise, ws, queue = _build_sim_context()
+    plane, planner, cruise, ws, queue, streamer, collision_system = _build_sim_context()
     queue.put({"type": "command", "cmd": "drop_cake", "from": "tester", "params": {}})
 
-    client.process_pending_commands(plane, planner, cruise, ws, queue, None)
+    _send_command(plane, planner, cruise, ws, queue, None, streamer, collision_system)
 
     assert len(ws.sent_messages) == 2
     cake = json.loads(ws.sent_messages[0])
@@ -66,7 +98,7 @@ def test_process_pending_commands_handles_drop_cake():
 
 
 def test_set_waypoints_command_updates_planner():
-    plane, planner, cruise, ws, queue = _build_sim_context()
+    plane, planner, cruise, ws, queue, streamer, collision_system = _build_sim_context()
     new_waypoints = [[10, 20, 30], [40, 50, 60]]
     queue.put(
         {
@@ -77,7 +109,7 @@ def test_set_waypoints_command_updates_planner():
         }
     )
 
-    client.process_pending_commands(plane, planner, cruise, ws, queue, None)
+    _send_command(plane, planner, cruise, ws, queue, None, streamer, collision_system)
 
     target = planner.current_target()
     assert (target.x, target.y, target.z) == (10.0, 20.0, 30.0)
@@ -90,7 +122,7 @@ def test_set_waypoints_command_updates_planner():
 
 
 def test_set_speed_command_updates_cruise_controller():
-    plane, planner, cruise, ws, queue = _build_sim_context()
+    plane, planner, cruise, ws, queue, streamer, collision_system = _build_sim_context()
     queue.put(
         {
             "type": "command",
@@ -100,7 +132,7 @@ def test_set_speed_command_updates_cruise_controller():
         }
     )
 
-    client.process_pending_commands(plane, planner, cruise, ws, queue, None)
+    _send_command(plane, planner, cruise, ws, queue, None, streamer, collision_system)
 
     assert cruise.max_speed == 310
     assert cruise.acceleration == 25
@@ -109,6 +141,40 @@ def test_set_speed_command_updates_cruise_controller():
     assert status["status"] == "ok"
     assert status["result"]["max_speed"] == 310
     assert status["result"]["acceleration"] == 25
+
+
+def test_set_map_command_updates_world_streamer():
+    plane, planner, cruise, ws, queue, streamer, collision_system = _build_sim_context()
+    plane.pos[:] = np.array([400.0, 400.0, 50.0])
+
+    descriptor = {
+        "id": "test_map",
+        "type": "tilemap",
+        "tileSize": 100,
+        "visibleRadius": 1,
+        "tiles": [
+            {"coords": [0, 0], "baseHeight": 10.0},
+        ],
+        "fallback": {"type": "none"},
+    }
+
+    queue.put({"type": "command", "cmd": "set_map", "from": "tester", "params": {"descriptor": descriptor}})
+
+    _send_command(plane, planner, cruise, ws, queue, None, streamer, collision_system)
+
+    status = _last_status(ws)
+    assert status["cmd"] == "set_map"
+    assert status["status"] == "ok"
+    assert status["result"]["map_id"] == "test_map"
+    assert streamer.descriptor.id == "test_map"
+
+    ground = streamer.sample_ground_height(0.0, 0.0)
+    assert ground == pytest.approx(10.0)
+
+    # Plane was outside bounds, so it should have been clamped near the tile center
+    assert plane.pos[0] == pytest.approx(5.0)
+    assert plane.pos[1] == pytest.approx(5.0)
+    assert plane.pos[2] >= ground + 120.0
 
 
 def test_parse_args_defaults_to_30_hz_tick():
