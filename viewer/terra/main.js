@@ -1,5 +1,5 @@
 import { WorldStreamer } from '../sandbox/WorldStreamer.js';
-import { PlaneController, createPlaneMesh } from '../sandbox/PlaneController.js';
+import { TerraPlaneController, createPlaneMesh } from './PlaneController.js';
 import { CarController, createCarRig } from '../sandbox/CarController.js';
 import { ChaseCamera } from '../sandbox/ChaseCamera.js';
 import { CollisionSystem } from '../sandbox/CollisionSystem.js';
@@ -215,8 +215,13 @@ function createVehicleEntry(id, { isBot = false, initialMode = 'plane', spawnInd
   const planeMesh = createPlaneMesh();
   scene.add(planeMesh);
 
-  const planeController = new PlaneController();
-  planeController.attachMesh(planeMesh);
+  const planeController = new TerraPlaneController();
+  planeController.attachMesh(planeMesh, {
+    turretYawGroup: planeMesh.userData?.turretYawGroup,
+    turretPitchGroup: planeMesh.userData?.turretPitchGroup,
+    stickYaw: planeMesh.userData?.turretStickYaw,
+    stickPitch: planeMesh.userData?.turretStickPitch,
+  });
   planeController.reset({
     position: transform.plane.position,
     yaw: transform.plane.yaw,
@@ -424,6 +429,10 @@ function updatePlaneBot(vehicle, dt, elapsedTime){
     roll: Math.sin(oscillation * 0.65) * 0.42,
     throttleAdjust: Math.sin(oscillation * 0.18) * 0.05,
     brake: false,
+    aim: {
+      x: Math.sin(oscillation * 0.52) * 0.65,
+      y: Math.cos(oscillation * 0.41) * 0.5,
+    },
   };
   controller.update(dt, input, {
     clampAltitude: clampPlaneAltitude,
@@ -460,6 +469,14 @@ function updateVehicleController(vehicle, dt, elapsedTime){
   }
 }
 
+function stepVehicleAttachments(vehicle, dt){
+  if (!vehicle) return;
+  const plane = vehicle.modes?.plane;
+  if (plane?.controller?.stepTurretAim){
+    plane.controller.stepTurretAim(dt);
+  }
+}
+
 function applyVehicleSnapshot(id, snapshot = {}){
   const vehicle = vehicles.get(id);
   if (!vehicle) return;
@@ -482,6 +499,20 @@ function applyVehicleSnapshot(id, snapshot = {}){
   if (typeof snapshot.speed === 'number') controller.speed = snapshot.speed;
   if (typeof snapshot.throttle === 'number') controller.throttle = snapshot.throttle;
   if (typeof snapshot.targetThrottle === 'number') controller.targetThrottle = snapshot.targetThrottle;
+
+  const planeMode = vehicle.modes?.plane;
+  if (planeMode?.controller?.setTurretAimTarget){
+    const turretAim = snapshot.planeAim ?? snapshot.aircraftAim ?? snapshot.airAim ?? snapshot.turretAim ?? null;
+    if (turretAim){
+      planeMode.controller.setTurretAimTarget(turretAim, { immediate: !!snapshot.instantAim });
+    }
+  }
+  if (planeMode?.controller?.setTurretOrientation){
+    const turretOrientation = snapshot.turretOrientation ?? snapshot.turretAngles ?? snapshot.turret ?? null;
+    if (turretOrientation){
+      planeMode.controller.setTurretOrientation(turretOrientation);
+    }
+  }
 
   syncControllerVisual(controller);
 
@@ -585,6 +616,7 @@ function animate(now){
 
   for (const vehicle of vehicles.values()){
     updateVehicleController(vehicle, dt, elapsedTime);
+    stepVehicleAttachments(vehicle, dt);
     updateVehicleStats(vehicle, dt);
   }
 
