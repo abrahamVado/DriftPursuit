@@ -40,6 +40,17 @@ export class PlaneController {
     if (mesh){
       mesh.position.copy(this.position);
       mesh.quaternion.copy(this.orientation);
+      if (!mesh.getObjectByName?.('leadTarget')){
+        const targetGeometry = new THREE.SphereGeometry(0.45, 12, 12);
+        const targetMaterial = new THREE.MeshBasicMaterial({ color: 0xffe26f, toneMapped: false });
+        targetMaterial.depthTest = false;
+        targetMaterial.depthWrite = false;
+        const leadTarget = new THREE.Mesh(targetGeometry, targetMaterial);
+        leadTarget.name = 'leadTarget';
+        leadTarget.position.set(0, 10, 0);
+        leadTarget.renderOrder = 2;
+        mesh.add(leadTarget);
+      }
     }
   }
 
@@ -58,6 +69,10 @@ export class PlaneController {
     if (this.mesh){
       this.mesh.position.copy(this.position);
       this.mesh.quaternion.copy(this.orientation);
+      const leadTarget = this.mesh.getObjectByName?.('leadTarget');
+      if (leadTarget){
+        leadTarget.position.set(0, 10, 0);
+      }
     }
   }
 
