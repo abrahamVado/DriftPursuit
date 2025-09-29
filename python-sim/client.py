@@ -21,6 +21,7 @@ from urllib.parse import urlparse
 import numpy as np
 from websocket import create_connection, WebSocketConnectionClosedException
 
+from collision import CollisionSystem
 from navigation import (
     CruiseController,
     FlightPathPlanner,
@@ -386,6 +387,12 @@ def run(
     planner = FlightPathPlanner(waypoint_list, loop=True, arrival_tolerance=80.0)
     cruise = CruiseController(acceleration=18.0, max_speed=250.0)
 
+    collision_system = CollisionSystem(
+        spawn_position=p.pos.copy(),
+        spawn_orientation=p.ori,
+        start_time=time.time(),
+    )
+
     rng = np.random.default_rng(random_seed)
 
     t0 = time.time()
@@ -447,6 +454,12 @@ def run(
                         p.vel = cruise.apply(p.vel, desired_direction, tick_interval)
                         p.ori = list(CruiseController.orientation_from_velocity(p.vel))
                         p.step(tick_interval)
+
+                    # Handle collisions before processing commands so resets
+                    # happen with the freshest aircraft state.
+                    hit, crashed = collision_system.handle_step(p, ensure_tag_fn=ensure_tag)
+                    if crashed:
+                        print("Collision detected – resetting aircraft to last safe checkpoint")
 
                     # Handle incoming commands
                     process_pending_commands(p, planner, cruise, ws, command_queue, payload_logger)
