@@ -1370,7 +1370,6 @@ function initThree(){
   document.body.appendChild(renderer.domElement);
 
   chaseCam = new ChaseCam(camera);
-  chaseCam.setOffsets(40, 20);
 
   worldOriginOffset = new THREE.Vector3(0, 0, 0);
 
@@ -1479,7 +1478,9 @@ function updateCameraTarget(mesh){
     chaseCam.follow(mesh);
     chaseCam.snapToTarget();
   } else if (camera){
-    camera.position.set(mesh.position.x - 40, mesh.position.y, mesh.position.z + 20);
+    // If the chase camera has not been initialized yet, approximate the new baseline
+    // offsets (50 back, 10 up) so the manual view matches the default follow distance.
+    camera.position.set(mesh.position.x - 50, mesh.position.y, mesh.position.z + 10);
     camera.lookAt(mesh.position);
   }
 }
