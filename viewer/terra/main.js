@@ -3,7 +3,7 @@ import { TerraPlaneController, createPlaneMesh } from './PlaneController.js';
 import { CarController, createCarRig } from '../sandbox/CarController.js';
 import { ChaseCamera } from '../sandbox/ChaseCamera.js';
 import { CollisionSystem } from '../sandbox/CollisionSystem.js';
-import { HUD } from '../sandbox/HUD.js';
+import { TerraHUD } from './TerraHUD.js';
 import { TerraProjectileManager } from './Projectiles.js';
 import {
   createRenderer,
@@ -45,6 +45,7 @@ const collisionSystem = new CollisionSystem({ world, crashMargin: 2.4, obstacleP
 
 // 🔧 Standardize on TerraProjectileManager
 const projectileManager = new TerraProjectileManager({ scene });
+const ammoPresets = projectileManager.getAmmoTypes();
 
 const chaseCamera = new ChaseCamera(camera, {
   distance: 82,
@@ -88,7 +89,17 @@ const hudPresets = {
   },
 };
 
-const hud = new HUD({ controls: hudPresets.plane });
+const hud = new TerraHUD({
+  controls: hudPresets.plane,
+  ammoOptions: ammoPresets,
+  onAmmoSelect: (ammoId) => {
+    const accepted = projectileManager.setAmmoType(ammoId);
+    if (!accepted){
+      hud.setActiveAmmo(projectileManager.getCurrentAmmoId());
+    }
+  },
+});
+hud.setActiveAmmo(projectileManager.getCurrentAmmoId());
 
 const SKY_CEILING = 1800;
 const MAX_DEFAULT_VEHICLES = 5;
@@ -817,5 +828,15 @@ window.DriftPursuitTerra = {
   // fire() now uses the active vehicle’s muzzle via TerraProjectileManager
   fire(){
     return fireActiveVehicleProjectile();
+  },
+  setAmmo(ammoId){
+    const accepted = projectileManager.setAmmoType(ammoId);
+    if (accepted){
+      hud.setActiveAmmo(projectileManager.getCurrentAmmoId());
+    }
+    return accepted;
+  },
+  getAmmoTypes(){
+    return projectileManager.getAmmoTypes().map(({ id, name, effect }) => ({ id, name, effect }));
   },
 };
