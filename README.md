@@ -17,6 +17,28 @@ The viewer shows a status banner while it connects to the Go broker. Earlier rev
 
 Store the screenshot wherever you publish your documentation or knowledge base—keeping it out of the repository avoids unnecessary binary churn.
 
+## Sandbox flight demo (three.js)
+
+For a self-contained arcade flight sandbox that satisfies the open-world brief, serve the `viewer/` directory with any static file server and open the sandbox entry point:
+
+```bash
+cd viewer
+npx http-server -p 8080 .
+# or: python -m http.server 8080
+```
+
+Then visit [`http://localhost:8080/sandbox/index.html`](http://localhost:8080/sandbox/index.html).
+
+Controls:
+
+- **W / S (or ↑ / ↓)** – Pitch nose down / up
+- **A / D (or ← / →)** – Roll left / right
+- **Q / E** – Rudder yaw
+- **R / F** – Increase / decrease throttle
+- **X** – Hold for airbrake (cuts throttle quickly)
+
+The HUD overlays throttle, airspeed, altitude, crash counter, and the same control reference. The world streams procedurally generated hills and mountain ridges around the aircraft, rebasing the origin automatically so you can keep flying without running into floating point precision issues. Colliding with terrain or props triggers an instant crash/restart and increments the counter.
+
 ## Prerequisites
 
 - Go 1.20 or newer
