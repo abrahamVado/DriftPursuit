@@ -253,6 +253,13 @@ export function createPlaneMesh(){
   group.userData.turretPitchGroup = turretPitchGroup;
   group.userData.turretStickYaw = stickYaw;
   group.userData.turretStickPitch = stickPitch;
+  group.userData.turretMuzzle = muzzle;
+
+  group.updateMatrixWorld(true);
+  const boundingBox = new THREE.Box3().setFromObject(group);
+  const boundingSphere = boundingBox.getBoundingSphere(new THREE.Sphere());
+  group.userData.boundingCenter = boundingSphere.center.clone();
+  group.userData.boundingRadius = boundingSphere.radius;
 
   return group;
 }

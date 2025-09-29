@@ -275,10 +275,29 @@ export function createCarRig() {
   towerStick.castShadow = true;
   towerHead.add(towerStick);
 
+  const towerBarrel = new THREE.Mesh(new THREE.CylinderGeometry(0.18, 0.22, 3.6, 14), accentMaterial);
+  towerBarrel.rotation.x = Math.PI / 2;
+  towerBarrel.position.set(0, 1.8, 0);
+  towerBarrel.castShadow = true;
+  towerHead.add(towerBarrel);
+
+  const towerMuzzle = new THREE.Mesh(new THREE.CylinderGeometry(0.26, 0.26, 0.9, 12), new THREE.MeshStandardMaterial({ color: 0xffe070, emissive: 0xffa040, emissiveIntensity: 0.65 }));
+  towerMuzzle.rotation.x = Math.PI / 2;
+  towerMuzzle.position.set(0, 3.4, 0);
+  towerMuzzle.castShadow = true;
+  towerHead.add(towerMuzzle);
+
   const towerOrb = new THREE.Mesh(new THREE.SphereGeometry(0.55, 18, 14), new THREE.MeshStandardMaterial({ color: 0xfff0c0, emissive: 0xffc860, emissiveIntensity: 0.4 }));
   towerOrb.position.set(0, 0, 0.7);
   towerOrb.castShadow = true;
   towerHead.add(towerOrb);
+
+  carGroup.updateMatrixWorld(true);
+  const boundingBox = new THREE.Box3().setFromObject(carGroup);
+  const boundingSphere = boundingBox.getBoundingSphere(new THREE.Sphere());
+  carGroup.userData.boundingCenter = boundingSphere.center.clone();
+  carGroup.userData.boundingRadius = boundingSphere.radius;
+  carGroup.userData.turretMuzzle = towerMuzzle;
 
   return {
     carMesh: carGroup,
