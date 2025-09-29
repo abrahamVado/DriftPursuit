@@ -258,13 +258,46 @@ function createMapObject({ descriptor, chunkSize }){
   const obstacle = type === 'plane'
     ? null
     : {
-      localPosition: center,
+      localPosition: center.clone(),
       radius: Math.max(1, radius),
       topHeight: bounds.max.z,
       baseHeight: bounds.min.z,
       mesh: primaryMesh,
       type,
     };
+
+  if (obstacle){
+    const collision = descriptor.collision && typeof descriptor.collision === 'object' ? descriptor.collision : null;
+    if (collision){
+      if (Array.isArray(collision.offset)){
+        const [offsetX = 0, offsetY = 0, offsetZ = 0] = collision.offset;
+        obstacle.localPosition.add(new THREE.Vector3(offsetX, offsetY, offsetZ));
+        obstacle.topHeight += offsetZ;
+        obstacle.baseHeight += offsetZ;
+      }
+      if (collision.radius != null){
+        const overrideRadius = Number(collision.radius);
+        if (Number.isFinite(overrideRadius)){
+          obstacle.radius = Math.max(0, overrideRadius);
+        }
+      }
+      if (collision.topHeight != null){
+        const overrideTop = Number(collision.topHeight);
+        if (Number.isFinite(overrideTop)){
+          obstacle.topHeight = overrideTop;
+        }
+      }
+      if (collision.baseHeight != null){
+        const overrideBase = Number(collision.baseHeight);
+        if (Number.isFinite(overrideBase)){
+          obstacle.baseHeight = overrideBase;
+        }
+      }
+      if (collision.type){
+        obstacle.type = collision.type;
+      }
+    }
+  }
 
   return { object: holder, disposables, obstacle };
 }

@@ -44,6 +44,101 @@ const FALLBACK_MAPS = [
   },
 ];
 
+function cloneEnvironment(environment){
+  if (!environment || typeof environment !== 'object') return null;
+  const clone = { ...environment };
+  if (environment.fog && typeof environment.fog === 'object'){ clone.fog = { ...environment.fog }; }
+  if (environment.sun && typeof environment.sun === 'object'){ clone.sun = { ...environment.sun }; }
+  if (environment.hemisphere && typeof environment.hemisphere === 'object'){
+    clone.hemisphere = { ...environment.hemisphere };
+  }
+  return clone;
+}
+
+function cloneHeightfieldDescriptor(descriptor){
+  if (!descriptor || typeof descriptor !== 'object') return null;
+  const clone = { ...descriptor };
+  if (Array.isArray(descriptor.data)){
+    clone.data = [...descriptor.data];
+  }
+  return clone;
+}
+
+function cloneTileObjects(objects){
+  if (!Array.isArray(objects)) return [];
+  return objects.map((entry) => {
+    if (!entry || typeof entry !== 'object') return entry;
+    return { ...entry };
+  });
+}
+
+function cloneTileDescriptor(tile){
+  if (!tile || typeof tile !== 'object') return tile;
+  const clone = { ...tile };
+  if (Array.isArray(tile.coords)) clone.coords = [...tile.coords];
+  if (Array.isArray(tile.coordinates)) clone.coordinates = [...tile.coordinates];
+  if (tile.heightfield && typeof tile.heightfield === 'object'){
+    clone.heightfield = cloneHeightfieldDescriptor(tile.heightfield);
+  }
+  if (Array.isArray(tile.objects)){
+    clone.objects = cloneTileObjects(tile.objects);
+  }
+  return clone;
+}
+
+function cloneMapDescriptor(descriptor){
+  if (!descriptor || typeof descriptor !== 'object') return null;
+  const clone = { ...descriptor };
+  if (descriptor.environment) clone.environment = cloneEnvironment(descriptor.environment);
+  if (Array.isArray(descriptor.tiles)){
+    clone.tiles = descriptor.tiles.map((tile) => cloneTileDescriptor(tile));
+  }
+  if (descriptor.fallback && typeof descriptor.fallback === 'object'){
+    clone.fallback = { ...descriptor.fallback };
+  }
+  return clone;
+}
+
+function cloneMapDefinition(entry){
+  if (!entry || typeof entry !== 'object') return null;
+  const clone = { ...entry };
+  if (clone.environment) clone.environment = cloneEnvironment(clone.environment);
+  if (Array.isArray(clone.tiles)) clone.tiles = clone.tiles.map((tile) => cloneTileDescriptor(tile));
+  if (clone.descriptor) clone.descriptor = cloneMapDescriptor(clone.descriptor);
+  if (clone.fallback && typeof clone.fallback === 'object') clone.fallback = { ...clone.fallback };
+  return clone;
+}
+
+function mergeTileDescriptor({ mapEntry, descriptor, descriptorUrl }){
+  const merged = cloneMapDescriptor(descriptor) ?? {};
+  if (mapEntry){
+    if (!merged.id && mapEntry.id) merged.id = mapEntry.id;
+    const typeValue = typeof mapEntry.type === 'string' ? mapEntry.type.toLowerCase() : mapEntry.type;
+    if (!merged.type && typeValue) merged.type = typeValue;
+    if (!merged.tileSize && Number.isFinite(mapEntry.tileSize)) merged.tileSize = mapEntry.tileSize;
+    if (!merged.visibleRadius && Number.isFinite(mapEntry.visibleRadius)) merged.visibleRadius = mapEntry.visibleRadius;
+    if (!merged.assetRoot && typeof mapEntry.assetRoot === 'string') merged.assetRoot = mapEntry.assetRoot;
+    if (!Array.isArray(merged.tiles) && Array.isArray(mapEntry.tiles)){
+      merged.tiles = mapEntry.tiles.map((tile) => cloneTileDescriptor(tile));
+    }
+  }
+  if (descriptorUrl){
+    merged.descriptorSource = descriptorUrl.toString();
+    if (typeof merged.assetRoot === 'string' && merged.assetRoot.length > 0){
+      try {
+        const assetUrl = new URL(merged.assetRoot, descriptorUrl);
+        merged.assetRoot = assetUrl.toString();
+      } catch (error){
+        // If URL resolution fails, keep the provided assetRoot as-is.
+      }
+    }
+  }
+  if (!Array.isArray(merged.tiles)){
+    merged.tiles = [];
+  }
+  return merged;
+}
+
 document.body.style.margin = '0';
 document.body.style.overflow = 'hidden';
 document.body.style.background = DEFAULT_BODY_BACKGROUND;
@@ -107,40 +202,80 @@ async function loadMapDefinitions(requestedId){
     }
     const data = await response.json();
     const rawMaps = Array.isArray(data?.maps) ? data.maps : Array.isArray(data) ? data : [];
+    const baseUrl = new URL(MAPS_ENDPOINT, window.location.href);
     const maps = await Promise.all(
       rawMaps.map(async (entry) => {
-        const mapEntry = entry ? { ...entry } : null;
-        if (!mapEntry) return mapEntry;
-        if (mapEntry.type === 'tilemap' && mapEntry.path && typeof fetch === 'function'){
-          try {
-            const baseUrl = new URL(MAPS_ENDPOINT, window.location.href);
-            const descriptorUrl = new URL(mapEntry.path, baseUrl);
-            const descriptorResponse = await fetch(descriptorUrl.toString(), { cache: 'no-cache' });
-            if (!descriptorResponse.ok){
-              console.warn(`Failed to load tile-map descriptor for ${mapEntry.id}: HTTP ${descriptorResponse.status}`);
-            } else {
-              const descriptor = await descriptorResponse.json();
-              mapEntry.descriptor = { ...descriptor };
-            }
-          } catch (descriptorError){
-            console.warn(`Failed to load tile-map descriptor for ${mapEntry.id}`, descriptorError);
-          }
-        } else if (mapEntry.type === 'tilemap' && mapEntry.descriptor){
-          mapEntry.descriptor = { ...mapEntry.descriptor };
+        const mapEntry = cloneMapDefinition(entry);
+        if (!mapEntry) return null;
+
+        const typeValue = typeof mapEntry.type === 'string' ? mapEntry.type.toLowerCase() : mapEntry.type;
+        if (typeValue){
+          mapEntry.type = typeValue;
         }
+
+        if (mapEntry.type === 'tilemap'){
+          let descriptorUrl = null;
+          if (typeof mapEntry.path === 'string' && mapEntry.path.length > 0){
+            try {
+              descriptorUrl = new URL(mapEntry.path, baseUrl);
+            } catch (urlError){
+              console.warn(`Invalid descriptor path for tile map ${mapEntry.id}`, urlError);
+            }
+          }
+
+          let descriptorSource = mapEntry.descriptor ? cloneMapDescriptor(mapEntry.descriptor) : null;
+
+          if (!descriptorSource && descriptorUrl && typeof fetch === 'function'){
+            try {
+              const descriptorResponse = await fetch(descriptorUrl.toString(), { cache: 'no-cache' });
+              if (!descriptorResponse.ok){
+                console.warn(`Failed to load tile-map descriptor for ${mapEntry.id}: HTTP ${descriptorResponse.status}`);
+              } else {
+                const descriptorData = await descriptorResponse.json();
+                descriptorSource = cloneMapDescriptor(descriptorData);
+              }
+            } catch (descriptorError){
+              console.warn(`Failed to load tile-map descriptor for ${mapEntry.id}`, descriptorError);
+            }
+          }
+
+          if (descriptorSource){
+            const merged = mergeTileDescriptor({ mapEntry, descriptor: descriptorSource, descriptorUrl });
+            mapEntry.descriptor = merged;
+            if (!Array.isArray(mapEntry.tiles) && Array.isArray(merged.tiles)){
+              mapEntry.tiles = merged.tiles.map((tile) => cloneTileDescriptor(tile));
+            }
+            if (!Number.isFinite(mapEntry.tileSize) && Number.isFinite(merged.tileSize)){
+              mapEntry.tileSize = merged.tileSize;
+            }
+            if (!Number.isFinite(mapEntry.visibleRadius) && Number.isFinite(merged.visibleRadius)){
+              mapEntry.visibleRadius = merged.visibleRadius;
+            }
+          } else {
+            mapEntry.descriptor = mergeTileDescriptor({
+              mapEntry,
+              descriptor: { id: mapEntry.id, type: 'tilemap', tiles: Array.isArray(mapEntry.tiles) ? mapEntry.tiles : [] },
+              descriptorUrl,
+            });
+          }
+        }
+
         return mapEntry;
       }),
     );
-    const defaultId = typeof data?.default === 'string' ? data.default : maps[0]?.id ?? null;
-    return { maps, defaultId };
+    const sanitizedMaps = maps.filter(Boolean);
+    const defaultId = typeof data?.default === 'string' ? data.default : sanitizedMaps[0]?.id ?? null;
+    return { maps: sanitizedMaps, defaultId };
   } catch (error){
     console.warn('Falling back to bundled map definitions.', error);
-    return { maps: [...FALLBACK_MAPS], defaultId: defaultMapId };
+    return { maps: FALLBACK_MAPS.map((entry) => cloneMapDefinition(entry)), defaultId: defaultMapId };
   }
 }
 
 function selectMapDefinition(maps, requestedId, fallbackId){
-  const mapList = Array.isArray(maps) && maps.length > 0 ? maps.map((entry) => ({ ...entry })) : [...FALLBACK_MAPS].map((entry) => ({ ...entry }));
+  const mapList = Array.isArray(maps) && maps.length > 0
+    ? maps.map((entry) => cloneMapDefinition(entry))
+    : FALLBACK_MAPS.map((entry) => cloneMapDefinition(entry));
   const registry = new Map();
   mapList.forEach((entry) => {
     if (entry?.id){
@@ -187,13 +322,15 @@ function applyMapEnvironment(map){
 }
 
 function initializeWorldForMap(map){
-  const mapDefinition = map ?? FALLBACK_MAPS[0];
+  const mapDefinition = map ? cloneMapDefinition(map) : cloneMapDefinition(FALLBACK_MAPS[0]);
   if (world){
+    collisionSystem.setWorld(null);
+    projectileManager.setWorld(null);
     world.dispose();
   }
   let descriptor = null;
   if (mapDefinition?.descriptor && typeof mapDefinition.descriptor === 'object'){
-    descriptor = { ...mapDefinition.descriptor };
+    descriptor = cloneMapDescriptor(mapDefinition.descriptor);
     descriptor.id = descriptor.id ?? mapDefinition.id;
     descriptor.type = descriptor.type ?? mapDefinition.type;
     if (!descriptor.tileSize && Number.isFinite(mapDefinition.tileSize)){
@@ -213,10 +350,14 @@ function initializeWorldForMap(map){
     descriptor = { ...mapDefinition };
   }
 
-  if (descriptor?.type === 'tilemap'){
-    if (!Array.isArray(descriptor.tiles)){
-      descriptor.tiles = Array.isArray(mapDefinition?.tiles) ? [...mapDefinition.tiles] : [];
-    }
+  const descriptorType = typeof descriptor?.type === 'string' ? descriptor.type.toLowerCase() : descriptor?.type;
+  if (descriptorType === 'tilemap'){
+    descriptor.type = 'tilemap';
+    descriptor.tiles = Array.isArray(descriptor.tiles)
+      ? descriptor.tiles.map((tile) => cloneTileDescriptor(tile))
+      : Array.isArray(mapDefinition?.tiles)
+        ? mapDefinition.tiles.map((tile) => cloneTileDescriptor(tile))
+        : [];
     if (!descriptor.tileSize){
       descriptor.tileSize = Number.isFinite(mapDefinition?.tileSize)
         ? mapDefinition.tileSize
@@ -224,7 +365,11 @@ function initializeWorldForMap(map){
           ? mapDefinition.chunkSize
           : 640;
     }
-    mapDefinition.descriptor = descriptor;
+    if (Number.isFinite(descriptor.visibleRadius)){
+      mapDefinition.visibleRadius = descriptor.visibleRadius;
+    }
+    mapDefinition.tiles = descriptor.tiles.map((tile) => cloneTileDescriptor(tile));
+    mapDefinition.tileSize = descriptor.tileSize;
     world = new TileMapWorld({ scene, descriptor });
   } else {
     const chunkSize = Number.isFinite(mapDefinition?.chunkSize)
