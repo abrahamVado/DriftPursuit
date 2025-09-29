@@ -8,12 +8,26 @@ const THREE_NS = (typeof window !== 'undefined' ? window.THREE : null) || (typeo
 if (!THREE_NS) {
   throw new Error('ChaseCam requires THREE to be loaded globally');
 }
-const { Vector3 } = THREE_NS;
+const { Euler, Quaternion, Vector3 } = THREE_NS;
 
 const tmpDesired = new Vector3();
 const tmpStretch = new Vector3();
 const tmpForward = new Vector3();
 const tmpLook = new Vector3();
+const tmpEuler = new Euler(0, 0, 0, 'ZYX');
+const tmpQuat = new Quaternion();
+const tmpQuatNoRoll = new Quaternion();
+
+function getQuaternionWithoutRoll(source, out = tmpQuatNoRoll) {
+  if (!source) {
+    return out.identity();
+  }
+  tmpQuat.copy(source);
+  tmpEuler.setFromQuaternion(tmpQuat, tmpEuler.order);
+  tmpEuler.x = 0;
+  out.setFromEuler(tmpEuler);
+  return out;
+}
 
 export class ChaseCam {
   constructor(camera) {
@@ -51,7 +65,7 @@ export class ChaseCam {
     const desired = this.computeDesiredPosition(tmpDesired);
     this.position.copy(desired);
     this.velocity.set(0, 0, 0);
-    this.lookTarget.copy(this.target.position);
+    this.computeLookTarget(tmpLook, 0);
     this.camera.position.copy(desired);
     this.camera.lookAt(this.lookTarget);
     this.initialized = true;
@@ -80,14 +94,16 @@ export class ChaseCam {
   computeDesiredPosition(out = new Vector3()) {
     if (!this.target) return out.set(0, 0, 0);
     tmpForward.set(0, -this.backOffset, this.upOffset);
-    tmpForward.applyQuaternion(this.target.quaternion);
+    tmpForward.applyQuaternion(getQuaternionWithoutRoll(this.target.quaternion));
     out.copy(this.target.position).add(tmpForward);
     return out;
   }
 
   computeLookTarget(out, dt) {
     if (!this.target) return this.lookTarget.set(0, 0, 0);
-    tmpForward.set(0, 1, 0).applyQuaternion(this.target.quaternion);
+    tmpForward
+      .set(0, 1, 0)
+      .applyQuaternion(getQuaternionWithoutRoll(this.target.quaternion));
     out.copy(this.target.position).addScaledVector(tmpForward, LOOK_AHEAD_DISTANCE);
     const lerpT = 1 - Math.exp(-LOOK_LERP_RATE * (Number.isFinite(dt) ? dt : 0));
     if (!Number.isFinite(lerpT) || lerpT <= 0) {
