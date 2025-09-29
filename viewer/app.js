@@ -59,7 +59,6 @@ const ALTITUDE_SPEED = 60;
 const ROTATION_SPEED = Math.PI / 3; // rad/sec
 const MIN_ALTITUDE = 0;
 const MAX_ALTITUDE = 400;
-const MAX_DISTANCE = 1000;
 const MAX_ROLL = Math.PI * 0.75;
 const MAX_PITCH = Math.PI * 0.5;
 const ACCELERATION_RATE = 90; // units/sec^2 for forward thrust button
@@ -68,6 +67,11 @@ const NATURAL_DECEL = 35; // drag applied when thrust released
 const SCENE_TO_SIM_SCALE = { x: 2, y: 2, z: 50 };
 const MANUAL_VELOCITY_EPSILON = 0.5;
 const MANUAL_ORIENTATION_EPSILON = 0.005;
+const WORLD_CHUNK_SIZE = 900;
+const WORLD_CHUNK_RADIUS = 2;
+const WORLD_REBASE_DISTANCE = 1200;
+const WORLD_REBASE_DISTANCE_SQ = WORLD_REBASE_DISTANCE * WORLD_REBASE_DISTANCE;
+const WORLD_SEED = 'driftpursuit:endless';
 
 const CONNECTION_STATUS_KEYS = {
   CONNECTING: 'connecting',
@@ -153,6 +157,8 @@ const followManager = (typeof PlaneState !== 'undefined' && PlaneState && typeof
   : null;
 let currentFollowId = followManager ? followManager.getFollow() : null;
 let cakes = {};
+let worldManager = null;
+let worldOriginOffset = null;
 
 // ----- Aircraft model (optional GLTF or procedural set) -----
 let gltfLoader = null;
@@ -412,7 +418,7 @@ function handleMsg(msg){
     }
 
     const followId = getCurrentFollowId();
-    const targetPosition = new THREE.Vector3(p[0]/2, p[1]/2, p[2]/50);
+    const targetPosition = convertSimPositionToScene(p);
 
     // optional orientation: [yaw, pitch, roll]
     const o = msg.ori;
@@ -448,7 +454,8 @@ function handleMsg(msg){
     const geom = new THREE.SphereGeometry(3,12,12);
     const mat = new THREE.MeshStandardMaterial({color:0xffcc66});
     const s = new THREE.Mesh(geom, mat);
-    s.position.set(lp[0]/2, lp[1]/2, lp[2]/50);
+    const landingPosition = convertSimPositionToScene(lp);
+    s.position.copy(landingPosition);
     scene.add(s);
     cakes[id] = s;
     setTimeout(()=>{ scene.remove(s); delete cakes[id]; }, 8000);
@@ -885,113 +892,448 @@ function captureMaterialTextures(material, textures){
 }
 
 function buildEnvironment(targetScene){
-  // Procedural environment intentionally lightweight so it renders smoothly
-  // while still providing parallax cues (buildings, trees, runway lines).
-  const environment = new THREE.Group();
-  environment.name = 'ProceduralEnvironment';
-
-  // Primary grass field.
-  const groundMaterial = new THREE.MeshStandardMaterial({ color: 0x7ac87f, roughness: 0.85, metalness: 0.05 });
-  const ground = new THREE.Mesh(new THREE.PlaneGeometry(4200, 4200, 1, 1), groundMaterial);
-  ground.rotation.x = -Math.PI / 2;
-  ground.receiveShadow = true;
-  environment.add(ground);
-
-  // Runway strip to emphasize forward motion.
-  const runwayMaterial = new THREE.MeshStandardMaterial({ color: 0x2b2b30, roughness: 0.7 });
-  const runway = new THREE.Mesh(new THREE.PlaneGeometry(1400, 180, 1, 1), runwayMaterial);
-  runway.rotation.x = -Math.PI / 2;
-  runway.position.set(0, 0, 0.2);
-  runway.receiveShadow = true;
-  environment.add(runway);
-
-  // Center line markers on the runway.
-  const markerMaterial = new THREE.MeshStandardMaterial({ color: 0xf7f7f7, roughness: 0.3 });
-  for (let i = -6; i <= 6; i++){
-    const marker = new THREE.Mesh(new THREE.PlaneGeometry(50, 6), markerMaterial);
-    marker.rotation.x = -Math.PI / 2;
-    marker.position.set(i * 110, 0, 0.25);
-    marker.receiveShadow = true;
-    environment.add(marker);
-  }
-
-  // Sidewalk / taxiway stripes.
-  const shoulderMaterial = new THREE.MeshStandardMaterial({ color: 0x515865, roughness: 0.6 });
-  ['left', 'right'].forEach((side) => {
-    const offset = side === 'left' ? -110 : 110;
-    const shoulder = new THREE.Mesh(new THREE.PlaneGeometry(1400, 20), shoulderMaterial);
-    shoulder.rotation.x = -Math.PI / 2;
-    shoulder.position.set(0, offset, 0.22);
-    shoulder.receiveShadow = true;
-    environment.add(shoulder);
+  if (!targetScene) return;
+  worldManager = createEndlessWorld({
+    scene: targetScene,
+    chunkSize: WORLD_CHUNK_SIZE,
+    visibleRadius: WORLD_CHUNK_RADIUS,
+    seed: WORLD_SEED,
   });
 
-  // Populate the outskirts with a blend of buildings and trees.
-  const blockSpacing = 260;
-  const blockRows = 3;
-  const blockCols = 4;
-  const structures = new THREE.Group();
-  structures.name = 'Structures';
+  if (worldManager){
+    worldManager.update(new THREE.Vector3());
+  }
+}
 
-  for (let row = -blockRows; row <= blockRows; row++){
-    for (let col = -blockCols; col <= blockCols; col++){
-      if (Math.abs(row) <= 1 && Math.abs(col) <= 1) continue; // keep runway surroundings open
-      const worldX = col * blockSpacing;
-      const worldY = row * blockSpacing;
-      if ((row + col) % 2 === 0){
-        structures.add(createBuilding(worldX, worldY));
-      } else {
-        structures.add(createTree(worldX, worldY));
+function createEndlessWorld({ scene: targetScene, chunkSize, visibleRadius, seed }){
+  if (!targetScene || !chunkSize || !visibleRadius) return null;
+
+  const worldRoot = new THREE.Group();
+  worldRoot.name = 'EndlessWorldRoot';
+  targetScene.add(worldRoot);
+
+  const chunkMap = new Map();
+
+  function update(focusPosition){
+    if (!focusPosition) return;
+    const originOffset = ensureWorldOriginOffset();
+    const focusGlobal = focusPosition.clone().add(originOffset);
+    const centerChunkX = Math.floor(focusGlobal.x / chunkSize);
+    const centerChunkY = Math.floor(focusGlobal.y / chunkSize);
+    const needed = new Set();
+
+    for (let dx = -visibleRadius; dx <= visibleRadius; dx += 1){
+      for (let dy = -visibleRadius; dy <= visibleRadius; dy += 1){
+        const chunkX = centerChunkX + dx;
+        const chunkY = centerChunkY + dy;
+        const key = chunkKey(chunkX, chunkY);
+        needed.add(key);
+        let chunkEntry = chunkMap.get(key);
+        if (!chunkEntry){
+          chunkEntry = spawnChunk(chunkX, chunkY);
+          chunkMap.set(key, chunkEntry);
+          worldRoot.add(chunkEntry.group);
+        }
+        positionChunk(chunkEntry);
       }
+    }
+
+    chunkMap.forEach((chunkEntry, key) => {
+      if (!needed.has(key)){
+        disposeChunk(chunkEntry);
+        chunkMap.delete(key);
+      }
+    });
+  }
+
+  function spawnChunk(x, y){
+    const coords = { x, y };
+    const rng = createSeededRng(seed || 'default', x, y);
+    const { group, disposables } = buildChunkContents({ coords, chunkSize, rng });
+    group.name = `WorldChunk_${x}_${y}`;
+    positionChunk({ coords, group });
+    return { coords, group, disposables };
+  }
+
+  function positionChunk(chunkEntry){
+    if (!chunkEntry || !chunkEntry.group) return;
+    const originOffset = ensureWorldOriginOffset();
+    const worldX = chunkEntry.coords.x * chunkSize;
+    const worldY = chunkEntry.coords.y * chunkSize;
+    chunkEntry.group.position.set(worldX - originOffset.x, worldY - originOffset.y, -originOffset.z);
+  }
+
+  function handleOriginShift(shift){
+    if (!shift) return;
+    chunkMap.forEach((chunkEntry) => {
+      if (chunkEntry?.group?.position){
+        chunkEntry.group.position.sub(shift);
+      }
+    });
+  }
+
+  function disposeChunk(chunkEntry){
+    if (!chunkEntry) return;
+    if (chunkEntry.group){
+      worldRoot.remove(chunkEntry.group);
+      if (typeof chunkEntry.group.clear === 'function'){
+        chunkEntry.group.clear();
+      }
+    }
+    if (Array.isArray(chunkEntry.disposables)){
+      chunkEntry.disposables.forEach((resource) => {
+        if (resource && typeof resource.dispose === 'function'){
+          resource.dispose();
+        }
+      });
     }
   }
 
-  environment.add(structures);
+  function disposeAll(){
+    chunkMap.forEach((chunkEntry) => disposeChunk(chunkEntry));
+    chunkMap.clear();
+    targetScene.remove(worldRoot);
+  }
 
-  targetScene.add(environment);
+  return { update, handleOriginShift, dispose: disposeAll };
 }
 
-function createBuilding(x, y){
-  const buildingGroup = new THREE.Group();
-  buildingGroup.position.set(x, y, 0);
+function buildChunkContents({ coords, chunkSize, rng }){
+  const group = new THREE.Group();
+  const disposables = [];
 
-  const baseHeight = 30 + Math.random() * 40;
-  const palette = [0xb1c6ff, 0xd6e4ff, 0xf2bb66, 0x9fc0a8, 0xf7d6c1];
-  const wallMaterial = new THREE.MeshStandardMaterial({ color: palette[Math.floor(Math.random() * palette.length)], roughness: 0.65, metalness: 0.1 });
-  const base = new THREE.Mesh(new THREE.BoxGeometry(60, 60, baseHeight), wallMaterial);
-  base.position.set(0, 0, baseHeight / 2);
-  base.castShadow = true;
-  base.receiveShadow = true;
-  buildingGroup.add(base);
+  const baseHue = 0.33 + (rng() - 0.5) * 0.04;
+  const baseSaturation = 0.55 + (rng() - 0.5) * 0.08;
+  const baseLightness = 0.53 + (rng() - 0.5) * 0.08;
+  const groundColor = new THREE.Color().setHSL(baseHue, baseSaturation, baseLightness);
+  const groundMaterial = new THREE.MeshStandardMaterial({
+    color: groundColor,
+    roughness: 0.85,
+    metalness: 0.05,
+  });
+  const groundGeometry = new THREE.PlaneGeometry(chunkSize, chunkSize, 1, 1);
+  const ground = new THREE.Mesh(groundGeometry, groundMaterial);
+  ground.rotation.x = -Math.PI / 2;
+  ground.receiveShadow = true;
+  group.add(ground);
+  disposables.push(groundMaterial, groundGeometry);
 
-  const roofMaterial = new THREE.MeshStandardMaterial({ color: 0x36393f, roughness: 0.5, metalness: 0.2 });
-  const roof = new THREE.Mesh(new THREE.ConeGeometry(32, 18, 4), roofMaterial);
-  roof.rotation.y = Math.PI / 4;
-  roof.position.set(0, 0, baseHeight + 9);
-  roof.castShadow = true;
-  buildingGroup.add(roof);
+  // Add subtle tonal overlays to break tiling repetition without seams.
+  const overlayCount = 2;
+  for (let i = 0; i < overlayCount; i += 1){
+    const overlayWidth = chunkSize * (0.55 + rng() * 0.25);
+    const overlayDepth = chunkSize * (0.08 + rng() * 0.04);
+    const overlayGeometry = new THREE.PlaneGeometry(overlayWidth, overlayDepth, 1, 1);
+    const overlayMaterial = new THREE.MeshStandardMaterial({
+      color: groundColor.clone().offsetHSL((rng() - 0.5) * 0.04, (rng() - 0.5) * 0.08, (rng() - 0.5) * 0.08),
+      roughness: 0.75,
+      metalness: 0.04,
+      transparent: true,
+      opacity: 0.4,
+    });
+    const overlay = new THREE.Mesh(overlayGeometry, overlayMaterial);
+    overlay.rotation.x = -Math.PI / 2;
+    overlay.position.set((rng() - 0.5) * chunkSize * 0.4, (rng() - 0.5) * chunkSize * 0.4, 0.08 + rng() * 0.02);
+    overlay.receiveShadow = true;
+    group.add(overlay);
+    disposables.push(overlayMaterial, overlayGeometry);
+  }
 
-  return buildingGroup;
+  if (Math.abs(coords.x) <= 1){
+    addRunwaySegment(group, chunkSize, rng, disposables);
+  }
+
+  const scatterCount = 6 + Math.floor(rng() * 6);
+  for (let i = 0; i < scatterCount; i += 1){
+    const localX = (rng() - 0.5) * chunkSize * 0.9;
+    const localY = (rng() - 0.5) * chunkSize * 0.9;
+    if (Math.abs(coords.x) <= 1 && Math.abs(localX) < 130){
+      continue; // keep runway shoulders clear
+    }
+    if (rng() > 0.7){
+      const building = createProceduralBuilding({ rng, position: { x: localX, y: localY } });
+      group.add(building.object);
+      disposables.push(...building.disposables);
+    } else {
+      const tree = createProceduralTree({ rng, position: { x: localX, y: localY } });
+      group.add(tree.object);
+      disposables.push(...tree.disposables);
+    }
+  }
+
+  return { group, disposables };
 }
 
-function createTree(x, y){
+function addRunwaySegment(group, chunkSize, rng, disposables){
+  const runwayMaterial = new THREE.MeshStandardMaterial({ color: 0x2b2b30, roughness: 0.72, metalness: 0.12 });
+  const runwayGeometry = new THREE.PlaneGeometry(chunkSize, 180, 1, 1);
+  const runway = new THREE.Mesh(runwayGeometry, runwayMaterial);
+  runway.rotation.x = -Math.PI / 2;
+  runway.position.set(0, 0, 0.12);
+  runway.receiveShadow = true;
+  group.add(runway);
+  disposables.push(runwayMaterial, runwayGeometry);
+
+  const shoulderMaterial = new THREE.MeshStandardMaterial({ color: 0x515865, roughness: 0.62, metalness: 0.08 });
+  const shoulderGeometry = new THREE.PlaneGeometry(chunkSize, 26, 1, 1);
+  const leftShoulder = new THREE.Mesh(shoulderGeometry, shoulderMaterial);
+  const rightShoulder = new THREE.Mesh(shoulderGeometry, shoulderMaterial);
+  leftShoulder.rotation.x = -Math.PI / 2;
+  rightShoulder.rotation.x = -Math.PI / 2;
+  leftShoulder.position.set(0, -110, 0.13);
+  rightShoulder.position.set(0, 110, 0.13);
+  leftShoulder.receiveShadow = true;
+  rightShoulder.receiveShadow = true;
+  group.add(leftShoulder, rightShoulder);
+  disposables.push(shoulderMaterial, shoulderGeometry);
+
+  const markerMaterial = new THREE.MeshStandardMaterial({ color: 0xf7f7f7, roughness: 0.35, metalness: 0.05 });
+  const markerGeometry = new THREE.PlaneGeometry(60, 8, 1, 1);
+  const markerCount = 5;
+  for (let i = -markerCount; i <= markerCount; i += 1){
+    const marker = new THREE.Mesh(markerGeometry, markerMaterial);
+    marker.rotation.x = -Math.PI / 2;
+    marker.position.set(0, (i / markerCount) * (chunkSize * 0.5), 0.14);
+    marker.receiveShadow = true;
+    group.add(marker);
+  }
+  disposables.push(markerMaterial, markerGeometry);
+
+  if (rng() > 0.6){
+    const centerGlowMaterial = new THREE.MeshStandardMaterial({ color: 0xf5d46b, emissive: new THREE.Color(0xf5d46b), emissiveIntensity: 0.35, roughness: 0.6, metalness: 0.1, transparent: true, opacity: 0.25 });
+    const centerGlowGeometry = new THREE.PlaneGeometry(chunkSize * 0.2, 40, 1, 1);
+    const centerGlow = new THREE.Mesh(centerGlowGeometry, centerGlowMaterial);
+    centerGlow.rotation.x = -Math.PI / 2;
+    centerGlow.position.set(0, 0, 0.15);
+    group.add(centerGlow);
+    disposables.push(centerGlowMaterial, centerGlowGeometry);
+  }
+}
+
+function createProceduralTree({ rng, position }){
   const tree = new THREE.Group();
-  tree.position.set(x + (Math.random() * 30 - 15), y + (Math.random() * 30 - 15), 0);
+  tree.name = 'ProceduralTree';
+  tree.position.set(position.x, position.y, 0);
+  const disposables = [];
 
-  const trunkMaterial = new THREE.MeshStandardMaterial({ color: 0x8c5a2b, roughness: 0.8 });
-  const trunk = new THREE.Mesh(new THREE.CylinderGeometry(4, 4, 20, 8), trunkMaterial);
-  trunk.position.set(0, 0, 10);
+  const trunkHeight = 12 + rng() * 10;
+  const trunkRadiusTop = 1.2 + rng() * 0.8;
+  const trunkRadiusBottom = trunkRadiusTop + 0.6 + rng() * 0.6;
+  const trunkGeometry = new THREE.CylinderGeometry(trunkRadiusTop, trunkRadiusBottom, trunkHeight, 6);
+  const trunkMaterial = new THREE.MeshStandardMaterial({
+    color: new THREE.Color().setHSL(0.09 + rng() * 0.02, 0.6, 0.32 + rng() * 0.1),
+    roughness: 0.82,
+  });
+  const trunk = new THREE.Mesh(trunkGeometry, trunkMaterial);
+  trunk.position.set(0, 0, trunkHeight / 2);
   trunk.castShadow = true;
   trunk.receiveShadow = true;
   tree.add(trunk);
+  disposables.push(trunkGeometry, trunkMaterial);
 
-  const foliageMaterial = new THREE.MeshStandardMaterial({ color: 0x2f7d32, roughness: 0.6 });
-  const foliage = new THREE.Mesh(new THREE.ConeGeometry(20, 40, 10), foliageMaterial);
-  foliage.position.set(0, 0, 35);
+  const foliageHeight = trunkHeight * (1.35 + rng() * 0.3);
+  const foliageRadius = trunkHeight * (0.9 + rng() * 0.2);
+  const foliageGeometry = new THREE.ConeGeometry(foliageRadius, foliageHeight, 10);
+  const foliageMaterial = new THREE.MeshStandardMaterial({
+    color: new THREE.Color().setHSL(0.33 + rng() * 0.05, 0.72, 0.38 + rng() * 0.1),
+    roughness: 0.6,
+    metalness: 0.05,
+  });
+  const foliage = new THREE.Mesh(foliageGeometry, foliageMaterial);
+  foliage.position.set(0, 0, trunkHeight + foliageHeight / 2);
   foliage.castShadow = true;
+  foliage.receiveShadow = true;
   tree.add(foliage);
+  disposables.push(foliageGeometry, foliageMaterial);
 
-  return tree;
+  tree.rotation.z = (rng() - 0.5) * 0.2;
+  tree.rotation.y = rng() * Math.PI * 2;
+
+  return { object: tree, disposables };
+}
+
+function createProceduralBuilding({ rng, position }){
+  const building = new THREE.Group();
+  building.name = 'ProceduralBuilding';
+  building.position.set(position.x, position.y, 0);
+  const disposables = [];
+
+  const baseWidth = 40 + rng() * 36;
+  const baseDepth = 40 + rng() * 36;
+  const baseHeight = 24 + rng() * 32;
+  const wallColor = new THREE.Color().setHSL(0.55 + rng() * 0.2, 0.35 + rng() * 0.25, 0.58 + rng() * 0.18);
+  const wallMaterial = new THREE.MeshStandardMaterial({
+    color: wallColor,
+    roughness: 0.65,
+    metalness: 0.12,
+  });
+  const baseGeometry = new THREE.BoxGeometry(baseWidth, baseDepth, baseHeight);
+  const baseMesh = new THREE.Mesh(baseGeometry, wallMaterial);
+  baseMesh.position.set(0, 0, baseHeight / 2);
+  baseMesh.castShadow = true;
+  baseMesh.receiveShadow = true;
+  building.add(baseMesh);
+  disposables.push(baseGeometry, wallMaterial);
+
+  const roofHeight = 6 + rng() * 8;
+  const roofMaterial = new THREE.MeshStandardMaterial({
+    color: new THREE.Color().setHSL(0.02 + rng() * 0.05, 0.15 + rng() * 0.1, 0.22 + rng() * 0.1),
+    roughness: 0.55,
+    metalness: 0.32,
+  });
+  const roofGeometry = new THREE.ConeGeometry(Math.max(baseWidth, baseDepth) * 0.65, roofHeight, 4);
+  const roofMesh = new THREE.Mesh(roofGeometry, roofMaterial);
+  roofMesh.rotation.y = Math.PI / 4;
+  roofMesh.position.set(0, 0, baseHeight + roofHeight / 2);
+  roofMesh.castShadow = true;
+  roofMesh.receiveShadow = true;
+  building.add(roofMesh);
+  disposables.push(roofGeometry, roofMaterial);
+
+  if (rng() > 0.45){
+    const annexWidth = baseWidth * (0.45 + rng() * 0.25);
+    const annexDepth = baseDepth * (0.4 + rng() * 0.25);
+    const annexHeight = baseHeight * (0.35 + rng() * 0.3);
+    const annexGeometry = new THREE.BoxGeometry(annexWidth, annexDepth, annexHeight);
+    const annexMaterial = wallMaterial.clone();
+    annexMaterial.color = wallColor.clone().offsetHSL((rng() - 0.5) * 0.08, (rng() - 0.5) * 0.05, (rng() - 0.5) * 0.1);
+    const annexMesh = new THREE.Mesh(annexGeometry, annexMaterial);
+    annexMesh.position.set((rng() - 0.5) * baseWidth * 0.6, (rng() - 0.5) * baseDepth * 0.6, annexHeight / 2);
+    annexMesh.castShadow = true;
+    annexMesh.receiveShadow = true;
+    building.add(annexMesh);
+    disposables.push(annexGeometry, annexMaterial);
+  }
+
+  if (rng() > 0.5){
+    const hangarHeight = baseHeight * 0.4;
+    const hangarWidth = baseWidth * (0.5 + rng() * 0.3);
+    const hangarDepth = baseDepth * (0.8 + rng() * 0.1);
+    const hangarGeometry = new THREE.BoxGeometry(hangarWidth, hangarDepth, hangarHeight);
+    const hangarMaterial = new THREE.MeshStandardMaterial({
+      color: new THREE.Color().setHSL(0.6 + rng() * 0.05, 0.22, 0.48),
+      roughness: 0.6,
+      metalness: 0.25,
+    });
+    const hangarMesh = new THREE.Mesh(hangarGeometry, hangarMaterial);
+    hangarMesh.position.set((rng() - 0.5) * baseWidth * 0.7, (rng() - 0.5) * baseDepth * 0.3, hangarHeight / 2);
+    hangarMesh.castShadow = true;
+    hangarMesh.receiveShadow = true;
+    building.add(hangarMesh);
+    disposables.push(hangarGeometry, hangarMaterial);
+  }
+
+  building.rotation.z = rng() * Math.PI * 2;
+
+  return { object: building, disposables };
+}
+
+function chunkKey(x, y){
+  return `${x}:${y}`;
+}
+
+function ensureWorldOriginOffset(){
+  if (!worldOriginOffset){
+    worldOriginOffset = new THREE.Vector3(0, 0, 0);
+  }
+  return worldOriginOffset;
+}
+
+function convertSimPositionToScene(simPosition){
+  const originOffset = ensureWorldOriginOffset();
+  const scaled = new THREE.Vector3(
+    (Array.isArray(simPosition) ? simPosition[0] : 0) / SCENE_TO_SIM_SCALE.x,
+    (Array.isArray(simPosition) ? simPosition[1] : 0) / SCENE_TO_SIM_SCALE.y,
+    (Array.isArray(simPosition) ? simPosition[2] : 0) / SCENE_TO_SIM_SCALE.z,
+  );
+  return scaled.sub(originOffset);
+}
+
+function updateWorldStreaming(){
+  if (!scene || !worldManager) return;
+  const focus = getCurrentWorldFocusPosition();
+  if (!focus) return;
+  const adjustedFocus = maybeRebaseWorld(focus.clone());
+  worldManager.update(adjustedFocus);
+}
+
+function getCurrentWorldFocusPosition(){
+  const followId = getCurrentFollowId();
+  if (followId){
+    const mesh = planeMeshes.get(followId);
+    if (mesh){
+      return mesh.position.clone();
+    }
+  }
+  if (camera){
+    return camera.position.clone();
+  }
+  return new THREE.Vector3();
+}
+
+function maybeRebaseWorld(focusPosition){
+  if (!focusPosition) return focusPosition;
+  const horizontalDistanceSq = (focusPosition.x * focusPosition.x) + (focusPosition.y * focusPosition.y);
+  if (horizontalDistanceSq < WORLD_REBASE_DISTANCE_SQ){
+    return focusPosition;
+  }
+  const shift = new THREE.Vector3(focusPosition.x, focusPosition.y, 0);
+  applyWorldOriginShift(shift);
+  focusPosition.sub(shift);
+  return focusPosition;
+}
+
+function applyWorldOriginShift(shift){
+  if (!shift || (!shift.x && !shift.y && !shift.z)) return;
+  const originOffset = ensureWorldOriginOffset();
+  originOffset.add(shift);
+
+  planeMeshes.forEach((mesh) => {
+    if (mesh?.position){
+      mesh.position.sub(shift);
+    }
+  });
+
+  Object.values(cakes).forEach((mesh) => {
+    if (mesh?.position){
+      mesh.position.sub(shift);
+    }
+  });
+
+  if (camera?.position){
+    camera.position.sub(shift);
+  }
+
+  if (worldManager && typeof worldManager.handleOriginShift === 'function'){
+    worldManager.handleOriginShift(shift);
+  }
+}
+
+function createSeededRng(seedBase, x, y){
+  const seed = xmur3(`${seedBase}:${x}:${y}`)();
+  return mulberry32(seed);
+}
+
+function xmur3(str){
+  let h = 1779033703 ^ str.length;
+  for (let i = 0; i < str.length; i += 1){
+    h = Math.imul(h ^ str.charCodeAt(i), 3432918353);
+    h = (h << 13) | (h >>> 19);
+  }
+  return function(){
+    h = Math.imul(h ^ (h >>> 16), 2246822507);
+    h = Math.imul(h ^ (h >>> 13), 3266489909);
+    return (h ^= h >>> 16) >>> 0;
+  };
+}
+
+function mulberry32(a){
+  return function(){
+    let t = a += 0x6D2B79F5;
+    t = Math.imul(t ^ (t >>> 15), t | 1);
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
 }
 
 // ---- Three.js init & loop ----
@@ -1004,6 +1346,8 @@ function initThree(){
   renderer.shadowMap.enabled = true;
   renderer.shadowMap.type = THREE.PCFSoftShadowMap;
   document.body.appendChild(renderer.domElement);
+
+  worldOriginOffset = new THREE.Vector3(0, 0, 0);
 
   window.addEventListener('resize', onWindowResize);
 
@@ -1043,6 +1387,7 @@ function animate(now){
   lastFrameTime = now;
 
   updateManualControl(delta);
+  updateWorldStreaming();
   renderer.render(scene, camera);
 }
 
@@ -1284,8 +1629,6 @@ function updateManualControl(delta){
     if (velocityScene.y !== 0){ pos.y += velocityScene.y * d; moved = true; }
     if (velocityScene.z !== 0){ pos.z += velocityScene.z * d; moved = true; }
 
-    pos.x = clamp(pos.x, -MAX_DISTANCE, MAX_DISTANCE);
-    pos.y = clamp(pos.y, -MAX_DISTANCE, MAX_DISTANCE);
     pos.z = clamp(pos.z, MIN_ALTITUDE, MAX_ALTITUDE);
   }
 
