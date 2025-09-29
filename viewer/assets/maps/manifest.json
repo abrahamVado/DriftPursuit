@@ -1,4 +1,5 @@
 {
+  "_legacyNote": "Legacy manifest retained for pre-Terra viewers. New content should use viewer/terra/maps.json.",
   "default": "procedural:endless",
   "maps": [
     {

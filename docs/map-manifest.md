@@ -1,58 +1,85 @@
-# Custom map manifest
+# Terra map catalog
 
-The viewer now supports swapping between the built-in procedural airstrip and authored layouts at runtime.
+Terra's sandbox viewer boots with a catalog of procedural biomes and optional tile map layouts. The catalog lives in [`viewer/terra/maps.json`](../viewer/terra/maps.json) and is loaded on startup to populate the in-game **Map** dropdown.
 
-## Manifest
+## Catalog structure
 
-Map entries live under `viewer/assets/maps`. The `manifest.json` file declares which layouts are available:
+`maps.json` exposes a top-level object with a `default` map id and a `maps` array. Each entry describes either a procedural Terra stream or a tile map descriptor.
 
-```json
+```jsonc
 {
-  "default": "procedural:endless",
+  "default": "aurora-basin",
   "maps": [
     {
-      "id": "procedural:endless",
-      "label": "Procedural Airstrip",
+      "id": "aurora-basin",
+      "name": "Aurora Basin",
+      "description": "Bright skies over rolling highlands with balanced cover.",
       "type": "procedural",
-      "seed": "driftpursuit:endless"
+      "seed": 982451653,
+      "chunkSize": 640,
+      "radius": 3,
+      "environment": {
+        "background": "#90b6ff",
+        "bodyBackground": "linear-gradient(180deg, #79a7ff 0%, #cfe5ff 45%, #f6fbff 100%)",
+        "fog": { "color": "#a4c6ff", "near": 1500, "far": 4200 },
+        "sun": { "position": [-420, 580, 780], "intensity": 1.05, "color": "#ffffff" },
+        "hemisphere": { "skyColor": "#dce9ff", "groundColor": "#2b4a2e", "intensity": 0.85 }
+      },
+      "procedural": {
+        "noise": { "mountains": { "amplitude": 160 } },
+        "colors": { "mid": "#c37b3b" }
+      }
     },
     {
-      "id": "creator_demo",
-      "label": "Creator Demo Layout",
+      "id": "creator-showcase",
+      "name": "Creator Showcase",
+      "description": "Authored tile set with custom props.",
       "type": "tilemap",
-      "path": "creator_demo/map.json"
+      "path": "creator-showcase/map.json",
+      "tileSize": 900,
+      "visibleRadius": 2
     }
   ]
 }
 ```
 
-* `id` – unique key that appears in the map dropdown.
-* `label` – user facing name.
-* `type` – currently `procedural` or `tilemap`.
-* `seed` / `chunkSize` / `visibleRadius` – optional overrides for procedural maps.
-* `procedural` (alias `generator`) – optional object that customizes the procedural world streamer (noise curves, feature toggles, color palette, etc.).
-* `path` – relative path to the tilemap descriptor.
+Common fields:
 
-The `default` value controls which option is selected when the viewer boots.
+* `id` – stable identifier used for URL deep links and the Terra HUD dropdown.
+* `name` – label shown inside the UI.
+* `description` – optional tooltip copy shown on hover.
+* `type` – `procedural` (default) or `tilemap`.
+* `environment` – overrides for the viewer backdrop, fog, sun, and hemisphere lighting.
+* `seed`, `chunkSize`, `radius` – procedural world-streamer settings.
+* `procedural` / `generator` – advanced overrides for Terra's terrain generator. See [Procedural overrides](#procedural-overrides).
+* `path` – relative path from `maps.json` to a tile map descriptor. Use when `type` is `tilemap`.
+* `descriptor` – inline tile map descriptor (alternative to `path`).
+* `tileSize`, `visibleRadius` – tile map grid size (in metres) and how many tiles load around the camera.
+* `assetRoot` – base URL prepended to relative asset references inside a descriptor.
 
-## Tile map descriptor
+If `default` is omitted the first valid entry becomes the fallback. Missing or invalid downloads are replaced by the baked-in catalog inside `viewer/terra/main.js`.
 
-Tilemap descriptors describe authored tiles on a square grid. The demo layout in `viewer/assets/maps/creator_demo/map.json` shows the available fields. High level structure:
+## Tile map descriptors
 
-```json
+Tile map descriptors can be loaded inline via `descriptor` or fetched from the `path` provided in a map entry. Descriptors describe authored chunks on a grid. Each chunk can define ground elevation via a heightfield and spawn props.
+
+```jsonc
 {
-  "id": "creator_demo",
+  "id": "creator-showcase",
   "type": "tilemap",
   "tileSize": 900,
+  "visibleRadius": 2,
+  "fallback": { "baseHeight": 0 },
   "tiles": [
     {
       "coords": [0, 0],
-      "baseHeight": 0.0,
+      "baseHeight": 0,
+      "groundColor": "#546e4f",
       "heightfield": {
         "rows": 33,
         "cols": 33,
         "scale": { "z": 18 },
-        "data": [0.1, 0.119, …],
+        "data": [0.1, 0.119, "…"],
         "material": { "color": "#546e4f" }
       },
       "objects": [
@@ -63,70 +90,39 @@ Tilemap descriptors describe authored tiles on a square grid. The demo layout in
           "rotationDegrees": [0, 0, 8],
           "material": { "color": "#9aa7b7" }
         },
-        {
-          "type": "tree",
-          "position": [220, 220, 0],
-          "scale": 1.1
-        }
+        { "type": "tree", "position": [220, 220, 0], "scale": 1.1 }
       ]
     }
-  ],
-  "fallback": {
-    "type": "procedural",
-    "seed": "creator_demo:fallback"
-  }
+  ]
 }
 ```
 
-* `coords` – integer tile coordinate `[x, y]`.
-* `heightfield` – optional grid of samples (rows × cols) with a vertical `scale`. When omitted, a flat ground plane is used.
-* `objects` – optional array of props. Supported types: `box`, `cylinder`, `plane`, and `tree`. Each object can specify `position`, `rotation` (radians) or `rotationDegrees`, and `scale`.
-* `fallback` – controls how missing tiles are filled. By default a procedural chunk is generated using the provided `seed`.
+Key fields:
 
-Any tile that is not listed in the descriptor automatically falls back to the procedural generator so the world continues seamlessly beyond the authored area.
+* `coords` – integer `[x, y]` tile coordinate.
+* `baseHeight` / `elevation` – ground plane height at the tile origin.
+* `heightfield` – optional dense height sample grid. `rows × cols` samples are expected; `scale.z` sets metres-per-sample vertically.
+* `groundColor` – fallback colour for autogenerated planes when no heightfield is present.
+* `objects` – list of props. Supported `type` values include `box`, `cylinder`, `plane`, and `tree`. Props honour `position`, `rotation` / `rotationDegrees`, `scale`, and optional `material` settings.
+* `fallback` – controls the background plane used for tiles that are not explicitly authored.
 
-## Runtime behaviour
+Any tile not described in the descriptor falls back to a flat plane at `fallback.baseHeight`. The Terra streamer keeps loading the authored radius around the current focus point while the procedural world fills the horizon.
 
-* A new **Map Layout** dropdown appears in the Pilot Console. Switching entries rebuilds the streaming world in-place without reloading the page.
-* The viewer persists the last selection in `localStorage` and honours a `?map=<id>` query parameter.
-* The HUD shows a status string while a new map loads (`loading…` / `ready`).
-* Map assets are fetched on demand; descriptors are cached per session once loaded.
+## Map selection flow
 
-Creators can duplicate the demo folder, adjust `map.json`, or point `manifest.json` at their own layout directory to iterate on custom maps.
+When Terra boots it downloads `viewer/terra/maps.json`, merges any descriptor data, and activates the requested map.
+
+* The viewer inspects the `?map=<id>` query parameter first. If the id exists it is selected immediately.
+* If no query parameter is present the catalog's `default` id is used.
+* Picking a different map from the in-game dropdown updates the URL and reloads the page so the new descriptor can be applied from scratch.
+* Terra caches the last successful selection in-memory for the current session only.
+
+Shareable URLs therefore look like `https://…/terra.html?map=ember-canyon`. Reloading the page is expected after updating the query parameter.
 
 ## Procedural overrides
 
-Procedural entries can provide a `procedural` (or `generator`) block to tune Terra's endless terrain without forking the source. Any omitted values fall back to the defaults that ship with the viewer, so you can override a single field at a time.
+Procedural entries can override Terra's generator without modifying source code. Populate the `procedural` block with the sections you want to tweak—noise layers, biome colours, feature toggles, and so on. See [`viewer/terra/maps.json`](../viewer/terra/maps.json) for shipping presets and refer to [`viewer/terra/main.js`](../viewer/terra/main.js) for the full list of supported knobs. Tile maps can also provide a `procedural` block inside their descriptor to control fallback chunks.
 
-```jsonc
-{
-  "id": "ember-canyon",
-  "type": "procedural",
-  "seed": 147852369,
-  "procedural": {
-    "noise": {
-      "hills": { "amplitude": 28, "frequency": 0.001 },
-      "mountains": { "amplitude": 190, "exponent": 2.6 }
-    },
-    "colors": {
-      "low": "#7a4730",
-      "mid": "#c37b3b",
-      "high": "#f1d38b",
-      "lowThreshold": 12,
-      "highThreshold": 86
-    },
-    "features": { "rivers": false },
-    "rocks": { "densityScale": 8, "size": { "min": 8, "max": 32 } }
-  }
-}
-```
+## Legacy manifest
 
-Available sections:
-
-* `noise.hills` / `noise.mountains` / `noise.ridges` – per-layer frequency, amplitude, persistence, lacunarity, exponent, and optional XY offsets that drive elevation.
-* `plateau` – adjust the flat launch pad radius and blend distances near the world origin.
-* `features` – toggle `mountains`, `rocks`, `towns`, or `rivers` on/off.
-* `colors` – configure the low/mid/high gradient stops and height thresholds (`highCap` controls when the gradient tops out).
-* `mountains`, `rocks`, `towns`, `rivers` – fine-tune feature-specific placement thresholds, spawn counts, and size ranges.
-
-See `viewer/terra/maps.json` for a full example. The `ember-canyon` preset disables rivers and skews the palette toward warm ochres, producing a noticeably drier biome than the balanced default.
+Older builds of the viewer referenced `viewer/assets/maps/manifest.json`. That file now carries a legacy note and should not be used as a template for Terra maps. Always author new content through `viewer/terra/maps.json`.
