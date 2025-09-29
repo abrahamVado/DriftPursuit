@@ -162,7 +162,7 @@ const TOOLBAR_STYLE = `
   bottom: 28px;
   transform: translateX(-50%);
   display: flex;
-  gap: 12px;
+  gap: 16px;
   padding: 16px 22px;
   border-radius: 18px;
   background: linear-gradient(180deg, rgba(10, 24, 42, 0.82) 0%, rgba(6, 14, 26, 0.94) 100%);
@@ -171,6 +171,80 @@ const TOOLBAR_STYLE = `
   backdrop-filter: blur(12px);
   pointer-events: auto;
   z-index: 4;
+`;
+
+const TOOLBAR_SECTION_STYLE = `
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+`;
+
+const MAP_LABEL_STYLE = `
+  font-size: 11px;
+  letter-spacing: 0.3em;
+  text-transform: uppercase;
+  color: rgba(190, 220, 255, 0.76);
+`;
+
+const MAP_SELECT_STYLE = `
+  min-width: 200px;
+  padding: 11px 16px;
+  border-radius: 12px;
+  border: 1px solid rgba(120, 200, 255, 0.35);
+  background: rgba(14, 32, 54, 0.78);
+  color: #e9f6ff;
+  font-family: 'Rajdhani', 'Segoe UI', sans-serif;
+  font-size: 14px;
+  letter-spacing: 0.08em;
+  cursor: pointer;
+  outline: none;
+  appearance: none;
+  -webkit-appearance: none;
+`;
+
+const THROTTLE_BADGE_STYLE = `
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 12px 16px;
+  min-width: 148px;
+  border-radius: 14px;
+  border: 1px solid rgba(120, 200, 255, 0.28);
+  background: rgba(12, 30, 52, 0.68);
+  box-shadow: 0 18px 40px rgba(5, 12, 24, 0.55);
+  color: #dff5ff;
+`;
+
+const THROTTLE_LABEL_STYLE = `
+  font-size: 11px;
+  letter-spacing: 0.32em;
+  text-transform: uppercase;
+  color: rgba(190, 220, 255, 0.86);
+`;
+
+const THROTTLE_VALUE_STYLE = `
+  font-size: 22px;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  color: #ffffff;
+`;
+
+const THROTTLE_BAR_STYLE = `
+  position: relative;
+  width: 100%;
+  height: 6px;
+  border-radius: 4px;
+  background: rgba(98, 160, 220, 0.22);
+  overflow: hidden;
+`;
+
+const THROTTLE_BAR_FILL_STYLE = `
+  position: absolute;
+  inset: 0;
+  width: 0%;
+  border-radius: 4px;
+  background: linear-gradient(90deg, #58ffe6 0%, #74c9ff 100%);
+  box-shadow: 0 0 18px rgba(110, 220, 255, 0.55);
 `;
 
 const AMMO_BUTTON_STYLE = `
@@ -198,6 +272,12 @@ const AMMO_BUTTON_ACTIVE_STYLE = `
   transform: translateY(-3px);
 `;
 
+const AMMO_GROUP_STYLE = `
+  display: flex;
+  gap: 12px;
+  align-items: stretch;
+`;
+
 const AMMO_NAME_STYLE = `
   font-size: 15px;
   font-weight: 700;
@@ -219,31 +299,35 @@ function isElement(node){
 }
 
 export class TerraHUD extends BaseHUD {
-  constructor({ controls = {}, ammoOptions = [], onAmmoSelect = null } = {}){
+  constructor({ controls = {}, ammoOptions = [], mapOptions = [], onAmmoSelect = null, onMapSelect = null } = {}){
     super({ controls });
     this.onAmmoSelect = onAmmoSelect;
+    this.onMapSelect = onMapSelect;
     this.selectedAmmoId = null;
     this.ammoButtons = new Map();
+    this.selectedMapId = null;
+    this.mapOptions = [];
 
     this._applyTheme();
     this._createToolbar();
     this.setAmmoOptions(ammoOptions);
+    this.setMapOptions(mapOptions);
+    this._updateThrottleIndicatorLabel();
+    this._updateThrottleIndicator(0);
   }
 
   _applyTheme(){
     applyStyle(this.overlay, OVERLAY_STYLE);
     applyStyle(this.centerGroup, CENTER_GROUP_STYLE);
-    applyStyle(this.reticleRing, RETICLE_RING_STYLE);
-    applyStyle(this.reticleCore, RETICLE_CORE_STYLE);
-    applyStyle(this.throttleRing, THROTTLE_RING_STYLE);
-    applyStyle(this.throttleText, THROTTLE_TEXT_STYLE);
+    applyStyle(this.reticleRing, `${RETICLE_RING_STYLE} display: none;`);
+    applyStyle(this.reticleCore, `${RETICLE_CORE_STYLE} display: none;`);
+    applyStyle(this.throttleRing, `${THROTTLE_RING_STYLE} display: none;`);
+    applyStyle(this.throttleText, `${THROTTLE_TEXT_STYLE} display: none;`);
 
     Array.from(this.centerGroup.children).forEach((node) => {
       if (!isElement(node)) return;
-      if (node.style?.height === '2px'){
-        applyStyle(node, RETICLE_LINE_STYLE);
-      } else if (node.style?.width === '2px'){
-        applyStyle(node, RETICLE_LINE_VERTICAL_STYLE);
+      if (node.style?.height === '2px' || node.style?.width === '2px'){
+        node.style.display = 'none';
       }
     });
 
@@ -262,12 +346,61 @@ export class TerraHUD extends BaseHUD {
     this.toolbar = document.createElement('div');
     this.toolbar.id = 'terra-hud-toolbar';
     applyStyle(this.toolbar, TOOLBAR_STYLE);
+
+    this.mapSection = document.createElement('div');
+    applyStyle(this.mapSection, TOOLBAR_SECTION_STYLE);
+
+    this.mapLabel = document.createElement('div');
+    applyStyle(this.mapLabel, MAP_LABEL_STYLE);
+    this.mapLabel.textContent = 'Active Map';
+    this.mapSection.appendChild(this.mapLabel);
+
+    this.mapSelect = document.createElement('select');
+    applyStyle(this.mapSelect, MAP_SELECT_STYLE);
+    this.mapSelect.addEventListener('change', () => {
+      const value = this.mapSelect.value;
+      if (!value || value === this.selectedMapId){
+        return;
+      }
+      this.selectedMapId = value;
+      if (typeof this.onMapSelect === 'function'){
+        this.onMapSelect(value);
+      }
+    });
+    this.mapSection.appendChild(this.mapSelect);
+    this.toolbar.appendChild(this.mapSection);
+
+    this.throttleBadge = document.createElement('div');
+    applyStyle(this.throttleBadge, THROTTLE_BADGE_STYLE);
+
+    this.throttleBadgeLabel = document.createElement('div');
+    applyStyle(this.throttleBadgeLabel, THROTTLE_LABEL_STYLE);
+    this.throttleBadgeLabel.textContent = 'THR';
+    this.throttleBadge.appendChild(this.throttleBadgeLabel);
+
+    this.throttleBadgeValue = document.createElement('div');
+    applyStyle(this.throttleBadgeValue, THROTTLE_VALUE_STYLE);
+    this.throttleBadgeValue.textContent = '0%';
+    this.throttleBadge.appendChild(this.throttleBadgeValue);
+
+    this.throttleBar = document.createElement('div');
+    applyStyle(this.throttleBar, THROTTLE_BAR_STYLE);
+    this.throttleBarFill = document.createElement('div');
+    applyStyle(this.throttleBarFill, THROTTLE_BAR_FILL_STYLE);
+    this.throttleBar.appendChild(this.throttleBarFill);
+    this.throttleBadge.appendChild(this.throttleBar);
+    this.toolbar.appendChild(this.throttleBadge);
+
+    this.ammoContainer = document.createElement('div');
+    applyStyle(this.ammoContainer, AMMO_GROUP_STYLE);
+    this.toolbar.appendChild(this.ammoContainer);
+
     document.body.appendChild(this.toolbar);
   }
 
   setAmmoOptions(options = []){
     this.ammoButtons.clear();
-    this.toolbar.innerHTML = '';
+    this.ammoContainer.innerHTML = '';
     options.forEach((option, index) => {
       if (!option || !option.id) return;
       const button = document.createElement('button');
@@ -289,13 +422,52 @@ export class TerraHUD extends BaseHUD {
         this._selectAmmo(option.id, false);
       });
 
-      this.toolbar.appendChild(button);
+      this.ammoContainer.appendChild(button);
       this.ammoButtons.set(option.id, button);
 
       if (index === 0 && !this.selectedAmmoId){
         this._selectAmmo(option.id, true);
       }
     });
+  }
+
+  setMapOptions(options = []){
+    this.mapOptions = Array.isArray(options) ? options : [];
+    this.mapSelect.innerHTML = '';
+    if (this.mapOptions.length === 0){
+      const option = document.createElement('option');
+      option.value = '';
+      option.textContent = 'Default';
+      option.disabled = true;
+      option.selected = true;
+      this.mapSelect.appendChild(option);
+      this.mapSelect.disabled = true;
+      return;
+    }
+    this.mapSelect.disabled = false;
+    this.mapOptions.forEach((entry) => {
+      if (!entry || !entry.id) return;
+      const option = document.createElement('option');
+      option.value = entry.id;
+      option.textContent = entry.name ?? entry.id;
+      if (entry.description){
+        option.title = entry.description;
+      }
+      this.mapSelect.appendChild(option);
+    });
+    if (this.selectedMapId){
+      this.mapSelect.value = this.selectedMapId;
+    }
+  }
+
+  setActiveMap(id){
+    this.selectedMapId = id ?? null;
+    if (this.mapSelect){
+      const value = id ?? '';
+      if ([...this.mapSelect.options].some((option) => option.value === value)){
+        this.mapSelect.value = value;
+      }
+    }
   }
 
   setActiveAmmo(id){
@@ -321,5 +493,31 @@ export class TerraHUD extends BaseHUD {
     if (!silent && typeof this.onAmmoSelect === 'function'){
       this.onAmmoSelect(id);
     }
+  }
+
+  _updateThrottleIndicator(throttle){
+    const pct = Math.round(Math.max(0, Math.min(1, throttle ?? 0)) * 100);
+    if (this.throttleBadgeValue){
+      this.throttleBadgeValue.textContent = `${pct}%`;
+    }
+    if (this.throttleBarFill){
+      this.throttleBarFill.style.width = `${pct}%`;
+    }
+  }
+
+  _updateThrottleIndicatorLabel(){
+    if (this.throttleBadgeLabel){
+      this.throttleBadgeLabel.textContent = this.throttleLabel ?? 'THR';
+    }
+  }
+
+  update(stats){
+    super.update(stats ?? {});
+    this._updateThrottleIndicator(stats?.throttle ?? 0);
+  }
+
+  setControls(config = {}){
+    super.setControls(config);
+    this._updateThrottleIndicatorLabel();
   }
 }
