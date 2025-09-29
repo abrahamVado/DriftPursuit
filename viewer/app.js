@@ -9,6 +9,16 @@ import {
 } from './control/Input.js';
 import { createSandboxWorld } from './world/SandboxWorldAdapter.js';
 import { loadGLTFAsset } from './terra/glbLoader.js';
+import {
+  DEFAULT_MAP_ID,
+  WORLD_CHUNK_RADIUS,
+  WORLD_CHUNK_SIZE,
+  WORLD_SEED,
+  buildMapManifestUrl,
+  deriveAssetRootFromUrl,
+  normalizeAssetRootPath,
+  normalizeMapDescriptor,
+} from './mapNormalization.mjs';
 
 const HUD = document.getElementById('hud');
 const MANUAL_BUTTON = document.getElementById('manual-toggle');
@@ -48,7 +58,6 @@ const DEFAULT_MODEL_SET_KEY = 'high_fidelity';
 const MODEL_SET_STORAGE_KEY = 'driftpursuit:modelSet';
 const INVERT_AXES_STORAGE_KEY = 'driftpursuit:invertAxes';
 const MAP_STORAGE_KEY = 'driftpursuit:mapId';
-const DEFAULT_MAP_ID = 'procedural:endless';
 const modelSetAssetCache = new Map();
 let modelSetStorageUnavailable = false;
 let runtimeModelSetKey = null;
@@ -77,11 +86,8 @@ const THROTTLE_RESPONSE_RATE = 2.5;
 const SCENE_TO_SIM_SCALE = { x: 2, y: 2, z: 50 };
 const MANUAL_VELOCITY_EPSILON = 0.5;
 const MANUAL_ORIENTATION_EPSILON = 0.005;
-const WORLD_CHUNK_SIZE = 900;
-const WORLD_CHUNK_RADIUS = 2;
 const WORLD_REBASE_DISTANCE = 1200;
 const WORLD_REBASE_DISTANCE_SQ = WORLD_REBASE_DISTANCE * WORLD_REBASE_DISTANCE;
-const WORLD_SEED = 'driftpursuit:endless';
 const TERRAIN_SEED = `${WORLD_SEED}:terrain`;
 const RIVER_SEED = `${WORLD_SEED}:river`;
 const TERRAIN_FLATTEN_RADIUS = 580;
@@ -2987,7 +2993,7 @@ async function ensureMapDescriptor(mapId){
   }
 
   if (entry.type === 'tilemap' && entry.path && typeof fetch === 'function'){
-    const url = `assets/maps/${entry.path}`.replace(/\\/g, '/');
+    const url = buildMapManifestUrl(entry.path);
     const response = await fetch(url, { cache: 'no-cache' });
     if (!response.ok){
       throw new Error(`Failed to load map descriptor ${mapId}: HTTP ${response.status}`);
@@ -3001,62 +3007,6 @@ async function ensureMapDescriptor(mapId){
   const normalized = normalizeMapDescriptor(entry, entry);
   mapDescriptorCache.set(mapId, normalized);
   return normalized;
-}
-
-function normalizeAssetRootPath(value){
-  if (!value) return '';
-  const normalized = String(value).replace(/\\/g, '/').trim();
-  if (!normalized) return '';
-  if (/^https?:\/\//i.test(normalized) || normalized.startsWith('/')){
-    return normalized.replace(/\/?$/, '/');
-  }
-  return `${normalized.replace(/\/?$/, '')}/`;
-}
-
-function deriveAssetRootFromUrl(url){
-  if (!url) return '';
-  const normalized = String(url).replace(/\\/g, '/');
-  const index = normalized.lastIndexOf('/');
-  if (index === -1) return '';
-  return normalizeAssetRootPath(normalized.slice(0, index + 1));
-}
-
-function normalizeMapDescriptor(descriptor, entry){
-  if (!descriptor) return null;
-  const base = { ...descriptor };
-  base.id = entry?.id || descriptor.id || DEFAULT_MAP_ID;
-  base.label = base.label || entry?.label || base.name || base.id;
-  base.type = base.type || entry?.type || 'procedural';
-  base.generator = base.generator || entry?.generator || entry?.integration;
-
-  if (base.type === 'tilemap'){
-    base.tileSize = Number(base.tileSize || entry?.tileSize || WORLD_CHUNK_SIZE) || WORLD_CHUNK_SIZE;
-    const radius = Number(base.visibleRadius ?? entry?.visibleRadius ?? WORLD_CHUNK_RADIUS);
-    base.visibleRadius = Number.isFinite(radius) ? radius : WORLD_CHUNK_RADIUS;
-    base.fallback = base.fallback || entry?.fallback || { type: 'procedural', seed: WORLD_SEED };
-    base.tiles = Array.isArray(base.tiles) ? base.tiles : [];
-    const explicitAssetRoot = normalizeAssetRootPath(base.assetRoot || entry?.assetRoot || descriptor?.assetRoot || '');
-    if (explicitAssetRoot){
-      base.assetRoot = explicitAssetRoot;
-    } else if (entry?.path){
-      const resourcePath = `assets/maps/${String(entry.path).replace(/\\/g, '/')}`;
-      base.assetRoot = deriveAssetRootFromUrl(resourcePath);
-    } else if (descriptor?.path){
-      base.assetRoot = deriveAssetRootFromUrl(String(descriptor.path));
-    } else {
-      base.assetRoot = '';
-    }
-  } else {
-    base.type = 'procedural';
-    base.seed = base.seed || entry?.seed || WORLD_SEED;
-    base.chunkSize = Number(base.chunkSize || entry?.chunkSize || WORLD_CHUNK_SIZE) || WORLD_CHUNK_SIZE;
-    const radius = Number(base.visibleRadius ?? entry?.visibleRadius ?? WORLD_CHUNK_RADIUS);
-    base.visibleRadius = Number.isFinite(radius) ? radius : WORLD_CHUNK_RADIUS;
-    const explicitAssetRoot = normalizeAssetRootPath(base.assetRoot || entry?.assetRoot || descriptor?.assetRoot || '');
-    base.assetRoot = explicitAssetRoot;
-  }
-
-  return base;
 }
 
 function createWorldManagerFromDescriptor(descriptor){
@@ -3867,3 +3817,4 @@ function createStylizedLowpolyTemplate(){
   group.name = 'StylizedLowpolyAircraft';
   return group;
 }
+
