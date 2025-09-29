@@ -1,0 +1,25 @@
+{
+  "default": "procedural:endless",
+  "maps": [
+    {
+      "id": "procedural:endless",
+      "label": "Procedural Airstrip",
+      "type": "procedural",
+      "seed": "driftpursuit:endless",
+      "chunkSize": 900,
+      "visibleRadius": 2
+    },
+    {
+      "id": "creator_demo",
+      "label": "Creator Demo Layout",
+      "type": "tilemap",
+      "path": "creator_demo/map.json",
+      "tileSize": 900,
+      "visibleRadius": 2,
+      "fallback": {
+        "type": "procedural",
+        "seed": "creator_demo:fallback"
+      }
+    }
+  ]
+}
