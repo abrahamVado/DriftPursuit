@@ -1,4 +1,13 @@
 // viewer/app.js - minimal three.js viewer that connects to ws://localhost:8080/ws
+import { ChaseCam } from './camera/ChaseCam.js';
+import {
+  readControls,
+  onKeyDown as registerControlKeyDown,
+  onKeyUp as registerControlKeyUp,
+  setInvertAxes as inputSetInvertAxes,
+  setThrottleHold as inputSetThrottleHold,
+} from './control/Input.js';
+
 const HUD = document.getElementById('hud');
 const MANUAL_BUTTON = document.getElementById('manual-toggle');
 const INVERT_AXES_BUTTON = document.getElementById('invert-axes-toggle');
@@ -50,25 +59,19 @@ if (!MODEL_SETS[currentModelSetKey]) {
 persistModelSetKey(currentModelSetKey);
 let invertAxesStorageUnavailable = false;
 let invertAxesEnabled = readPersistedInvertAxesPreference();
+inputSetInvertAxes(invertAxesEnabled);
 let mapStorageUnavailable = false;
-const MOVEMENT_KEY_CODES = new Set([
-  'KeyW','KeyA','KeyS','KeyD',      // planar translation
-  'KeyR','KeyF',                    // altitude adjustments
-  'Space','ShiftLeft','ShiftRight', // optional vertical control keys
-  'KeyQ','KeyE',                    // yaw
-  'ArrowUp','ArrowDown',            // pitch
-  'ArrowLeft','ArrowRight'          // roll
-]);
-const TRANSLATION_SPEED = 80; // units/sec (scene coords)
-const ALTITUDE_SPEED = 60;
-const ROTATION_SPEED = Math.PI / 3; // rad/sec
 const MIN_ALTITUDE = 0;
 const MAX_ALTITUDE = 400;
 const MAX_ROLL = Math.PI * 0.75;
 const MAX_PITCH = Math.PI * 0.5;
-const ACCELERATION_RATE = 90; // units/sec^2 for forward thrust button
-const MAX_FORWARD_SPEED = 260; // max forward velocity when thrust engaged
-const NATURAL_DECEL = 35; // drag applied when thrust released
+const MAX_YAW_RATE = Math.PI * 0.8;
+const MAX_PITCH_RATE = Math.PI * 0.9;
+const MAX_ROLL_RATE = Math.PI * 1.2;
+const THRUST_FORCE = 240;
+const DRAG_COEFFICIENT = 0.65;
+const MAX_AIRSPEED = 340;
+const THROTTLE_RESPONSE_RATE = 2.5;
 const SCENE_TO_SIM_SCALE = { x: 2, y: 2, z: 50 };
 const MANUAL_VELOCITY_EPSILON = 0.5;
 const MANUAL_ORIENTATION_EPSILON = 0.005;
@@ -128,13 +131,13 @@ const DEFAULT_CONTROL_DOCS = [
   },
   {
     id: 'accelerate-forward',
-    label: 'Forward Acceleration',
-    description: 'Toggle gradual thrust down the runway. Keyboard shortcut: press T.'
+    label: 'Max Throttle Hold',
+    description: 'Toggle sustained throttle with T or the HUD button. Gamepad right trigger also works.'
   },
   {
     id: 'keyboard',
     label: 'Flight Keys',
-    description: 'Use WASD to strafe, RF/Space/Shift to climb or descend, QE for yaw, and arrow keys for pitch/roll.'
+    description: 'Use W/S or Up/Down for pitch, A/D or Left/Right for roll, and Q/E for yaw.'
   },
   {
     id: 'plane-selector',
@@ -175,14 +178,22 @@ const pendingTelemetry = [];
 const planeResources = new Map();
 
 // ----- Manual control / HUD state -----
-const pressedKeys = new Set();
 let manualControlEnabled = false;
 let manualMovementActive = false;
 let connectionStatusKey = CONNECTION_STATUS_KEYS.CONNECTING;
 let connectionStatus = getConnectionStatusLabel(connectionStatusKey);
 let lastFrameTime = null;
-let accelerationEngaged = false;
-let forwardSpeed = 0;
+let manualFlightState = null;
+let manualFlightFollowId = null;
+let manualAirspeed = 0;
+let chaseCam = null;
+let throttleHoldEngaged = false;
+
+const TMP_VECTOR = new THREE.Vector3();
+const TMP_ACCEL = new THREE.Vector3();
+const TMP_FORWARD = new THREE.Vector3();
+const TMP_EULER = new THREE.Euler(0, 0, 0, 'ZYX');
+const TMP_QUAT = new THREE.Quaternion();
 let commandSequence = 0;
 let pendingAutopilotPreset = null;
 let lastAppliedAutopilotLabel = null;
@@ -336,12 +347,10 @@ function handleSocketInterrupted(options = {}){
 }
 
 function resetManualStateForReconnect(){
-  pressedKeys.clear();
   setManualMovementActive(false);
-  if (accelerationEngaged){
-    setAccelerationEngaged(false, { skipManualEnforce: true, skipCruiseSync: true });
-  }
-  forwardSpeed = 0;
+  throttleHoldEngaged = false;
+  inputSetThrottleHold(false);
+  resetManualFlightState();
   lastManualOverridePayload = null;
   lastKnownManualVelocity = [0, 0, 0];
   updateHudStatus();
@@ -588,7 +597,7 @@ function cycleAutopilotWaypoints(){
 }
 
 function syncCruiseControllerTarget(options = {}){
-  const preset = options.forceBaseline || !accelerationEngaged
+  const preset = options.forceBaseline || !throttleHoldEngaged
     ? CRUISE_SPEED_PRESETS.cruise
     : CRUISE_SPEED_PRESETS.boost;
   if (!preset) return;
@@ -1360,6 +1369,9 @@ function initThree(){
   renderer.shadowMap.type = THREE.PCFSoftShadowMap;
   document.body.appendChild(renderer.domElement);
 
+  chaseCam = new ChaseCam(camera);
+  chaseCam.setOffsets(40, 20);
+
   worldOriginOffset = new THREE.Vector3(0, 0, 0);
 
   window.addEventListener('resize', onWindowResize);
@@ -1400,6 +1412,7 @@ function animate(now){
   lastFrameTime = now;
 
   updateManualControl(delta);
+  if (chaseCam) chaseCam.update(delta);
   updateWorldStreaming();
   renderer.render(scene, camera);
 }
@@ -1462,8 +1475,13 @@ function removeStalePlanes(){
 }
 
 function updateCameraTarget(mesh){
-  camera.position.set(mesh.position.x - 40, mesh.position.y + 0, mesh.position.z + 20);
-  camera.lookAt(mesh.position);
+  if (chaseCam){
+    chaseCam.follow(mesh);
+    chaseCam.snapToTarget();
+  } else if (camera){
+    camera.position.set(mesh.position.x - 40, mesh.position.y, mesh.position.z + 20);
+    camera.lookAt(mesh.position);
+  }
 }
 
 function updateManualOverrideIndicator(id, isActive){
@@ -1498,13 +1516,14 @@ function setManualControlEnabled(enabled){
   manualControlEnabled = shouldEnable;
 
   if (!manualControlEnabled){
-    pressedKeys.clear();
     setManualMovementActive(false);
-    // Disable thrust quietly while avoiding recursive manual re-enabling.
-    setAccelerationEngaged(false, { skipManualEnforce: true });
+    throttleHoldEngaged = false;
+    inputSetThrottleHold(false);
+    resetManualFlightState();
     lastKnownManualVelocity = [0, 0, 0];
     emitManualOverrideSnapshot({ force: true, enabledOverride: false });
   } else {
+    initializeManualFlightState();
     emitManualOverrideSnapshot({ force: true, enabledOverride: true });
   }
 
@@ -1516,6 +1535,7 @@ function setInvertAxesEnabled(enabled){
   const shouldEnable = Boolean(enabled);
   if (invertAxesEnabled === shouldEnable) return;
   invertAxesEnabled = shouldEnable;
+  inputSetInvertAxes(shouldEnable);
   persistInvertAxesPreference(shouldEnable);
   updateInvertAxesButtonState();
   updateHudStatus();
@@ -1524,17 +1544,15 @@ function setInvertAxesEnabled(enabled){
 
 function setAccelerationEngaged(enabled, options = {}){
   const shouldEnable = Boolean(enabled);
-  if (accelerationEngaged === shouldEnable) return;
+  if (throttleHoldEngaged === shouldEnable) return;
 
   if (shouldEnable && !manualControlEnabled && !options.skipManualEnforce){
     setManualControlEnabled(true);
     if (!manualControlEnabled) return;
   }
 
-  accelerationEngaged = shouldEnable;
-  if (!shouldEnable){
-    forwardSpeed = 0;
-  }
+  throttleHoldEngaged = shouldEnable;
+  inputSetThrottleHold(throttleHoldEngaged);
 
   updateAccelerationButtonState();
   updateHudStatus();
@@ -1552,7 +1570,7 @@ function handleKeyDown(event){
   }
 
   if (code === 'KeyT'){
-    setAccelerationEngaged(!accelerationEngaged);
+    setAccelerationEngaged(!throttleHoldEngaged);
     return;
   }
 
@@ -1568,31 +1586,19 @@ function handleKeyDown(event){
     return;
   }
 
-  if (!MOVEMENT_KEY_CODES.has(code)) return;
-
-  if (['ArrowUp','ArrowDown','ArrowLeft','ArrowRight','Space'].includes(code)){
-    event.preventDefault();
+  const result = registerControlKeyDown(code);
+  if (result.handled){
+    if (result.preventDefault) event.preventDefault();
+    return;
   }
-
-  pressedKeys.add(code);
-  if (manualControlEnabled) setManualMovementActive(true);
 }
 
 function handleKeyUp(event){
   const { code } = event;
-  if (!MOVEMENT_KEY_CODES.has(code)) return;
-
-  pressedKeys.delete(code);
-  if (manualControlEnabled && !isAnyMovementKeyActive()){
-    setManualMovementActive(false);
+  const result = registerControlKeyUp(code);
+  if (result.handled && result.preventDefault){
+    event.preventDefault();
   }
-}
-
-function isAnyMovementKeyActive(){
-  for (const code of MOVEMENT_KEY_CODES){
-    if (pressedKeys.has(code)) return true;
-  }
-  return false;
 }
 
 function setManualMovementActive(active){
@@ -1601,81 +1607,104 @@ function setManualMovementActive(active){
   updateHudStatus();
 }
 
-function computeManualSceneVelocity(){
-  const velocity = { x: 0, y: 0, z: 0 };
+function initializeManualFlightState(){
+  const followId = getCurrentFollowId();
+  manualFlightFollowId = followId || null;
+  const mesh = followId ? planeMeshes.get(followId) : null;
+  if (!mesh){
+    resetManualFlightState();
+    return;
+  }
+  manualFlightState = {
+    position: mesh.position.clone(),
+    velocity: new THREE.Vector3(0, 0, 0),
+    roll: mesh.rotation.x || 0,
+    pitch: mesh.rotation.y || 0,
+    yaw: mesh.rotation.z || 0,
+    throttle: throttleHoldEngaged ? 1 : 0,
+  };
+  manualAirspeed = 0;
+  lastKnownManualOrientation = [
+    manualFlightState.yaw,
+    manualFlightState.pitch,
+    manualFlightState.roll,
+  ];
+}
 
-  if (pressedKeys.has('KeyW')) velocity.y += TRANSLATION_SPEED;
-  if (pressedKeys.has('KeyS')) velocity.y -= TRANSLATION_SPEED;
-  if (pressedKeys.has('KeyA')) velocity.x -= TRANSLATION_SPEED;
-  if (pressedKeys.has('KeyD')) velocity.x += TRANSLATION_SPEED;
-
-  if (pressedKeys.has('KeyR') || pressedKeys.has('Space')) velocity.z += ALTITUDE_SPEED;
-  if (pressedKeys.has('KeyF') || pressedKeys.has('ShiftLeft') || pressedKeys.has('ShiftRight')) velocity.z -= ALTITUDE_SPEED;
-
-  return velocity;
+function resetManualFlightState(){
+  manualFlightState = null;
+  manualFlightFollowId = null;
+  manualAirspeed = 0;
 }
 
 function updateManualControl(delta){
   if (!manualControlEnabled) return;
   const followId = getCurrentFollowId();
   const mesh = planeMeshes.get(followId);
-  const d = Number.isFinite(delta) ? Math.max(delta, 0) : 0;
-  const movementActive = isAnyMovementKeyActive() || (accelerationEngaged && forwardSpeed > 0.1);
+  if (!mesh){
+    resetManualFlightState();
+    return;
+  }
+
+  if (!manualFlightState || manualFlightFollowId !== followId){
+    initializeManualFlightState();
+  }
+  manualFlightFollowId = followId;
+  const state = manualFlightState;
+  if (!state) return;
+
+  const dt = Number.isFinite(delta) ? Math.max(delta, 0) : 0;
+  const controls = readControls();
+
+  const throttleTarget = clamp(controls.throttle, 0, 1);
+  const throttleBlend = 1 - Math.exp(-THROTTLE_RESPONSE_RATE * dt);
+  if (!Number.isFinite(state.throttle)) state.throttle = 0;
+  state.throttle += (throttleTarget - state.throttle) * throttleBlend;
+  state.throttle = clamp(state.throttle, 0, 1);
+
+  state.yaw += clamp(controls.yaw, -1, 1) * MAX_YAW_RATE * dt;
+  state.pitch = clamp(
+    state.pitch + clamp(controls.pitch, -1, 1) * MAX_PITCH_RATE * dt,
+    -MAX_PITCH,
+    MAX_PITCH,
+  );
+  state.roll = clamp(
+    state.roll + clamp(controls.roll, -1, 1) * MAX_ROLL_RATE * dt,
+    -MAX_ROLL,
+    MAX_ROLL,
+  );
+
+  TMP_EULER.set(state.roll, state.pitch, state.yaw, 'ZYX');
+  mesh.setRotationFromEuler(TMP_EULER);
+
+  TMP_QUAT.setFromEuler(TMP_EULER);
+  TMP_FORWARD.set(0, 1, 0).applyQuaternion(TMP_QUAT);
+  TMP_ACCEL.copy(TMP_FORWARD).multiplyScalar(THRUST_FORCE * state.throttle);
+  state.velocity.addScaledVector(TMP_ACCEL, dt);
+
+  const dragFactor = Math.max(0, 1 - (DRAG_COEFFICIENT * dt));
+  state.velocity.multiplyScalar(dragFactor);
+  if (state.velocity.length() > MAX_AIRSPEED){
+    state.velocity.setLength(MAX_AIRSPEED);
+  }
+
+  manualAirspeed = state.velocity.length();
+  TMP_VECTOR.copy(state.velocity).multiplyScalar(dt);
+  state.position.add(TMP_VECTOR);
+  state.position.z = clamp(state.position.z, MIN_ALTITUDE, MAX_ALTITUDE);
+  mesh.position.copy(state.position);
+
+  const movementActive =
+    manualAirspeed > 0.1 ||
+    Math.abs(controls.yaw) > 0.01 ||
+    Math.abs(controls.pitch) > 0.01 ||
+    Math.abs(controls.roll) > 0.01 ||
+    state.throttle > 0.01;
   setManualMovementActive(movementActive);
 
-  const velocityScene = computeManualSceneVelocity();
-
-  if (accelerationEngaged){
-    forwardSpeed = clamp(forwardSpeed + ACCELERATION_RATE * d, 0, MAX_FORWARD_SPEED);
-  } else {
-    forwardSpeed = Math.max(0, forwardSpeed - NATURAL_DECEL * d);
-  }
-
-  if (forwardSpeed > 0){
-    velocityScene.y += forwardSpeed;
-  }
-
-  let moved = false;
-  if (mesh){
-    const pos = mesh.position;
-    if (velocityScene.x !== 0){ pos.x += velocityScene.x * d; moved = true; }
-    if (velocityScene.y !== 0){ pos.y += velocityScene.y * d; moved = true; }
-    if (velocityScene.z !== 0){ pos.z += velocityScene.z * d; moved = true; }
-
-    pos.z = clamp(pos.z, MIN_ALTITUDE, MAX_ALTITUDE);
-  }
-
-  let rotated = false;
-  if (mesh){
-    const rot = mesh.rotation;
-    const rotationDelta = ROTATION_SPEED * d;
-    const pitchFactor = invertAxesEnabled ? -1 : 1;
-    const rollFactor = invertAxesEnabled ? -1 : 1;
-    if (pressedKeys.has('KeyQ')){ rot.z += rotationDelta; rotated = true; }
-    if (pressedKeys.has('KeyE')){ rot.z -= rotationDelta; rotated = true; }
-    if (pressedKeys.has('ArrowUp')){ rot.y += rotationDelta * pitchFactor; rotated = true; }
-    if (pressedKeys.has('ArrowDown')){ rot.y -= rotationDelta * pitchFactor; rotated = true; }
-    if (pressedKeys.has('ArrowLeft')){ rot.x += rotationDelta * rollFactor; rotated = true; }
-    if (pressedKeys.has('ArrowRight')){ rot.x -= rotationDelta * rollFactor; rotated = true; }
-
-    rot.x = clamp(rot.x, -MAX_ROLL, MAX_ROLL);
-    rot.y = clamp(rot.y, -MAX_PITCH, MAX_PITCH);
-  }
-
-  if (mesh && (moved || rotated)) updateCameraTarget(mesh);
-
-  if (accelerationEngaged || forwardSpeed > 0.1){
-    updateHudStatus();
-  }
-
-  const orientation = mesh
-    ? [mesh.rotation.z, mesh.rotation.y, mesh.rotation.x]
-    : lastKnownManualOrientation;
-  if (mesh){
-    lastKnownManualOrientation = orientation;
-  }
-
-  const velocitySim = sceneVelocityToSim(velocityScene);
+  const orientation = [state.yaw, state.pitch, state.roll];
+  lastKnownManualOrientation = orientation;
+  const velocitySim = sceneVelocityToSim(state.velocity);
   lastKnownManualVelocity = velocitySim;
 
   maybeSendManualOverride({
@@ -1683,6 +1712,8 @@ function updateManualControl(delta){
     velocity: velocitySim,
     orientation,
   });
+
+  updateHudStatus();
 }
 
 function sceneVelocityToSim(velocity){
@@ -1777,9 +1808,14 @@ function updateHudStatus(){
   const controlMode = manualControlEnabled
     ? `Manual ${manualMovementActive ? '(active)' : '(idle)'}`
     : 'Telemetry';
-  const accelLabel = accelerationEngaged
-    ? `Forward acceleration: ON (${forwardSpeed.toFixed(0)} u/s)`
-    : 'Forward acceleration: off';
+  const throttleValue = manualFlightState?.throttle;
+  const throttlePercent = Math.round(clamp(
+    Number.isFinite(throttleValue) ? throttleValue : (throttleHoldEngaged ? 1 : 0),
+    0,
+    1,
+  ) * 100);
+  const throttleLabel = `Throttle: ${throttlePercent}%${throttleHoldEngaged ? ' (hold)' : ''}`;
+  const airspeedLabel = `Airspeed: ${manualAirspeed.toFixed(0)} u/s`;
   const simOverrideLabel = simManualOverrideActive
     ? 'Simulator override: MANUAL'
     : 'Simulator override: autopilot';
@@ -1791,17 +1827,18 @@ function updateHudStatus(){
     ? `${modelStatus.label} ${modelStatus.note}`.trim()
     : modelStatus.label;
   const arrowInstructions = invertAxesEnabled
-    ? 'arrows pitch/roll (inverted)'
-    : 'arrows pitch/roll';
+    ? '↑/↓ pitch, ←/→ roll (inverted)'
+    : '↑/↓ pitch, ←/→ roll';
 
   HUD.innerText =
     `${connectionStatus}\n` +
     `Mode: ${controlMode}\n` +
     `Model set: ${modelLine}\n` +
-    `${accelLabel}\n` +
+    `${throttleLabel}\n` +
+    `${airspeedLabel}\n` +
     `${simOverrideLabel}\n` +
     `${invertStatusLabel}\n` +
-    `[M] toggle manual · [T] toggle thrust · WASD/RF move · QE yaw · ${arrowInstructions}`;
+    `[M] toggle manual · [T] throttle hold · W/S pitch · A/D roll · Q/E yaw · ${arrowInstructions}`;
 
   if (MODEL_SET_STATUS){
     MODEL_SET_STATUS.textContent = `Active aircraft: ${modelLine}`.trim();
@@ -1888,7 +1925,7 @@ function wireButtonHandlers(){
 
   if (ACCELERATE_BUTTON){
     ACCELERATE_BUTTON.addEventListener('click', () => {
-      setAccelerationEngaged(!accelerationEngaged);
+      setAccelerationEngaged(!throttleHoldEngaged);
     });
   }
 
@@ -2010,6 +2047,11 @@ function syncFollowState(options = {}){
   currentFollowId = nextId || null;
   if (previous !== currentFollowId){
     refreshSimManualOverrideState();
+    if (manualControlEnabled){
+      initializeManualFlightState();
+    } else {
+      resetManualFlightState();
+    }
   }
   if (options.refreshCamera){
     updateCameraTargetForCurrentPlane();
@@ -2101,9 +2143,9 @@ function updateInvertAxesButtonState(){
 
 function updateAccelerationButtonState(){
   if (!ACCELERATE_BUTTON) return;
-  const label = accelerationEngaged ? 'Stop Forward Acceleration' : 'Start Forward Acceleration';
+  const label = throttleHoldEngaged ? 'Release Throttle Hold' : 'Hold Max Throttle';
   ACCELERATE_BUTTON.textContent = label;
-  ACCELERATE_BUTTON.classList.toggle('is-active', accelerationEngaged);
+  ACCELERATE_BUTTON.classList.toggle('is-active', throttleHoldEngaged);
 }
 
 function resolveModelSetKey(preferredKey){
