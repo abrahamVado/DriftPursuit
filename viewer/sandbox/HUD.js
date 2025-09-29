@@ -171,7 +171,7 @@ function createMetric(label){
   wrapper.appendChild(title);
   wrapper.appendChild(value);
 
-  return { wrapper, value };
+  return { wrapper, value, title };
 }
 
 function formatTime(seconds){
@@ -191,7 +191,7 @@ function formatDistance(meters){
 }
 
 export class HUD {
-  constructor({ controls = [] } = {}){
+  constructor({ controls = {} } = {}){
     this.overlay = document.createElement('div');
     this.overlay.id = 'hud-overlay';
     this.overlay.setAttribute('style', OVERLAY_STYLE);
@@ -222,7 +222,8 @@ export class HUD {
 
     this.throttleText = document.createElement('div');
     this.throttleText.setAttribute('style', THROTTLE_TEXT_STYLE);
-    this.throttleText.textContent = 'THR 0%';
+    this.throttleLabel = controls.throttleLabel ?? 'THR';
+    this.throttleText.textContent = `${this.throttleLabel} 0%`;
     this.centerGroup.appendChild(this.throttleText);
 
     this.metrics = {
@@ -258,7 +259,7 @@ export class HUD {
 
     this.controlsTitle = document.createElement('div');
     this.controlsTitle.setAttribute('style', CONTROLS_TITLE_STYLE);
-    this.controlsTitle.textContent = 'Flight Controls';
+    this.controlsTitle.textContent = controls.title ?? 'Controls';
     this.controlsPanel.appendChild(this.controlsTitle);
 
     this.controlsList = document.createElement('div');
@@ -273,14 +274,15 @@ export class HUD {
     this.message.style.display = 'none';
     this.overlay.appendChild(this.message);
 
-    this.controls = controls;
+    this.controls = Array.isArray(controls.items) ? controls.items : [];
     this.renderControls();
+    this.setMetricLabels(controls.metricLabels ?? {});
     this.messageTimer = null;
   }
 
   update({ throttle = 0, speed = 0, crashCount = 0, elapsedTime = 0, distance = 0 }){
     const throttlePct = Math.round(Math.max(0, Math.min(1, throttle)) * 100);
-    this.throttleText.textContent = `THR ${throttlePct}%`;
+    this.throttleText.textContent = `${this.throttleLabel} ${throttlePct}%`;
     const sweep = Math.max(0, Math.min(360, throttlePct * 3.6));
     const arcGradient = `conic-gradient(rgba(80, 255, 200, 0.8) ${sweep}deg, rgba(90, 120, 180, 0.18) ${sweep}deg 360deg)`;
     this.throttleRing.style.background = arcGradient;
@@ -310,9 +312,36 @@ export class HUD {
     });
   }
 
-  setControls(controls){
-    this.controls = Array.isArray(controls) ? controls : [];
-    this.renderControls();
+  setControls(config = {}){
+    if (config.title){
+      this.controlsTitle.textContent = config.title;
+    }
+    if (Array.isArray(config.items)){
+      this.controls = config.items;
+      this.renderControls();
+    }
+    if (config.throttleLabel){
+      this.throttleLabel = config.throttleLabel;
+      this.throttleText.textContent = `${this.throttleLabel} 0%`;
+    }
+    if (config.metricLabels){
+      this.setMetricLabels(config.metricLabels);
+    }
+  }
+
+  setMetricLabels(labels = {}){
+    if (labels.speed && this.metrics.speed?.title){
+      this.metrics.speed.title.textContent = labels.speed;
+    }
+    if (labels.crashes && this.metrics.crashes?.title){
+      this.metrics.crashes.title.textContent = labels.crashes;
+    }
+    if (labels.time && this.metrics.time?.title){
+      this.metrics.time.title.textContent = labels.time;
+    }
+    if (labels.distance && this.metrics.distance?.title){
+      this.metrics.distance.title.textContent = labels.distance;
+    }
   }
 
   showMessage(text, durationMs = 1200){
