@@ -1,4 +1,4 @@
-import { WorldStreamer } from '../sandbox/WorldStreamer.js';
+import { TerraWorldStreamer } from './TerraWorldStreamer.js';
 import { TerraPlaneController, createPlaneMesh } from './PlaneController.js';
 import { CarController, createCarRig } from '../sandbox/CarController.js';
 import { ChaseCamera } from '../sandbox/ChaseCamera.js';
@@ -40,8 +40,11 @@ sun.shadow.camera.bottom = -800;
 sun.shadow.camera.far = 2400;
 scene.add(sun);
 
-const world = new WorldStreamer({ scene, chunkSize: 640, radius: 3, seed: 982451653 });
+const world = new TerraWorldStreamer({ scene, chunkSize: 640, radius: 3, seed: 982451653 });
 const collisionSystem = new CollisionSystem({ world, crashMargin: 2.4, obstaclePadding: 3.2 });
+
+// 🔧 Standardize on TerraProjectileManager
+const projectileManager = new TerraProjectileManager({ scene });
 
 const chaseCamera = new ChaseCamera(camera, {
   distance: 82,
@@ -86,7 +89,6 @@ const hudPresets = {
 };
 
 const hud = new HUD({ controls: hudPresets.plane });
-const projectileManager = new TerraProjectileManager({ scene });
 
 const SKY_CEILING = 1800;
 const MAX_DEFAULT_VEHICLES = 5;
@@ -480,6 +482,7 @@ function handleProjectileHit(vehicle){
   }
 }
 
+// 🔧 Unified firing uses projectileManager
 function fireActiveVehicleProjectile(){
   if (!activeVehicleId) return false;
   const vehicle = vehicles.get(activeVehicleId);
@@ -635,7 +638,6 @@ function applyVehicleSnapshot(id, snapshot = {}){
       }
     }
   }
-
 }
 
 function focusCameraOnVehicle(vehicle){
@@ -740,6 +742,8 @@ function evaluateCollisions(vehicle){
   }
 }
 
+// ⏱️ Main loop
+
 let lastTime = performance.now();
 let elapsedTime = 0;
 
@@ -763,9 +767,11 @@ function animate(now){
     fireCooldownTimer = fired ? FIRE_COOLDOWN : MIN_FAILED_FIRE_DELAY;
   }
 
+  // Projectiles: integrate hits back into your game logic
   projectileManager.update(dt, {
     vehicles,
     onVehicleHit: handleProjectileHit,
+    // Optionally: add onImpact callback in TerraProjectileManager to call world.applyProjectileImpact?.(impact)
   });
 
   const activeVehicle = activeVehicleId ? vehicles.get(activeVehicleId) : null;
@@ -792,6 +798,7 @@ focusCameraOnVehicle(activeVehicleId ? vehicles.get(activeVehicleId) : vehicles.
 world.update(new THREE.Vector3(0, 0, 0));
 requestAnimationFrame(animate);
 
+// 🔧 Public API: rewire to current systems
 window.DriftPursuitTerra = {
   join: handlePlayerJoin,
   leave: handlePlayerLeave,
@@ -806,5 +813,9 @@ window.DriftPursuitTerra = {
       position: entry.state.position.clone(),
       velocity: entry.state.velocity.clone(),
     }));
+  },
+  // fire() now uses the active vehicle’s muzzle via TerraProjectileManager
+  fire(){
+    return fireActiveVehicleProjectile();
   },
 };
