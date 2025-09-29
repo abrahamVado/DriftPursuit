@@ -43,6 +43,19 @@ The HUD overlays throttle, airspeed, altitude, crash counter, and the same contr
 Looking for a friendlier fixed-camera layout for casual pilots? See [`docs/casual-flight-controls.md`](docs/casual-flight-controls.md) for a beginner-focused scheme with auto-stabilization assists and presentation tips.
 
 
+## Terra terrain flyover (three.js)
+
+Need a spectator-friendly view of the procedural terrain without piloting the aircraft? Launch the Terra explorer to cruise above the same streaming world on a guided camera rail:
+
+```bash
+cd viewer
+npx http-server -p 8080 .
+# or: python -m http.server 8080
+```
+
+Then open [`http://localhost:8080/terra/index.html`](http://localhost:8080/terra/index.html). The camera glides along a slow loop, keeping the horizon framed while the `WorldStreamer` continuously loads and unloads chunks beneath it. This is a handy way to review lighting tweaks, terrain noise, or obstacle distribution without juggling the flight controls.
+
+
 ## Prerequisites
 
 - Go 1.20 or newer
