@@ -10,6 +10,10 @@ export class CollisionSystem {
     this.obstaclePadding = obstaclePadding;
   }
 
+  setWorld(world){
+    this.world = world;
+  }
+
   evaluate(planeState){
     if (!planeState || !this.world) return { crashed: false };
     const { position } = planeState;

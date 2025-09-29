@@ -15,23 +15,58 @@ import {
 
 const THREE = requireTHREE();
 
+const MAPS_ENDPOINT = './maps.json';
+const DEFAULT_BODY_BACKGROUND = 'linear-gradient(180deg, #79a7ff 0%, #cfe5ff 45%, #f6fbff 100%)';
+const DEFAULT_BACKGROUND_COLOR = 0x90b6ff;
+const DEFAULT_FOG_COLOR = 0xa4c6ff;
+const DEFAULT_FOG_NEAR = 1500;
+const DEFAULT_FOG_FAR = 4200;
+const DEFAULT_SUN = { color: 0xffffff, intensity: 1.05, position: [-420, 580, 780] };
+const DEFAULT_HEMISPHERE = { skyColor: 0xdce9ff, groundColor: 0x2b4a2e, intensity: 0.85 };
+
+const FALLBACK_MAPS = [
+  {
+    id: 'aurora-basin',
+    name: 'Aurora Basin',
+    description: 'Rolling terrain under bright aurora skies.',
+    seed: 982451653,
+    chunkSize: 640,
+    radius: 3,
+    environment: {
+      background: '#90b6ff',
+      bodyBackground: DEFAULT_BODY_BACKGROUND,
+      fog: { color: '#a4c6ff', near: DEFAULT_FOG_NEAR, far: DEFAULT_FOG_FAR },
+      sun: { position: DEFAULT_SUN.position, intensity: DEFAULT_SUN.intensity, color: '#ffffff' },
+      hemisphere: { skyColor: '#dce9ff', groundColor: '#2b4a2e', intensity: DEFAULT_HEMISPHERE.intensity },
+    },
+  },
+];
+
 document.body.style.margin = '0';
 document.body.style.overflow = 'hidden';
-document.body.style.background = 'linear-gradient(180deg, #79a7ff 0%, #cfe5ff 45%, #f6fbff 100%)';
+document.body.style.background = DEFAULT_BODY_BACKGROUND;
 
 const renderer = createRenderer();
 
 const scene = new THREE.Scene();
-scene.background = new THREE.Color(0x90b6ff);
-scene.fog = new THREE.Fog(0xa4c6ff, 1500, 4200);
+scene.background = new THREE.Color(DEFAULT_BACKGROUND_COLOR);
+scene.fog = new THREE.Fog(DEFAULT_FOG_COLOR, DEFAULT_FOG_NEAR, DEFAULT_FOG_FAR);
 
 const camera = createPerspectiveCamera({ fov: 60, near: 0.1, far: 24000 });
 
-const hemisphere = new THREE.HemisphereLight(0xdce9ff, 0x2b4a2e, 0.85);
+const hemisphere = new THREE.HemisphereLight(
+  DEFAULT_HEMISPHERE.skyColor,
+  DEFAULT_HEMISPHERE.groundColor,
+  DEFAULT_HEMISPHERE.intensity,
+);
 scene.add(hemisphere);
 
-const sun = new THREE.DirectionalLight(0xffffff, 1.05);
-sun.position.set(-420, 580, 780);
+const sun = new THREE.DirectionalLight(DEFAULT_SUN.color, DEFAULT_SUN.intensity);
+sun.position.set(
+  DEFAULT_SUN.position[0],
+  DEFAULT_SUN.position[1],
+  DEFAULT_SUN.position[2],
+);
 sun.castShadow = true;
 sun.shadow.mapSize.set(2048, 2048);
 sun.shadow.camera.left = -800;
@@ -41,12 +76,116 @@ sun.shadow.camera.bottom = -800;
 sun.shadow.camera.far = 2400;
 scene.add(sun);
 
-const world = new TerraWorldStreamer({ scene, chunkSize: 640, radius: 3, seed: 982451653 });
-const collisionSystem = new CollisionSystem({ world, crashMargin: 2.4, obstaclePadding: 3.2 });
+let world = null;
+const collisionSystem = new CollisionSystem({ world: null, crashMargin: 2.4, obstaclePadding: 3.2 });
 
 // 🔧 Standardize on TerraProjectileManager
-const projectileManager = new TerraProjectileManager({ scene, world });
+const projectileManager = new TerraProjectileManager({ scene, world: null });
 const ammoPresets = projectileManager.getAmmoTypes();
+
+let availableMaps = [...FALLBACK_MAPS];
+let defaultMapId = FALLBACK_MAPS[0]?.id ?? null;
+let currentMapDefinition = FALLBACK_MAPS[0] ?? null;
+
+function getRequestedMapId(){
+  try {
+    const url = new URL(window.location.href);
+    return url.searchParams.get('map');
+  } catch (error){
+    return null;
+  }
+}
+
+async function loadMapDefinitions(requestedId){
+  try {
+    const options = requestedId ? { headers: { 'X-Active-Map': requestedId } } : {};
+    const response = await fetch(MAPS_ENDPOINT, options);
+    if (!response.ok){
+      throw new Error(`Failed to fetch maps.json: ${response.status}`);
+    }
+    const data = await response.json();
+    const maps = Array.isArray(data?.maps) ? data.maps : Array.isArray(data) ? data : [];
+    const defaultId = typeof data?.default === 'string' ? data.default : maps[0]?.id ?? null;
+    return { maps, defaultId };
+  } catch (error){
+    console.warn('Falling back to bundled map definitions.', error);
+    return { maps: [...FALLBACK_MAPS], defaultId: defaultMapId };
+  }
+}
+
+function selectMapDefinition(maps, requestedId, fallbackId){
+  const mapList = Array.isArray(maps) && maps.length > 0 ? maps : [...FALLBACK_MAPS];
+  const registry = new Map();
+  mapList.forEach((entry) => {
+    if (entry?.id){
+      registry.set(entry.id, entry);
+    }
+  });
+  let targetId = requestedId && registry.has(requestedId) ? requestedId : null;
+  if (!targetId && fallbackId && registry.has(fallbackId)){
+    targetId = fallbackId;
+  }
+  if (!targetId){
+    targetId = mapList.find((entry) => entry?.id)?.id ?? FALLBACK_MAPS[0]?.id ?? null;
+  }
+  const selected = targetId ? registry.get(targetId) ?? mapList[0] : mapList[0];
+  return { selected, id: selected?.id ?? targetId ?? null, registry, maps: mapList };
+}
+
+function applyMapEnvironment(map){
+  const environment = map?.environment ?? {};
+  document.body.style.background = environment.bodyBackground ?? DEFAULT_BODY_BACKGROUND;
+  const background = environment.background ?? DEFAULT_BACKGROUND_COLOR;
+  scene.background = new THREE.Color(background);
+
+  const fogConfig = environment.fog ?? {};
+  scene.fog.color.set(fogConfig.color ?? DEFAULT_FOG_COLOR);
+  scene.fog.near = Number.isFinite(fogConfig.near) ? fogConfig.near : DEFAULT_FOG_NEAR;
+  scene.fog.far = Number.isFinite(fogConfig.far) ? fogConfig.far : DEFAULT_FOG_FAR;
+
+  const hemisphereConfig = environment.hemisphere ?? {};
+  hemisphere.color.set(hemisphereConfig.skyColor ?? DEFAULT_HEMISPHERE.skyColor);
+  hemisphere.groundColor.set(hemisphereConfig.groundColor ?? DEFAULT_HEMISPHERE.groundColor);
+  hemisphere.intensity = Number.isFinite(hemisphereConfig.intensity)
+    ? hemisphereConfig.intensity
+    : DEFAULT_HEMISPHERE.intensity;
+
+  const sunConfig = environment.sun ?? {};
+  sun.color.set(sunConfig.color ?? DEFAULT_SUN.color);
+  sun.intensity = Number.isFinite(sunConfig.intensity) ? sunConfig.intensity : DEFAULT_SUN.intensity;
+  if (sunConfig.position){
+    assignVector3(sun.position, sunConfig.position);
+  } else {
+    sun.position.set(DEFAULT_SUN.position[0], DEFAULT_SUN.position[1], DEFAULT_SUN.position[2]);
+  }
+}
+
+function initializeWorldForMap(map){
+  const mapDefinition = map ?? FALLBACK_MAPS[0];
+  if (world){
+    world.dispose();
+  }
+  const chunkSize = Number.isFinite(mapDefinition?.chunkSize) ? mapDefinition.chunkSize : 640;
+  const radius = Number.isFinite(mapDefinition?.radius) ? mapDefinition.radius : 3;
+  const seed = Number.isFinite(mapDefinition?.seed) ? mapDefinition.seed : 982451653;
+  world = new TerraWorldStreamer({ scene, chunkSize, radius, seed });
+  collisionSystem.setWorld(world);
+  projectileManager.setWorld(world);
+  applyMapEnvironment(mapDefinition);
+  currentMapDefinition = mapDefinition;
+}
+
+function handleMapSelect(mapId){
+  if (!mapId) return;
+  if (currentMapDefinition?.id === mapId) return;
+  try {
+    const url = new URL(window.location.href);
+    url.searchParams.set('map', mapId);
+    window.location.href = url.toString();
+  } catch (error){
+    window.location.search = `?map=${encodeURIComponent(mapId)}`;
+  }
+}
 
 const chaseCamera = new ChaseCamera(camera, {
   distance: 82,
@@ -93,12 +232,14 @@ const hudPresets = {
 const hud = new TerraHUD({
   controls: hudPresets.plane,
   ammoOptions: ammoPresets,
+  mapOptions: availableMaps,
   onAmmoSelect: (ammoId) => {
     const accepted = projectileManager.setAmmoType(ammoId);
     if (!accepted){
       hud.setActiveAmmo(projectileManager.getCurrentAmmoId());
     }
   },
+  onMapSelect: handleMapSelect,
 });
 hud.setActiveAmmo(projectileManager.getCurrentAmmoId());
 
@@ -502,8 +643,14 @@ function resetCarAfterCrash(vehicle){
   }
 }
 
-function handleProjectileHit(vehicle){
+function handleProjectileHit(vehicle, projectile){
   if (!vehicle) return;
+  if (projectile?.mesh?.position){
+    projectileManager.triggerExplosion({
+      position: projectile.mesh.position.clone(),
+      ammoId: projectile.ammo?.id ?? null,
+    });
+  }
   registerVehicleCrash(vehicle, { message: 'Direct hit!' });
   if (vehicle.mode === 'car'){
     resetCarAfterCrash(vehicle);
@@ -845,21 +992,21 @@ function animate(now){
     vehicles,
     onVehicleHit: handleProjectileHit,
     onImpact: (impact) => {
-      if (typeof world.applyProjectileImpact === 'function'){
+      if (world && typeof world.applyProjectileImpact === 'function'){
         world.applyProjectileImpact(impact);
       }
     },
   });
 
   const activeVehicle = activeVehicleId ? vehicles.get(activeVehicleId) : null;
-  if (activeVehicle){
+  if (activeVehicle && world){
     const state = getVehicleState(activeVehicle);
     if (state){
       chaseCamera.setConfig(activeVehicle.modes[activeVehicle.mode]?.cameraConfig ?? planeCameraConfig);
       chaseCamera.update(state, dt, inputSample?.cameraOrbit ?? null);
       world.update(state.position);
     }
-  } else {
+  } else if (world){
     world.update(ORIGIN_FALLBACK);
   }
 
@@ -870,21 +1017,46 @@ function animate(now){
   renderer.render(scene, camera);
 }
 
-spawnDefaultVehicles();
-handlePlayerJoin(LOCAL_PLAYER_ID, { initialMode: 'plane' });
-const initialVehicle = activeVehicleId ? vehicles.get(activeVehicleId) : vehicles.get(LOCAL_PLAYER_ID) ?? vehicles.values().next().value ?? null;
-if (initialVehicle){
-  focusCameraOnVehicle(initialVehicle);
-  const state = getVehicleState(initialVehicle);
-  if (state){
-    world.update(state.position);
-  } else {
+async function bootstrap(){
+  const requestedId = getRequestedMapId();
+  const definition = await loadMapDefinitions(requestedId);
+  availableMaps = Array.isArray(definition.maps) && definition.maps.length
+    ? definition.maps
+    : [...FALLBACK_MAPS];
+  defaultMapId = definition.defaultId ?? availableMaps[0]?.id ?? defaultMapId;
+  const selection = selectMapDefinition(availableMaps, requestedId, defaultMapId);
+  availableMaps = selection.maps;
+  defaultMapId = selection.id ?? defaultMapId;
+  currentMapDefinition = selection.selected ?? availableMaps[0] ?? FALLBACK_MAPS[0];
+
+  hud.setMapOptions(availableMaps);
+  hud.setActiveMap(currentMapDefinition?.id ?? '');
+
+  initializeWorldForMap(currentMapDefinition);
+
+  spawnDefaultVehicles();
+  handlePlayerJoin(LOCAL_PLAYER_ID, { initialMode: 'plane' });
+  const initialVehicle = activeVehicleId
+    ? vehicles.get(activeVehicleId)
+    : vehicles.get(LOCAL_PLAYER_ID) ?? vehicles.values().next().value ?? null;
+  if (initialVehicle){
+    focusCameraOnVehicle(initialVehicle);
+    const state = getVehicleState(initialVehicle);
+    if (state && world){
+      world.update(state.position);
+    } else if (world){
+      world.update(ORIGIN_FALLBACK);
+    }
+  } else if (world){
     world.update(ORIGIN_FALLBACK);
   }
-} else {
-  world.update(ORIGIN_FALLBACK);
+
+  requestAnimationFrame(animate);
 }
-requestAnimationFrame(animate);
+
+bootstrap().catch((error) => {
+  console.error('Failed to initialize Terra sandbox', error);
+});
 
 // 🔧 Public API: rewire to current systems
 window.DriftPursuitTerra = {

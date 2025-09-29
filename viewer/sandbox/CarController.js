@@ -24,7 +24,7 @@ export class CarController {
     this.height = 2.1;
     this.armYaw = 0;
     this.armPitch = 0;
-    this.armYawLimit = THREE.MathUtils.degToRad(75);
+    this.armYawLimit = THREE.MathUtils.degToRad(175);
     this.armPitchLimit = THREE.MathUtils.degToRad(48);
     this.armResponse = 10;
     this.currentSteer = 0;

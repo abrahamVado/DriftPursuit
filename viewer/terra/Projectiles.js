@@ -15,6 +15,14 @@ const PROJECTILE_SPEED = 320;
 const PROJECTILE_LIFESPAN = 6;
 const PROJECTILE_RADIUS = 0.45;
 
+const DEFAULT_EXPLOSION = {
+  color: 0xffc677,
+  duration: 1.1,
+  maxScale: 6,
+  startScale: 0.6,
+  fadePower: 1.6,
+};
+
 function normalizeScale(scale){
   if (Array.isArray(scale) && scale.length >= 3){
     return { x: scale[0] ?? 1, y: scale[1] ?? 1, z: scale[2] ?? 1 };
@@ -30,6 +38,17 @@ function normalizeScale(scale){
     return { x: scale, y: scale, z: scale };
   }
   return { x: 1, y: 1, z: 1 };
+}
+
+function normalizeExplosionConfig(config){
+  if (!config) return null;
+  return {
+    color: config.color ?? DEFAULT_EXPLOSION.color,
+    duration: Number.isFinite(config.duration) ? config.duration : DEFAULT_EXPLOSION.duration,
+    maxScale: Number.isFinite(config.scale) ? config.scale : DEFAULT_EXPLOSION.maxScale,
+    startScale: Number.isFinite(config.startScale) ? config.startScale : DEFAULT_EXPLOSION.startScale,
+    fadePower: Number.isFinite(config.fadePower) ? config.fadePower : DEFAULT_EXPLOSION.fadePower,
+  };
 }
 
 function normalizeAmmoConfig(config = {}){
@@ -55,6 +74,7 @@ function normalizeAmmoConfig(config = {}){
     scale,
     stretch: Number.isFinite(config.stretch) ? config.stretch : 1,
     behavior: config.behavior ? { ...config.behavior } : null,
+    explosion: normalizeExplosionConfig(config.explosion),
   };
 }
 
@@ -108,6 +128,20 @@ const DEFAULT_AMMO_TYPES = [
     opacity: 0.9,
     behavior: { type: 'pulse', amplitude: 0.18, speed: 3.4 },
   }),
+  normalizeAmmoConfig({
+    id: 'nova-shell',
+    name: 'Nova Shell',
+    effect: 'High yield explosive charge',
+    color: 0xfff2b3,
+    emissive: 0xffd45a,
+    emissiveIntensity: 1.35,
+    speed: 260,
+    lifespan: 5.5,
+    scale: 1.5,
+    collisionRadius: 0.7,
+    behavior: { type: 'ember', flicker: 0.55, speed: 7.8, scaleAmount: 0.18 },
+    explosion: { color: 0xffef90, duration: 1.35, scale: 8.5, startScale: 0.8, fadePower: 1.4 },
+  }),
 ];
 
 export class TerraProjectileManager {
@@ -119,6 +153,8 @@ export class TerraProjectileManager {
     this.ammoTypes = new Map();
     this.materialCache = new Map();
     this.currentAmmoId = null;
+    this.explosions = [];
+    this.explosionGeometry = new THREE.SphereGeometry(1, 18, 18);
     this.setAmmoTypes(ammoTypes.length ? ammoTypes : DEFAULT_AMMO_TYPES);
   }
 
@@ -161,6 +197,9 @@ export class TerraProjectileManager {
   }
 
   setScene(scene){
+    if (this.scene && this.scene !== scene){
+      this._clearExplosions();
+    }
     this.scene = scene ?? null;
   }
 
@@ -262,6 +301,8 @@ export class TerraProjectileManager {
       survivors.push(projectile);
     }
     this.projectiles = survivors;
+
+    this._updateExplosions(dt);
   }
 
   _findVehicleHit(projectile, vehicles){
@@ -292,6 +333,14 @@ export class TerraProjectileManager {
         projectile.mesh.material.dispose();
       }
     }
+  }
+
+  triggerExplosion({ position, ammoId = null } = {}){
+    if (!position) return;
+    const ammo = ammoId && this.ammoTypes.has(ammoId)
+      ? this.ammoTypes.get(ammoId)
+      : (this.currentAmmoId && this.ammoTypes.get(this.currentAmmoId)) ?? null;
+    this._spawnExplosion({ position, ammo });
   }
 
   _getActiveAmmo(){
@@ -434,10 +483,74 @@ export class TerraProjectileManager {
       radius: craterRadius,
       depth: craterDepth,
     };
+    this._spawnExplosion({ position: impact.position, ammo: impact.projectile?.ammo ?? null });
+
     if (typeof onImpact === 'function'){
       onImpact(payload);
     } else if (typeof this.world?.applyProjectileImpact === 'function'){
       this.world.applyProjectileImpact(payload);
     }
+  }
+
+  _spawnExplosion({ position, ammo }){
+    if (!this.scene || !position) return;
+    const config = ammo?.explosion ?? DEFAULT_EXPLOSION;
+    const material = new THREE.MeshBasicMaterial({
+      color: config.color,
+      transparent: true,
+      opacity: 0.85,
+      blending: THREE.AdditiveBlending,
+      depthWrite: false,
+    });
+    const mesh = new THREE.Mesh(this.explosionGeometry, material);
+    mesh.position.copy(position);
+    mesh.scale.setScalar(Math.max(0.01, config.startScale ?? DEFAULT_EXPLOSION.startScale));
+    mesh.renderOrder = 10;
+    this.scene.add(mesh);
+    this.explosions.push({
+      mesh,
+      material,
+      age: 0,
+      duration: Math.max(0.2, config.duration ?? DEFAULT_EXPLOSION.duration),
+      maxScale: Math.max(0.5, config.maxScale ?? DEFAULT_EXPLOSION.maxScale),
+      startScale: Math.max(0.01, config.startScale ?? DEFAULT_EXPLOSION.startScale),
+      fadePower: Math.max(0.5, config.fadePower ?? DEFAULT_EXPLOSION.fadePower),
+    });
+  }
+
+  _updateExplosions(dt){
+    if (this.explosions.length === 0) return;
+    for (let i = this.explosions.length - 1; i >= 0; i -= 1){
+      const explosion = this.explosions[i];
+      explosion.age += dt;
+      const tRaw = explosion.age / explosion.duration;
+      if (tRaw >= 1){
+        this._disposeExplosionAt(i);
+        continue;
+      }
+      const t = Math.max(0, Math.min(1, tRaw));
+      const eased = 1 - Math.pow(1 - t, 3);
+      const scale = explosion.startScale + (explosion.maxScale - explosion.startScale) * eased;
+      explosion.mesh.scale.setScalar(scale);
+      const opacity = Math.max(0, 1 - Math.pow(t, explosion.fadePower));
+      explosion.material.opacity = opacity;
+    }
+  }
+
+  _disposeExplosionAt(index){
+    const explosion = this.explosions[index];
+    if (!explosion) return;
+    if (explosion.mesh && this.scene){
+      this.scene.remove(explosion.mesh);
+    }
+    explosion.material?.dispose?.();
+    this.explosions.splice(index, 1);
+  }
+
+  _clearExplosions(){
+    for (let i = this.explosions.length - 1; i >= 0; i -= 1){
+      this._disposeExplosionAt(i);
+    }
+    this.explosions = [];
   }
 }

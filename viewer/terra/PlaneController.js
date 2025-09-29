@@ -9,7 +9,7 @@ export class TerraPlaneController extends BasePlaneController {
     this.turretYaw = 0;
     this.turretPitch = 0;
     this.turretAimTarget = { x: 0, y: 0 };
-    this.turretYawLimit = options.turretYawLimit ?? THREE.MathUtils.degToRad(110);
+    this.turretYawLimit = options.turretYawLimit ?? THREE.MathUtils.degToRad(178);
     this.turretPitchLimit = options.turretPitchLimit ?? THREE.MathUtils.degToRad(65);
     this.turretResponse = options.turretResponse ?? 9.5;
     this._turretDidUpdateThisFrame = false;
