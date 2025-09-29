@@ -1,5 +1,7 @@
-import * as THREE from 'https://cdn.jsdelivr.net/npm/three@0.152.2/build/three.module.js';
 import { NoiseGenerator } from './Noise.js';
+
+const THREE = (typeof window !== 'undefined' ? window.THREE : globalThis?.THREE) ?? null;
+if (!THREE) throw new Error('Sandbox WorldStreamer requires THREE to be loaded globally');
 
 
 function chunkKey(x, y){

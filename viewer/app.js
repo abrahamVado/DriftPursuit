@@ -7,6 +7,7 @@ import {
   setInvertAxes as inputSetInvertAxes,
   setThrottleHold as inputSetThrottleHold,
 } from './control/Input.js';
+import { createSandboxWorld } from './world/SandboxWorldAdapter.js';
 
 const HUD = document.getElementById('hud');
 const MANUAL_BUTTON = document.getElementById('manual-toggle');
@@ -80,6 +81,107 @@ const WORLD_CHUNK_RADIUS = 2;
 const WORLD_REBASE_DISTANCE = 1200;
 const WORLD_REBASE_DISTANCE_SQ = WORLD_REBASE_DISTANCE * WORLD_REBASE_DISTANCE;
 const WORLD_SEED = 'driftpursuit:endless';
+const TERRAIN_SEED = `${WORLD_SEED}:terrain`;
+const RIVER_SEED = `${WORLD_SEED}:river`;
+const TERRAIN_FLATTEN_RADIUS = 580;
+const TERRAIN_MAX_HEIGHT = 160;
+const RIVER_THRESHOLD = 0.38;
+const RIVER_SAMPLING_STEP = 180;
+
+function seededScalar(label){
+  const generator = xmur3(label);
+  return generator() / 4294967295;
+}
+
+const TERRAIN_RANDOM = {
+  phaseX: seededScalar(`${TERRAIN_SEED}:phaseX`) * Math.PI * 2,
+  phaseY: seededScalar(`${TERRAIN_SEED}:phaseY`) * Math.PI * 2,
+  ridgePhase: seededScalar(`${TERRAIN_SEED}:ridgePhase`) * Math.PI * 2,
+  ridgeFrequency: 0.0006 + seededScalar(`${TERRAIN_SEED}:ridgeFrequency`) * 0.0004,
+  detailPhase: seededScalar(`${TERRAIN_SEED}:detailPhase`) * Math.PI * 2,
+};
+
+const RIVER_RANDOM = {
+  basePhase: seededScalar(`${RIVER_SEED}:phase` ) * Math.PI * 2,
+  diagonalPhase: seededScalar(`${RIVER_SEED}:diagPhase`) * Math.PI * 2,
+};
+
+function lerp(a, b, t){
+  return a + (b - a) * t;
+}
+
+function smoothStep(t){
+  return t * t * (3 - 2 * t);
+}
+
+function valueNoise2D(x, y, label){
+  const x0 = Math.floor(x);
+  const x1 = x0 + 1;
+  const y0 = Math.floor(y);
+  const y1 = y0 + 1;
+  const sx = smoothStep(x - x0);
+  const sy = smoothStep(y - y0);
+  const n00 = seededScalar(`${label}:${x0}:${y0}`);
+  const n10 = seededScalar(`${label}:${x1}:${y0}`);
+  const n01 = seededScalar(`${label}:${x0}:${y1}`);
+  const n11 = seededScalar(`${label}:${x1}:${y1}`);
+  const ix0 = lerp(n00, n10, sx);
+  const ix1 = lerp(n01, n11, sx);
+  return lerp(ix0, ix1, sy);
+}
+
+function fbmNoise(x, y, label, octaves = 4){
+  let amplitude = 1;
+  let frequency = 1;
+  let total = 0;
+  let maxAmplitude = 0;
+  for (let i = 0; i < octaves; i += 1){
+    total += valueNoise2D(x * frequency, y * frequency, `${label}:octave:${i}`) * amplitude;
+    maxAmplitude += amplitude;
+    amplitude *= 0.5;
+    frequency *= 2;
+  }
+  return maxAmplitude ? total / maxAmplitude : 0;
+}
+
+function getRiverNoise(x, y){
+  const base = Math.sin(x * 0.00055 + RIVER_RANDOM.basePhase);
+  const diagonal = Math.sin((x + y) * 0.00042 + RIVER_RANDOM.diagonalPhase);
+  return base + diagonal;
+}
+
+function getRiverMask(x, y){
+  const widthVariance = 0.6 + Math.sin((x - y) * 0.00025 + RIVER_RANDOM.basePhase * 0.5) * 0.25;
+  const riverValue = Math.abs(getRiverNoise(x, y));
+  const normalized = Math.max(0, RIVER_THRESHOLD - (riverValue * widthVariance));
+  return Math.min(1, normalized / RIVER_THRESHOLD);
+}
+
+function getTerrainHeight(x, y){
+  const offsetLargeX = (x + Math.cos(TERRAIN_RANDOM.phaseX) * 1200);
+  const offsetLargeY = (y + Math.sin(TERRAIN_RANDOM.phaseX) * 1200);
+  const offsetDetailX = (x + Math.cos(TERRAIN_RANDOM.detailPhase) * 320);
+  const offsetDetailY = (y + Math.sin(TERRAIN_RANDOM.detailPhase) * 320);
+  const largeScale = fbmNoise(offsetLargeX * 0.00035, offsetLargeY * 0.00035, `${TERRAIN_SEED}:large`, 5);
+  const detail = fbmNoise(offsetDetailX * 0.0015, offsetDetailY * 0.0015, `${TERRAIN_SEED}:detail`, 3);
+  const ridge = Math.max(0, Math.sin(x * TERRAIN_RANDOM.ridgeFrequency + TERRAIN_RANDOM.ridgePhase) * Math.cos(y * (TERRAIN_RANDOM.ridgeFrequency * 0.8) + TERRAIN_RANDOM.phaseY));
+  let height = Math.pow(largeScale, 2.2) * TERRAIN_MAX_HEIGHT;
+  height += detail * 18;
+  height += ridge * 48;
+
+  const riverMask = getRiverMask(x, y);
+  if (riverMask > 0){
+    height -= (18 + largeScale * 24) * riverMask;
+  }
+
+  const distance = Math.sqrt(x * x + y * y);
+  if (distance < TERRAIN_FLATTEN_RADIUS){
+    const t = distance / TERRAIN_FLATTEN_RADIUS;
+    height *= t * t;
+  }
+
+  return Math.max(-6, height);
+}
 
 const CONNECTION_STATUS_KEYS = {
   CONNECTING: 'connecting',
@@ -217,6 +319,7 @@ availableMaps.set(DEFAULT_MAP_ID, {
   seed: WORLD_SEED,
   chunkSize: WORLD_CHUNK_SIZE,
   visibleRadius: WORLD_CHUNK_RADIUS,
+  generator: 'sandbox',
 });
 
 const RECONNECT_BASE_DELAY_MS = 1000;
@@ -1024,60 +1127,155 @@ function buildChunkContents({ coords, chunkSize, rng }){
   const group = new THREE.Group();
   const disposables = [];
 
-  const baseHue = 0.33 + (rng() - 0.5) * 0.04;
-  const baseSaturation = 0.55 + (rng() - 0.5) * 0.08;
-  const baseLightness = 0.53 + (rng() - 0.5) * 0.08;
+  const chunkOrigin = {
+    x: coords.x * chunkSize,
+    y: coords.y * chunkSize,
+  };
+
+  const sampleHeight = (localX, localY) => getTerrainHeight(chunkOrigin.x + localX, chunkOrigin.y + localY);
+  const sampleRiverMask = (localX, localY) => getRiverMask(chunkOrigin.x + localX, chunkOrigin.y + localY);
+
+  const baseHue = 0.31 + (rng() - 0.5) * 0.05;
+  const baseSaturation = 0.48 + (rng() - 0.5) * 0.1;
+  const baseLightness = 0.46 + (rng() - 0.5) * 0.1;
   const groundColor = new THREE.Color().setHSL(baseHue, baseSaturation, baseLightness);
   const groundMaterial = new THREE.MeshStandardMaterial({
     color: groundColor,
-    roughness: 0.85,
+    roughness: 0.87,
     metalness: 0.05,
   });
-  const groundGeometry = new THREE.PlaneGeometry(chunkSize, chunkSize, 1, 1);
+  const groundGeometry = new THREE.PlaneGeometry(chunkSize, chunkSize, 32, 32);
+  applyTerrainToGeometry({ geometry: groundGeometry, chunkOrigin });
   const ground = new THREE.Mesh(groundGeometry, groundMaterial);
   ground.rotation.x = -Math.PI / 2;
   ground.receiveShadow = true;
   group.add(ground);
   disposables.push(groundMaterial, groundGeometry);
 
-  // Add subtle tonal overlays to break tiling repetition without seams.
   const overlayCount = 2;
   for (let i = 0; i < overlayCount; i += 1){
-    const overlayWidth = chunkSize * (0.55 + rng() * 0.25);
-    const overlayDepth = chunkSize * (0.08 + rng() * 0.04);
+    const overlayWidth = chunkSize * (0.5 + rng() * 0.3);
+    const overlayDepth = chunkSize * (0.08 + rng() * 0.05);
     const overlayGeometry = new THREE.PlaneGeometry(overlayWidth, overlayDepth, 1, 1);
     const overlayMaterial = new THREE.MeshStandardMaterial({
-      color: groundColor.clone().offsetHSL((rng() - 0.5) * 0.04, (rng() - 0.5) * 0.08, (rng() - 0.5) * 0.08),
-      roughness: 0.75,
+      color: groundColor.clone().offsetHSL((rng() - 0.5) * 0.05, (rng() - 0.5) * 0.1, (rng() - 0.5) * 0.12),
+      roughness: 0.76,
       metalness: 0.04,
       transparent: true,
-      opacity: 0.4,
+      opacity: 0.35,
     });
     const overlay = new THREE.Mesh(overlayGeometry, overlayMaterial);
     overlay.rotation.x = -Math.PI / 2;
-    overlay.position.set((rng() - 0.5) * chunkSize * 0.4, (rng() - 0.5) * chunkSize * 0.4, 0.08 + rng() * 0.02);
+    const overlayLocalX = (rng() - 0.5) * chunkSize * 0.5;
+    const overlayLocalY = (rng() - 0.5) * chunkSize * 0.5;
+    const overlayHeight = sampleHeight(overlayLocalX, overlayLocalY) + 0.1 + rng() * 0.05;
+    overlay.position.set(overlayLocalX, overlayLocalY, overlayHeight);
     overlay.receiveShadow = true;
     group.add(overlay);
     disposables.push(overlayMaterial, overlayGeometry);
   }
 
-  if (Math.abs(coords.x) <= 1){
-    addRunwaySegment(group, chunkSize, rng, disposables);
+  const riverInfo = evaluateRiverForChunk({ chunkOrigin, chunkSize, sampler: sampleRiverMask });
+  if (riverInfo){
+    const river = createRiverPatch({ info: riverInfo, chunkOrigin, chunkSize, heightSampler: sampleHeight });
+    if (river?.mesh){
+      group.add(river.mesh);
+      disposables.push(river.material, river.geometry);
+    }
   }
 
-  const scatterCount = 6 + Math.floor(rng() * 6);
-  for (let i = 0; i < scatterCount; i += 1){
-    const localX = (rng() - 0.5) * chunkSize * 0.9;
-    const localY = (rng() - 0.5) * chunkSize * 0.9;
-    if (Math.abs(coords.x) <= 1 && Math.abs(localX) < 130){
-      continue; // keep runway shoulders clear
+  if (Math.abs(coords.x) <= 1){
+    const baseHeight = sampleHeight(0, 0);
+    addRunwaySegment(group, chunkSize, rng, disposables, baseHeight);
+  }
+
+  const centerHeight = sampleHeight(0, 0);
+  if (centerHeight > 70 && rng() > 0.55){
+    const mountainPosX = (rng() - 0.5) * chunkSize * 0.5;
+    const mountainPosY = (rng() - 0.5) * chunkSize * 0.5;
+    const mountain = createMountainPeak({
+      rng,
+      position: {
+        x: mountainPosX,
+        y: mountainPosY,
+      },
+      baseHeight: sampleHeight(mountainPosX, mountainPosY),
+    });
+    if (mountain){
+      group.add(mountain.object);
+      disposables.push(...mountain.disposables);
     }
-    if (rng() > 0.7){
-      const building = createProceduralBuilding({ rng, position: { x: localX, y: localY } });
+  }
+
+  const townRoll = rng();
+  if (townRoll > 0.82 && Math.abs(coords.x) > 1){
+    const townCenter = {
+      x: (rng() - 0.5) * chunkSize * 0.5,
+      y: (rng() - 0.5) * chunkSize * 0.5,
+    };
+    if (sampleRiverMask(townCenter.x, townCenter.y) < 0.35){
+      const town = createProceduralTown({ rng, center: townCenter, heightSampler: sampleHeight });
+      if (town){
+        group.add(town.object);
+        disposables.push(...town.disposables);
+      }
+    }
+  }
+
+  const scatterCount = 12 + Math.floor(rng() * 10);
+  for (let i = 0; i < scatterCount; i += 1){
+    const localX = (rng() - 0.5) * chunkSize * 0.95;
+    const localY = (rng() - 0.5) * chunkSize * 0.95;
+    if (Math.abs(coords.x) <= 1 && Math.abs(localX) < 140){
+      continue;
+    }
+    const baseHeight = sampleHeight(localX, localY);
+    if (sampleRiverMask(localX, localY) > 0.45){
+      continue;
+    }
+    const slope = Math.abs(sampleHeight(localX + 6, localY) - baseHeight) + Math.abs(sampleHeight(localX, localY + 6) - baseHeight);
+    if (slope > 20 && rng() > 0.3){
+      continue;
+    }
+
+    const elevationBias = Math.max(0, Math.min(1, (baseHeight - 25) / 70));
+    const rockThreshold = 0.6 - elevationBias * 0.25;
+    const buildingThreshold = 0.78 - elevationBias * 0.2;
+    const houseThreshold = 0.55 - elevationBias * 0.15;
+    const roll = rng();
+    if (baseHeight > 65 && roll > rockThreshold){
+      const rock = createProceduralRock({ rng, position: { x: localX, y: localY }, baseHeight });
+      group.add(rock.object);
+      disposables.push(...rock.disposables);
+    } else if (roll > buildingThreshold){
+      const building = createProceduralBuilding({ rng, position: { x: localX, y: localY }, baseHeight });
       group.add(building.object);
       disposables.push(...building.disposables);
+    } else if (roll > houseThreshold){
+      const house = createProceduralHouse({ rng, position: { x: localX, y: localY }, baseHeight });
+      group.add(house.object);
+      disposables.push(...house.disposables);
     } else {
-      const tree = createProceduralTree({ rng, position: { x: localX, y: localY } });
+      const tree = createProceduralTree({ rng, position: { x: localX, y: localY }, baseHeight });
+      group.add(tree.object);
+      disposables.push(...tree.disposables);
+    }
+  }
+
+  if (riverInfo && rng() > 0.4){
+    const riversideTreeCount = 4 + Math.floor(rng() * 4);
+    for (let i = 0; i < riversideTreeCount; i += 1){
+      const offsetDistance = (rng() > 0.5 ? 1 : -1) * (15 + rng() * 25);
+      const along = (rng() - 0.5) * chunkSize * 0.4;
+      const sin = Math.sin(riverInfo.angle);
+      const cos = Math.cos(riverInfo.angle);
+      const localX = riverInfo.localCenter.x + cos * along - sin * offsetDistance;
+      const localY = riverInfo.localCenter.y + sin * along + cos * offsetDistance;
+      const baseHeight = sampleHeight(localX, localY);
+      if (sampleRiverMask(localX, localY) > 0.4){
+        continue;
+      }
+      const tree = createProceduralTree({ rng, position: { x: localX, y: localY }, baseHeight });
       group.add(tree.object);
       disposables.push(...tree.disposables);
     }
@@ -1086,12 +1284,247 @@ function buildChunkContents({ coords, chunkSize, rng }){
   return { group, disposables };
 }
 
-function addRunwaySegment(group, chunkSize, rng, disposables){
+function applyTerrainToGeometry({ geometry, chunkOrigin }){
+  if (!geometry || !geometry.attributes || !geometry.attributes.position) return;
+  const positionAttr = geometry.getAttribute('position');
+  let minHeight = Infinity;
+  let maxHeight = -Infinity;
+  for (let i = 0; i < positionAttr.count; i += 1){
+    const localX = positionAttr.getX(i);
+    const localY = positionAttr.getY(i);
+    const height = getTerrainHeight(chunkOrigin.x + localX, chunkOrigin.y + localY);
+    positionAttr.setZ(i, height);
+    if (height < minHeight) minHeight = height;
+    if (height > maxHeight) maxHeight = height;
+  }
+  positionAttr.needsUpdate = true;
+  geometry.computeVertexNormals();
+  return { minHeight, maxHeight };
+}
+
+function evaluateRiverForChunk({ chunkOrigin, chunkSize, sampler }){
+  if (!chunkOrigin || typeof sampler !== 'function') return null;
+  const halfSize = chunkSize / 2;
+  let strongestMask = 0;
+  let bestSample = null;
+  for (let x = -halfSize; x <= halfSize; x += RIVER_SAMPLING_STEP){
+    for (let y = -halfSize; y <= halfSize; y += RIVER_SAMPLING_STEP){
+      const mask = sampler(x, y);
+      if (mask > strongestMask){
+        strongestMask = mask;
+        bestSample = { x, y };
+      }
+    }
+  }
+  if (!bestSample || strongestMask < 0.25){
+    return null;
+  }
+  const worldX = chunkOrigin.x + bestSample.x;
+  const worldY = chunkOrigin.y + bestSample.y;
+  const gradX = getRiverNoise(worldX + 25, worldY) - getRiverNoise(worldX - 25, worldY);
+  const gradY = getRiverNoise(worldX, worldY + 25) - getRiverNoise(worldX, worldY - 25);
+  const angle = Math.atan2(gradY, gradX) + Math.PI / 2;
+  return {
+    angle,
+    strength: strongestMask,
+    worldCenter: { x: worldX, y: worldY },
+    localCenter: { x: bestSample.x, y: bestSample.y },
+  };
+}
+
+function createRiverPatch({ info, chunkOrigin, chunkSize, heightSampler }){
+  if (!info) return null;
+  const width = 30 + info.strength * 120;
+  const length = Math.max(chunkSize * 1.1, 400 + info.strength * 320);
+  const geometry = new THREE.PlaneGeometry(length, width, 1, 1);
+  const material = new THREE.MeshStandardMaterial({
+    color: 0x335fd8,
+    roughness: 0.32,
+    metalness: 0.12,
+    transparent: true,
+    opacity: 0.86,
+  });
+  const mesh = new THREE.Mesh(geometry, material);
+  mesh.rotation.x = -Math.PI / 2;
+  mesh.rotation.z = info.angle;
+  const localX = info.worldCenter.x - chunkOrigin.x;
+  const localY = info.worldCenter.y - chunkOrigin.y;
+  const baseHeight = typeof heightSampler === 'function' ? heightSampler(localX, localY) : getTerrainHeight(info.worldCenter.x, info.worldCenter.y);
+  mesh.position.set(localX, localY, baseHeight - 1.2);
+  mesh.receiveShadow = false;
+  return { mesh, geometry, material };
+}
+
+function createProceduralTown({ rng, center, heightSampler }){
+  if (!rng || !center || typeof heightSampler !== 'function') return null;
+  const town = new THREE.Group();
+  town.name = 'ProceduralTown';
+  const baseHeight = heightSampler(center.x, center.y);
+  town.position.set(center.x, center.y, baseHeight);
+  const disposables = [];
+
+  const plazaGeometry = new THREE.CircleGeometry(120 + rng() * 60, 18);
+  const plazaMaterial = new THREE.MeshStandardMaterial({ color: new THREE.Color().setHSL(0.08, 0.18, 0.62), roughness: 0.7, metalness: 0.08, transparent: true, opacity: 0.92 });
+  const plaza = new THREE.Mesh(plazaGeometry, plazaMaterial);
+  plaza.rotation.x = -Math.PI / 2;
+  plaza.position.set(0, 0, 0.05);
+  plaza.receiveShadow = true;
+  town.add(plaza);
+  disposables.push(plazaGeometry, plazaMaterial);
+
+  const structureCount = 6 + Math.floor(rng() * 6);
+  for (let i = 0; i < structureCount; i += 1){
+    const angle = rng() * Math.PI * 2;
+    const radius = (rng() ** 0.6) * 180;
+    const offsetX = Math.cos(angle) * radius;
+    const offsetY = Math.sin(angle) * radius;
+    const localHeight = heightSampler(center.x + offsetX, center.y + offsetY) - baseHeight;
+    const roll = rng();
+    let created;
+    if (roll > 0.7){
+      created = createProceduralBuilding({ rng, position: { x: offsetX, y: offsetY }, baseHeight: localHeight });
+    } else {
+      created = createProceduralHouse({ rng, position: { x: offsetX, y: offsetY }, baseHeight: localHeight });
+    }
+    if (created){
+      town.add(created.object);
+      if (Array.isArray(created.disposables)){
+        created.disposables.forEach((resource) => disposables.push(resource));
+      }
+    }
+  }
+
+  const treeCount = 5 + Math.floor(rng() * 4);
+  for (let i = 0; i < treeCount; i += 1){
+    const angle = rng() * Math.PI * 2;
+    const radius = 140 + rng() * 100;
+    const offsetX = Math.cos(angle) * radius;
+    const offsetY = Math.sin(angle) * radius;
+    const localHeight = heightSampler(center.x + offsetX, center.y + offsetY) - baseHeight;
+    const tree = createProceduralTree({ rng, position: { x: offsetX, y: offsetY }, baseHeight: localHeight });
+    town.add(tree.object);
+    if (Array.isArray(tree.disposables)){
+      tree.disposables.forEach((resource) => disposables.push(resource));
+    }
+  }
+
+  return { object: town, disposables };
+}
+
+function createProceduralHouse({ rng, position, baseHeight = 0 }){
+  const house = new THREE.Group();
+  house.name = 'ProceduralHouse';
+  house.position.set(position.x, position.y, baseHeight);
+  const disposables = [];
+
+  const width = 22 + rng() * 16;
+  const depth = 24 + rng() * 18;
+  const height = 12 + rng() * 8;
+  const bodyGeometry = new THREE.BoxGeometry(width, depth, height);
+  const bodyMaterial = new THREE.MeshStandardMaterial({
+    color: new THREE.Color().setHSL(0.06 + rng() * 0.05, 0.25 + rng() * 0.2, 0.72 + rng() * 0.1),
+    roughness: 0.68,
+    metalness: 0.08,
+  });
+  const body = new THREE.Mesh(bodyGeometry, bodyMaterial);
+  body.castShadow = true;
+  body.receiveShadow = true;
+  body.position.set(0, 0, height / 2);
+  house.add(body);
+  disposables.push(bodyGeometry, bodyMaterial);
+
+  const roofHeight = 6 + rng() * 4;
+  const roofGeometry = new THREE.ConeGeometry(Math.max(width, depth) * 0.55, roofHeight, 4);
+  const roofMaterial = new THREE.MeshStandardMaterial({
+    color: new THREE.Color().setHSL(0.02 + rng() * 0.04, 0.4, 0.2 + rng() * 0.1),
+    roughness: 0.5,
+    metalness: 0.18,
+  });
+  const roof = new THREE.Mesh(roofGeometry, roofMaterial);
+  roof.rotation.y = Math.PI / 4;
+  roof.position.set(0, 0, height + roofHeight / 2);
+  roof.castShadow = true;
+  roof.receiveShadow = true;
+  house.add(roof);
+  disposables.push(roofGeometry, roofMaterial);
+
+  if (rng() > 0.6){
+    const chimneyGeometry = new THREE.BoxGeometry(4 + rng() * 2, 4 + rng() * 2, 6 + rng() * 4);
+    const chimneyMaterial = new THREE.MeshStandardMaterial({
+      color: new THREE.Color().setHSL(0, 0, 0.3 + rng() * 0.1),
+      roughness: 0.58,
+    });
+    const chimney = new THREE.Mesh(chimneyGeometry, chimneyMaterial);
+    chimney.position.set(width * 0.2, depth * -0.15, height + roofHeight * 0.6);
+    chimney.castShadow = true;
+    chimney.receiveShadow = true;
+    house.add(chimney);
+    disposables.push(chimneyGeometry, chimneyMaterial);
+  }
+
+  house.rotation.z = (rng() - 0.5) * 0.1;
+  house.rotation.y = rng() * Math.PI * 2;
+
+  return { object: house, disposables };
+}
+
+function createProceduralRock({ rng, position, baseHeight = 0 }){
+  const rock = new THREE.Group();
+  rock.name = 'ProceduralRock';
+  rock.position.set(position.x, position.y, baseHeight);
+  const disposables = [];
+
+  const radius = 8 + rng() * 18;
+  const detail = 1 + Math.floor(rng() * 2);
+  const geometry = new THREE.IcosahedronGeometry(radius, detail);
+  const material = new THREE.MeshStandardMaterial({
+    color: new THREE.Color().setHSL(0.08 + rng() * 0.04, 0.1 + rng() * 0.05, 0.36 + rng() * 0.08),
+    roughness: 0.92,
+    metalness: 0.05,
+  });
+  const mesh = new THREE.Mesh(geometry, material);
+  mesh.castShadow = true;
+  mesh.receiveShadow = true;
+  mesh.position.set(0, 0, radius * 0.6);
+  mesh.scale.set(1, 1 + rng() * 0.4, 0.7 + rng() * 0.4);
+  mesh.rotation.set(rng() * Math.PI, rng() * Math.PI, rng() * Math.PI);
+  rock.add(mesh);
+  disposables.push(geometry, material);
+
+  return { object: rock, disposables };
+}
+
+function createMountainPeak({ rng, position, baseHeight = 0 }){
+  if (!rng || !position) return null;
+  const peak = new THREE.Group();
+  peak.name = 'ProceduralMountainPeak';
+  const height = 60 + rng() * 80;
+  const radius = height * (0.4 + rng() * 0.25);
+  const geometry = new THREE.ConeGeometry(radius, height, 6 + Math.floor(rng() * 6));
+  const material = new THREE.MeshStandardMaterial({
+    color: new THREE.Color().setHSL(0.07 + rng() * 0.03, 0.12, 0.32 + rng() * 0.1),
+    roughness: 0.9,
+    metalness: 0.06,
+  });
+  const mesh = new THREE.Mesh(geometry, material);
+  mesh.castShadow = true;
+  mesh.receiveShadow = true;
+  mesh.position.set(0, 0, height / 2);
+  peak.add(mesh);
+
+  peak.position.set(position.x, position.y, baseHeight);
+  peak.rotation.y = rng() * Math.PI * 2;
+  peak.rotation.x = (rng() - 0.5) * 0.1;
+
+  return { object: peak, disposables: [geometry, material] };
+}
+
+function addRunwaySegment(group, chunkSize, rng, disposables, elevation = 0){
   const runwayMaterial = new THREE.MeshStandardMaterial({ color: 0x2b2b30, roughness: 0.72, metalness: 0.12 });
   const runwayGeometry = new THREE.PlaneGeometry(chunkSize, 180, 1, 1);
   const runway = new THREE.Mesh(runwayGeometry, runwayMaterial);
   runway.rotation.x = -Math.PI / 2;
-  runway.position.set(0, 0, 0.12);
+  runway.position.set(0, 0, elevation + 0.12);
   runway.receiveShadow = true;
   group.add(runway);
   disposables.push(runwayMaterial, runwayGeometry);
@@ -1102,8 +1535,8 @@ function addRunwaySegment(group, chunkSize, rng, disposables){
   const rightShoulder = new THREE.Mesh(shoulderGeometry, shoulderMaterial);
   leftShoulder.rotation.x = -Math.PI / 2;
   rightShoulder.rotation.x = -Math.PI / 2;
-  leftShoulder.position.set(0, -110, 0.13);
-  rightShoulder.position.set(0, 110, 0.13);
+  leftShoulder.position.set(0, -110, elevation + 0.13);
+  rightShoulder.position.set(0, 110, elevation + 0.13);
   leftShoulder.receiveShadow = true;
   rightShoulder.receiveShadow = true;
   group.add(leftShoulder, rightShoulder);
@@ -1115,7 +1548,7 @@ function addRunwaySegment(group, chunkSize, rng, disposables){
   for (let i = -markerCount; i <= markerCount; i += 1){
     const marker = new THREE.Mesh(markerGeometry, markerMaterial);
     marker.rotation.x = -Math.PI / 2;
-    marker.position.set(0, (i / markerCount) * (chunkSize * 0.5), 0.14);
+    marker.position.set(0, (i / markerCount) * (chunkSize * 0.5), elevation + 0.14);
     marker.receiveShadow = true;
     group.add(marker);
   }
@@ -1126,16 +1559,16 @@ function addRunwaySegment(group, chunkSize, rng, disposables){
     const centerGlowGeometry = new THREE.PlaneGeometry(chunkSize * 0.2, 40, 1, 1);
     const centerGlow = new THREE.Mesh(centerGlowGeometry, centerGlowMaterial);
     centerGlow.rotation.x = -Math.PI / 2;
-    centerGlow.position.set(0, 0, 0.15);
+    centerGlow.position.set(0, 0, elevation + 0.15);
     group.add(centerGlow);
     disposables.push(centerGlowMaterial, centerGlowGeometry);
   }
 }
 
-function createProceduralTree({ rng, position }){
+function createProceduralTree({ rng, position, baseHeight = 0 }){
   const tree = new THREE.Group();
   tree.name = 'ProceduralTree';
-  tree.position.set(position.x, position.y, 0);
+  tree.position.set(position.x, position.y, baseHeight);
   const disposables = [];
 
   const trunkHeight = 12 + rng() * 10;
@@ -1174,24 +1607,24 @@ function createProceduralTree({ rng, position }){
   return { object: tree, disposables };
 }
 
-function createProceduralBuilding({ rng, position }){
+function createProceduralBuilding({ rng, position, baseHeight = 0 }){
   const building = new THREE.Group();
   building.name = 'ProceduralBuilding';
-  building.position.set(position.x, position.y, 0);
+  building.position.set(position.x, position.y, baseHeight);
   const disposables = [];
 
   const baseWidth = 40 + rng() * 36;
   const baseDepth = 40 + rng() * 36;
-  const baseHeight = 24 + rng() * 32;
+  const structureHeight = 24 + rng() * 32;
   const wallColor = new THREE.Color().setHSL(0.55 + rng() * 0.2, 0.35 + rng() * 0.25, 0.58 + rng() * 0.18);
   const wallMaterial = new THREE.MeshStandardMaterial({
     color: wallColor,
     roughness: 0.65,
     metalness: 0.12,
   });
-  const baseGeometry = new THREE.BoxGeometry(baseWidth, baseDepth, baseHeight);
+  const baseGeometry = new THREE.BoxGeometry(baseWidth, baseDepth, structureHeight);
   const baseMesh = new THREE.Mesh(baseGeometry, wallMaterial);
-  baseMesh.position.set(0, 0, baseHeight / 2);
+  baseMesh.position.set(0, 0, structureHeight / 2);
   baseMesh.castShadow = true;
   baseMesh.receiveShadow = true;
   building.add(baseMesh);
@@ -1206,7 +1639,7 @@ function createProceduralBuilding({ rng, position }){
   const roofGeometry = new THREE.ConeGeometry(Math.max(baseWidth, baseDepth) * 0.65, roofHeight, 4);
   const roofMesh = new THREE.Mesh(roofGeometry, roofMaterial);
   roofMesh.rotation.y = Math.PI / 4;
-  roofMesh.position.set(0, 0, baseHeight + roofHeight / 2);
+  roofMesh.position.set(0, 0, structureHeight + roofHeight / 2);
   roofMesh.castShadow = true;
   roofMesh.receiveShadow = true;
   building.add(roofMesh);
@@ -1215,7 +1648,7 @@ function createProceduralBuilding({ rng, position }){
   if (rng() > 0.45){
     const annexWidth = baseWidth * (0.45 + rng() * 0.25);
     const annexDepth = baseDepth * (0.4 + rng() * 0.25);
-    const annexHeight = baseHeight * (0.35 + rng() * 0.3);
+    const annexHeight = structureHeight * (0.35 + rng() * 0.3);
     const annexGeometry = new THREE.BoxGeometry(annexWidth, annexDepth, annexHeight);
     const annexMaterial = wallMaterial.clone();
     annexMaterial.color = wallColor.clone().offsetHSL((rng() - 0.5) * 0.08, (rng() - 0.5) * 0.05, (rng() - 0.5) * 0.1);
@@ -1228,7 +1661,7 @@ function createProceduralBuilding({ rng, position }){
   }
 
   if (rng() > 0.5){
-    const hangarHeight = baseHeight * 0.4;
+    const hangarHeight = structureHeight * 0.4;
     const hangarWidth = baseWidth * (0.5 + rng() * 0.3);
     const hangarDepth = baseDepth * (0.8 + rng() * 0.1);
     const hangarGeometry = new THREE.BoxGeometry(hangarWidth, hangarDepth, hangarHeight);
@@ -2321,6 +2754,7 @@ function registerMapEntry(entry){
     visibleRadius: entry.visibleRadius,
     tileSize: entry.tileSize,
     fallback: entry.fallback,
+    generator: entry.generator || entry.integration,
   };
   availableMaps.set(normalized.id, normalized);
 }
@@ -2514,6 +2948,7 @@ function normalizeMapDescriptor(descriptor, entry){
   base.id = entry?.id || descriptor.id || DEFAULT_MAP_ID;
   base.label = base.label || entry?.label || base.name || base.id;
   base.type = base.type || entry?.type || 'procedural';
+  base.generator = base.generator || entry?.generator || entry?.integration;
 
   if (base.type === 'tilemap'){
     base.tileSize = Number(base.tileSize || entry?.tileSize || WORLD_CHUNK_SIZE) || WORLD_CHUNK_SIZE;
@@ -2536,6 +2971,13 @@ function createWorldManagerFromDescriptor(descriptor){
   if (!descriptor || !scene) return null;
   if (descriptor.type === 'tilemap'){
     return createTileMapWorld({ scene, descriptor });
+  }
+  if (descriptor.id === 'procedural:endless' || descriptor.generator === 'sandbox'){
+    try {
+      return createSandboxWorld({ scene, descriptor });
+    } catch (err) {
+      console.warn('Falling back to legacy endless world after sandbox integration error', err);
+    }
   }
   const chunkSize = Number(descriptor.chunkSize) || WORLD_CHUNK_SIZE;
   const visibleRadius = Number(descriptor.visibleRadius) || WORLD_CHUNK_RADIUS;
