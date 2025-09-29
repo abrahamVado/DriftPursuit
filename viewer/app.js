@@ -6,6 +6,8 @@ const ACCELERATE_BUTTON = document.getElementById('accelerate-forward');
 const REROUTE_BUTTON = document.getElementById('reroute-waypoints');
 const MODEL_SET_SELECT = document.getElementById('model-set-select');
 const MODEL_SET_STATUS = document.getElementById('model-set-status');
+const MAP_SELECT = document.getElementById('map-select');
+const MAP_STATUS = document.getElementById('map-status');
 const CONTROL_INSTRUCTIONS_LIST = document.getElementById('control-instructions');
 
 const PLANE_FOLLOW_SELECT = document.getElementById('plane-follow-select');
@@ -34,6 +36,8 @@ const MODEL_SETS = {
 const DEFAULT_MODEL_SET_KEY = 'high_fidelity';
 const MODEL_SET_STORAGE_KEY = 'driftpursuit:modelSet';
 const INVERT_AXES_STORAGE_KEY = 'driftpursuit:invertAxes';
+const MAP_STORAGE_KEY = 'driftpursuit:mapId';
+const DEFAULT_MAP_ID = 'procedural:endless';
 const modelSetAssetCache = new Map();
 let modelSetStorageUnavailable = false;
 let runtimeModelSetKey = null;
@@ -46,6 +50,7 @@ if (!MODEL_SETS[currentModelSetKey]) {
 persistModelSetKey(currentModelSetKey);
 let invertAxesStorageUnavailable = false;
 let invertAxesEnabled = readPersistedInvertAxesPreference();
+let mapStorageUnavailable = false;
 const MOVEMENT_KEY_CODES = new Set([
   'KeyW','KeyA','KeyS','KeyD',      // planar translation
   'KeyR','KeyF',                    // altitude adjustments
@@ -187,6 +192,22 @@ let lastManualOverridePayload = null;
 let lastKnownManualVelocity = [0, 0, 0];
 let lastKnownManualOrientation = [0, 0, 0];
 
+// ----- Map & world selection -----
+const availableMaps = new Map();
+const mapDescriptorCache = new Map();
+let runtimeMapId = null;
+let currentMapId = DEFAULT_MAP_ID;
+let mapBuildToken = 0;
+
+availableMaps.set(DEFAULT_MAP_ID, {
+  id: DEFAULT_MAP_ID,
+  label: 'Procedural Airstrip',
+  type: 'procedural',
+  seed: WORLD_SEED,
+  chunkSize: WORLD_CHUNK_SIZE,
+  visibleRadius: WORLD_CHUNK_RADIUS,
+});
+
 const RECONNECT_BASE_DELAY_MS = 1000;
 const RECONNECT_MAX_DELAY_MS = 12000;
 const RECONNECT_SPINNER_INTERVAL_MS = 250;
@@ -239,6 +260,7 @@ if (CONNECTION_RECONNECT_BUTTON){
 updateHudStatus();
 wireButtonHandlers();
 setupModelSetPicker();
+setupMapPicker();
 setupPlaneSelector();
 loadControlDocs();
 
@@ -893,16 +915,7 @@ function captureMaterialTextures(material, textures){
 
 function buildEnvironment(targetScene){
   if (!targetScene) return;
-  worldManager = createEndlessWorld({
-    scene: targetScene,
-    chunkSize: WORLD_CHUNK_SIZE,
-    visibleRadius: WORLD_CHUNK_RADIUS,
-    seed: WORLD_SEED,
-  });
-
-  if (worldManager){
-    worldManager.update(new THREE.Vector3());
-  }
+  rebuildWorldForCurrentMap({ force: true });
 }
 
 function createEndlessWorld({ scene: targetScene, chunkSize, visibleRadius, seed }){
@@ -2195,6 +2208,630 @@ function persistInvertAxesPreference(enabled){
     }
     invertAxesStorageUnavailable = true;
   }
+}
+
+function setupMapPicker(){
+  if (MAP_SELECT){
+    MAP_SELECT.addEventListener('change', (event) => {
+      const nextId = event.target?.value;
+      if (!nextId) return;
+      runtimeMapId = nextId;
+      persistMapId(nextId);
+      rebuildWorldForCurrentMap({ mapId: nextId, reason: 'user-selection' });
+    });
+  }
+
+  const activeEntry = availableMaps.get(currentMapId) || availableMaps.get(DEFAULT_MAP_ID);
+  if (activeEntry){
+    updateMapStatus({ label: activeEntry.label, note: '(loading…)' });
+  } else {
+    updateMapStatus({ label: 'Loading maps…' });
+  }
+
+  loadMapManifest()
+    .catch((err) => {
+      console.warn('Unable to load map manifest', err);
+    })
+    .finally(() => {
+      const resolvedId = resolveMapId(currentMapId);
+      currentMapId = resolvedId;
+      refreshMapSelectOptions(resolvedId);
+      if (MAP_SELECT){
+        MAP_SELECT.value = resolvedId;
+      }
+      rebuildWorldForCurrentMap({ mapId: resolvedId, force: true });
+    });
+}
+
+function loadMapManifest(){
+  if (typeof fetch !== 'function'){
+    return Promise.resolve();
+  }
+
+  return fetch('assets/maps/manifest.json', { cache: 'no-cache' })
+    .then((resp) => {
+      if (!resp.ok){
+        throw new Error(`HTTP ${resp.status}`);
+      }
+      return resp.json();
+    })
+    .then((manifest) => {
+      if (!manifest) return;
+      if (Array.isArray(manifest.maps)){
+        manifest.maps.forEach((entry) => registerMapEntry(entry));
+      }
+      if (manifest.default && availableMaps.has(manifest.default)){
+        currentMapId = manifest.default;
+      }
+    });
+}
+
+function registerMapEntry(entry){
+  if (!entry || !entry.id) return;
+  const normalized = {
+    id: entry.id,
+    label: entry.label || entry.name || entry.id,
+    type: entry.type || 'procedural',
+    path: entry.path || entry.manifest || null,
+    seed: entry.seed,
+    chunkSize: entry.chunkSize,
+    visibleRadius: entry.visibleRadius,
+    tileSize: entry.tileSize,
+    fallback: entry.fallback,
+  };
+  availableMaps.set(normalized.id, normalized);
+}
+
+function refreshMapSelectOptions(selectedId){
+  if (!MAP_SELECT) return;
+  const ordered = Array.from(availableMaps.values()).sort((a, b) => {
+    if (a.id === DEFAULT_MAP_ID && b.id !== DEFAULT_MAP_ID) return -1;
+    if (b.id === DEFAULT_MAP_ID && a.id !== DEFAULT_MAP_ID) return 1;
+    return (a.label || a.id).localeCompare(b.label || b.id);
+  });
+
+  MAP_SELECT.innerHTML = '';
+  ordered.forEach((entry) => {
+    const option = document.createElement('option');
+    option.value = entry.id;
+    option.textContent = entry.label || entry.id;
+    MAP_SELECT.appendChild(option);
+  });
+
+  if (selectedId && availableMaps.has(selectedId)){
+    MAP_SELECT.value = selectedId;
+  }
+}
+
+function updateMapStatus(status){
+  if (!MAP_STATUS) return;
+  if (!status){
+    MAP_STATUS.textContent = '';
+    return;
+  }
+  const label = status.label || '';
+  const note = status.note ? ` ${status.note}` : '';
+  MAP_STATUS.textContent = `${label}${note}`.trim();
+}
+
+function resolveMapId(preferredId){
+  if (preferredId && availableMaps.has(preferredId)){
+    runtimeMapId = preferredId;
+    return preferredId;
+  }
+
+  if (preferredId && !availableMaps.has(preferredId)){
+    runtimeMapId = DEFAULT_MAP_ID;
+    return DEFAULT_MAP_ID;
+  }
+
+  if (runtimeMapId && availableMaps.has(runtimeMapId)){
+    return runtimeMapId;
+  }
+
+  let queryId = null;
+  try {
+    const params = new URLSearchParams(window.location.search);
+    queryId = params.get('map') || params.get('mapId') || params.get('mapid');
+  } catch (err) {
+    console.warn('Unable to parse map parameter', err);
+  }
+
+  if (queryId && availableMaps.has(queryId)){
+    runtimeMapId = queryId;
+    return queryId;
+  }
+
+  const stored = readPersistedMapId();
+  if (stored && availableMaps.has(stored)){
+    runtimeMapId = stored;
+    return stored;
+  }
+
+  runtimeMapId = DEFAULT_MAP_ID;
+  return DEFAULT_MAP_ID;
+}
+
+function readPersistedMapId(){
+  if (mapStorageUnavailable) return null;
+  try {
+    if (typeof window === 'undefined' || !window.localStorage){
+      mapStorageUnavailable = true;
+      return null;
+    }
+    return window.localStorage.getItem(MAP_STORAGE_KEY);
+  } catch (err) {
+    if (!mapStorageUnavailable){
+      console.warn('Unable to read map selection from storage', err);
+    }
+    mapStorageUnavailable = true;
+  }
+  return null;
+}
+
+function persistMapId(mapId){
+  if (mapStorageUnavailable) return;
+  try {
+    if (typeof window === 'undefined' || !window.localStorage){
+      mapStorageUnavailable = true;
+      return;
+    }
+    window.localStorage.setItem(MAP_STORAGE_KEY, mapId);
+  } catch (err) {
+    if (!mapStorageUnavailable){
+      console.warn('Unable to persist map selection', err);
+    }
+    mapStorageUnavailable = true;
+  }
+}
+
+async function rebuildWorldForCurrentMap(options = {}){
+  if (!scene) return;
+  const preferredId = options.mapId || currentMapId;
+  const mapId = resolveMapId(preferredId);
+  currentMapId = mapId;
+  const entry = availableMaps.get(mapId) || availableMaps.get(DEFAULT_MAP_ID);
+  if (entry){
+    updateMapStatus({ label: entry.label, note: '(loading…)' });
+  }
+
+  const token = ++mapBuildToken;
+
+  try {
+    const descriptor = await ensureMapDescriptor(mapId);
+    if (token !== mapBuildToken) return;
+
+    const manager = createWorldManagerFromDescriptor(descriptor);
+    if (token !== mapBuildToken){
+      if (manager && typeof manager.dispose === 'function'){
+        manager.dispose();
+      }
+      return;
+    }
+
+    replaceWorldManager(manager);
+    const label = descriptor.label || entry?.label || mapId;
+    updateMapStatus({ label, note: '(ready)' });
+  } catch (err) {
+    console.warn('Failed to build map', err);
+    if (token !== mapBuildToken) return;
+
+    if (mapId !== DEFAULT_MAP_ID){
+      if (MAP_SELECT && MAP_SELECT.value !== DEFAULT_MAP_ID){
+        MAP_SELECT.value = DEFAULT_MAP_ID;
+      }
+      rebuildWorldForCurrentMap({ mapId: DEFAULT_MAP_ID, force: true });
+      return;
+    }
+
+    updateMapStatus({ label: entry?.label || 'World', note: '(unavailable)' });
+  }
+}
+
+function replaceWorldManager(manager){
+  if (worldManager && typeof worldManager.dispose === 'function'){
+    worldManager.dispose();
+  }
+  worldManager = manager || null;
+  if (worldManager){
+    worldManager.update(new THREE.Vector3());
+  }
+}
+
+async function ensureMapDescriptor(mapId){
+  if (mapDescriptorCache.has(mapId)){
+    return mapDescriptorCache.get(mapId);
+  }
+
+  const entry = availableMaps.get(mapId) || availableMaps.get(DEFAULT_MAP_ID);
+  if (!entry){
+    throw new Error(`Unknown map id: ${mapId}`);
+  }
+
+  if (entry.type === 'tilemap' && entry.path && typeof fetch === 'function'){
+    const url = `assets/maps/${entry.path}`.replace(/\\/g, '/');
+    const response = await fetch(url, { cache: 'no-cache' });
+    if (!response.ok){
+      throw new Error(`Failed to load map descriptor ${mapId}: HTTP ${response.status}`);
+    }
+    const descriptor = await response.json();
+    const normalized = normalizeMapDescriptor(descriptor, entry);
+    mapDescriptorCache.set(mapId, normalized);
+    return normalized;
+  }
+
+  const normalized = normalizeMapDescriptor(entry, entry);
+  mapDescriptorCache.set(mapId, normalized);
+  return normalized;
+}
+
+function normalizeMapDescriptor(descriptor, entry){
+  if (!descriptor) return null;
+  const base = { ...descriptor };
+  base.id = entry?.id || descriptor.id || DEFAULT_MAP_ID;
+  base.label = base.label || entry?.label || base.name || base.id;
+  base.type = base.type || entry?.type || 'procedural';
+
+  if (base.type === 'tilemap'){
+    base.tileSize = Number(base.tileSize || entry?.tileSize || WORLD_CHUNK_SIZE) || WORLD_CHUNK_SIZE;
+    const radius = Number(base.visibleRadius ?? entry?.visibleRadius ?? WORLD_CHUNK_RADIUS);
+    base.visibleRadius = Number.isFinite(radius) ? radius : WORLD_CHUNK_RADIUS;
+    base.fallback = base.fallback || entry?.fallback || { type: 'procedural', seed: WORLD_SEED };
+    base.tiles = Array.isArray(base.tiles) ? base.tiles : [];
+  } else {
+    base.type = 'procedural';
+    base.seed = base.seed || entry?.seed || WORLD_SEED;
+    base.chunkSize = Number(base.chunkSize || entry?.chunkSize || WORLD_CHUNK_SIZE) || WORLD_CHUNK_SIZE;
+    const radius = Number(base.visibleRadius ?? entry?.visibleRadius ?? WORLD_CHUNK_RADIUS);
+    base.visibleRadius = Number.isFinite(radius) ? radius : WORLD_CHUNK_RADIUS;
+  }
+
+  return base;
+}
+
+function createWorldManagerFromDescriptor(descriptor){
+  if (!descriptor || !scene) return null;
+  if (descriptor.type === 'tilemap'){
+    return createTileMapWorld({ scene, descriptor });
+  }
+  const chunkSize = Number(descriptor.chunkSize) || WORLD_CHUNK_SIZE;
+  const visibleRadius = Number(descriptor.visibleRadius) || WORLD_CHUNK_RADIUS;
+  return createEndlessWorld({
+    scene,
+    chunkSize,
+    visibleRadius,
+    seed: descriptor.seed || WORLD_SEED,
+  });
+}
+
+function createTileMapWorld({ scene: targetScene, descriptor }){
+  if (!targetScene || !descriptor) return null;
+  const chunkSize = Number(descriptor.tileSize) || WORLD_CHUNK_SIZE;
+  const visibleRadius = Number(descriptor.visibleRadius) || WORLD_CHUNK_RADIUS;
+  const tiles = new Map();
+  const tileEntries = Array.isArray(descriptor.tiles) ? descriptor.tiles : [];
+  tileEntries.forEach((tile) => {
+    if (!tile) return;
+    const coords = Array.isArray(tile.coords) ? tile.coords : tile.coordinates;
+    if (!coords || coords.length < 2) return;
+    const key = chunkKey(coords[0], coords[1]);
+    tiles.set(key, { ...tile, coords: { x: coords[0], y: coords[1] } });
+  });
+
+  const worldRoot = new THREE.Group();
+  worldRoot.name = `TileMapWorld_${descriptor.id || 'custom'}`;
+  targetScene.add(worldRoot);
+
+  const chunkMap = new Map();
+  const fallbackSeed = descriptor.fallback?.seed || WORLD_SEED;
+  const fallbackType = descriptor.fallback?.type || 'procedural';
+
+  function update(focusPosition){
+    if (!focusPosition) return;
+    const originOffset = ensureWorldOriginOffset();
+    const focusGlobal = focusPosition.clone().add(originOffset);
+    const centerChunkX = Math.floor(focusGlobal.x / chunkSize);
+    const centerChunkY = Math.floor(focusGlobal.y / chunkSize);
+    const needed = new Set();
+
+    for (let dx = -visibleRadius; dx <= visibleRadius; dx += 1){
+      for (let dy = -visibleRadius; dy <= visibleRadius; dy += 1){
+        const chunkX = centerChunkX + dx;
+        const chunkY = centerChunkY + dy;
+        const key = chunkKey(chunkX, chunkY);
+        needed.add(key);
+        if (!chunkMap.has(key)){
+          const chunkEntry = spawnChunk(chunkX, chunkY);
+          chunkMap.set(key, chunkEntry);
+          worldRoot.add(chunkEntry.group);
+        }
+        const chunkEntry = chunkMap.get(key);
+        positionChunk(chunkEntry);
+      }
+    }
+
+    chunkMap.forEach((chunkEntry, key) => {
+      if (!needed.has(key)){
+        disposeChunk(chunkEntry);
+        chunkMap.delete(key);
+      }
+    });
+  }
+
+  function spawnChunk(x, y){
+    const key = chunkKey(x, y);
+    const coords = { x, y };
+    const tile = tiles.get(key);
+    if (tile){
+      const { group, disposables } = buildTileChunk({ descriptor, tile, chunkSize });
+      group.name = `Tile_${x}_${y}`;
+      positionChunk({ coords, group });
+      return { coords, group, disposables };
+    }
+
+    if (fallbackType === 'procedural'){
+      const rng = createSeededRng(fallbackSeed, x, y);
+      const { group, disposables } = buildChunkContents({ coords, chunkSize, rng });
+      group.name = `TileFallback_${x}_${y}`;
+      positionChunk({ coords, group });
+      return { coords, group, disposables };
+    }
+
+    const group = new THREE.Group();
+    group.name = `TileEmpty_${x}_${y}`;
+    positionChunk({ coords, group });
+    return { coords, group, disposables: [] };
+  }
+
+  function positionChunk(chunkEntry){
+    if (!chunkEntry || !chunkEntry.group) return;
+    const originOffset = ensureWorldOriginOffset();
+    const worldX = chunkEntry.coords.x * chunkSize;
+    const worldY = chunkEntry.coords.y * chunkSize;
+    chunkEntry.group.position.set(worldX - originOffset.x, worldY - originOffset.y, -originOffset.z);
+  }
+
+  function handleOriginShift(shift){
+    if (!shift) return;
+    chunkMap.forEach((chunkEntry) => {
+      if (chunkEntry?.group?.position){
+        chunkEntry.group.position.sub(shift);
+      }
+    });
+  }
+
+  function disposeChunk(chunkEntry){
+    if (!chunkEntry) return;
+    if (chunkEntry.group){
+      worldRoot.remove(chunkEntry.group);
+      if (typeof chunkEntry.group.clear === 'function'){
+        chunkEntry.group.clear();
+      }
+    }
+    if (Array.isArray(chunkEntry.disposables)){
+      chunkEntry.disposables.forEach((resource) => {
+        if (resource && typeof resource.dispose === 'function'){
+          resource.dispose();
+        }
+      });
+    }
+  }
+
+  function disposeAll(){
+    chunkMap.forEach((chunkEntry) => disposeChunk(chunkEntry));
+    chunkMap.clear();
+    targetScene.remove(worldRoot);
+  }
+
+  return { update, handleOriginShift, dispose: disposeAll };
+}
+
+function buildTileChunk({ descriptor, tile, chunkSize }){
+  const group = new THREE.Group();
+  const disposables = [];
+
+  const baseColor = resolveColor(tile.groundColor || descriptor.groundColor, '#6a8b5d');
+  const elevation = Number(tile.baseHeight || tile.elevation || 0) || 0;
+
+  if (tile.heightfield){
+    const heightMesh = createHeightfieldMesh({
+      descriptor: tile.heightfield,
+      chunkSize,
+      elevation,
+      color: baseColor,
+    });
+    if (heightMesh){
+      group.add(heightMesh.mesh);
+      disposables.push(heightMesh.geometry, heightMesh.material);
+    }
+  } else {
+    const ground = createGroundPlane({ chunkSize, color: baseColor, elevation });
+    group.add(ground.mesh);
+    disposables.push(ground.geometry, ground.material);
+  }
+
+  if (Array.isArray(tile.objects)){
+    tile.objects.forEach((objectDescriptor, index) => {
+      const created = createMapObject({ descriptor: objectDescriptor, chunkSize, seed: `${descriptor.id || 'map'}:${tile.coords?.x}:${tile.coords?.y}:${index}` });
+      if (created){
+        group.add(created.object);
+        if (Array.isArray(created.disposables)){
+          created.disposables.forEach((resource) => {
+            if (resource) disposables.push(resource);
+          });
+        }
+      }
+    });
+  }
+
+  return { group, disposables };
+}
+
+function createGroundPlane({ chunkSize, color, elevation = 0 }){
+  const geometry = new THREE.PlaneGeometry(chunkSize, chunkSize, 1, 1);
+  const material = new THREE.MeshStandardMaterial({
+    color: new THREE.Color(color),
+    roughness: 0.85,
+    metalness: 0.05,
+  });
+  const mesh = new THREE.Mesh(geometry, material);
+  mesh.rotation.x = -Math.PI / 2;
+  mesh.position.set(0, 0, elevation);
+  mesh.receiveShadow = true;
+  return { mesh, geometry, material };
+}
+
+function createHeightfieldMesh({ descriptor, chunkSize, elevation = 0, color }){
+  if (!descriptor) return null;
+  const data = Array.isArray(descriptor.data) ? descriptor.data : null;
+  const rows = Number(descriptor.rows) || Number(descriptor.height);
+  const cols = Number(descriptor.cols) || Number(descriptor.width);
+  if (!data || !rows || !cols || data.length !== rows * cols){
+    console.warn('Invalid heightfield descriptor; expected rows*cols samples', descriptor);
+    return null;
+  }
+
+  const geometry = new THREE.PlaneGeometry(chunkSize, chunkSize, cols - 1, rows - 1);
+  const positionAttr = geometry.getAttribute('position');
+  const scale = descriptor.scale || descriptor.metersPerSample || { z: descriptor.heightScale || descriptor.scaleZ || 1 };
+  const scaleZ = typeof scale === 'number' ? scale : (Number(scale.z) || Number(scale[2]) || 1);
+
+  for (let i = 0; i < positionAttr.count; i += 1){
+    const heightValue = Number(data[i]) || 0;
+    positionAttr.setZ(i, elevation + heightValue * scaleZ);
+  }
+  positionAttr.needsUpdate = true;
+  geometry.computeVertexNormals();
+
+  const materialOptions = descriptor.material || {};
+  const material = new THREE.MeshStandardMaterial({
+    color: new THREE.Color(resolveColor(materialOptions.color, color || '#6f8560')),
+    roughness: Number(materialOptions.roughness ?? 0.78),
+    metalness: Number(materialOptions.metalness ?? 0.08),
+  });
+
+  const mesh = new THREE.Mesh(geometry, material);
+  mesh.rotation.x = -Math.PI / 2;
+  mesh.receiveShadow = true;
+  mesh.castShadow = false;
+  return { mesh, geometry, material };
+}
+
+function createMapObject({ descriptor, chunkSize, seed }){
+  if (!descriptor) return null;
+  const type = descriptor.type || descriptor.kind || 'box';
+  const disposables = [];
+  let object = null;
+
+  if (type === 'box'){
+    const size = Array.isArray(descriptor.size) ? descriptor.size : [descriptor.width, descriptor.depth, descriptor.height];
+    const width = Number(size?.[0] ?? descriptor.width ?? 40) || 40;
+    const depth = Number(size?.[1] ?? descriptor.depth ?? 40) || 40;
+    const height = Number(size?.[2] ?? descriptor.height ?? 20) || 20;
+    const geometry = new THREE.BoxGeometry(width, depth, height);
+    const material = new THREE.MeshStandardMaterial({
+      color: new THREE.Color(resolveColor(descriptor.color || descriptor.material?.color, '#8691a5')),
+      roughness: Number(descriptor.material?.roughness ?? 0.6),
+      metalness: Number(descriptor.material?.metalness ?? 0.2),
+    });
+    const mesh = new THREE.Mesh(geometry, material);
+    mesh.castShadow = descriptor.castShadow !== false;
+    mesh.receiveShadow = descriptor.receiveShadow !== false;
+    mesh.position.set(0, 0, height / 2);
+    object = mesh;
+    disposables.push(geometry, material);
+  } else if (type === 'cylinder' || type === 'tower'){
+    const radiusTop = Number(descriptor.radiusTop ?? descriptor.radius ?? 8) || 8;
+    const radiusBottom = Number(descriptor.radiusBottom ?? descriptor.radius ?? radiusTop) || radiusTop;
+    const height = Number(descriptor.height ?? descriptor.size?.[2] ?? 30) || 30;
+    const radialSegments = Math.max(3, Number(descriptor.radialSegments ?? 12) || 12);
+    const geometry = new THREE.CylinderGeometry(radiusTop, radiusBottom, height, radialSegments);
+    const material = new THREE.MeshStandardMaterial({
+      color: new THREE.Color(resolveColor(descriptor.color || descriptor.material?.color, '#d6d0c2')),
+      roughness: Number(descriptor.material?.roughness ?? 0.45),
+      metalness: Number(descriptor.material?.metalness ?? 0.25),
+    });
+    const mesh = new THREE.Mesh(geometry, material);
+    mesh.castShadow = descriptor.castShadow !== false;
+    mesh.receiveShadow = descriptor.receiveShadow !== false;
+    mesh.position.set(0, 0, height / 2);
+    object = mesh;
+    disposables.push(geometry, material);
+  } else if (type === 'plane'){
+    const size = Array.isArray(descriptor.size) ? descriptor.size : [descriptor.width, descriptor.depth];
+    const width = Number(size?.[0] ?? descriptor.width ?? chunkSize * 0.5) || chunkSize * 0.5;
+    const depth = Number(size?.[1] ?? descriptor.depth ?? chunkSize * 0.2) || chunkSize * 0.2;
+    const geometry = new THREE.PlaneGeometry(width, depth, 1, 1);
+    const material = new THREE.MeshStandardMaterial({
+      color: new THREE.Color(resolveColor(descriptor.color || descriptor.material?.color, '#dedede')),
+      roughness: Number(descriptor.material?.roughness ?? 0.55),
+      metalness: Number(descriptor.material?.metalness ?? 0.1),
+      transparent: Boolean(descriptor.material?.transparent),
+      opacity: Number(descriptor.material?.opacity ?? 1),
+    });
+    const mesh = new THREE.Mesh(geometry, material);
+    mesh.rotation.x = -Math.PI / 2;
+    mesh.receiveShadow = descriptor.receiveShadow !== false;
+    mesh.castShadow = descriptor.castShadow === true;
+    object = mesh;
+    disposables.push(geometry, material);
+  } else if (type === 'tree' || type === 'preset:tree'){
+    const rng = createSeededRng(seed || 'tree', descriptor.position?.[0] || 0, descriptor.position?.[1] || 0);
+    const tree = createProceduralTree({ rng, position: { x: 0, y: 0 } });
+    object = tree.object;
+    object.position.set(0, 0, 0);
+    if (Array.isArray(tree.disposables)){
+      tree.disposables.forEach((resource) => disposables.push(resource));
+    }
+  }
+
+  if (!object) return null;
+
+  const holder = new THREE.Group();
+  holder.add(object);
+  applyTransform(holder, descriptor.transform || descriptor);
+  return { object: holder, disposables };
+}
+
+function applyTransform(target, descriptor){
+  if (!target || !descriptor) return;
+  const position = Array.isArray(descriptor.position) ? descriptor.position : null;
+  if (position){
+    target.position.set(Number(position[0]) || 0, Number(position[1]) || 0, Number(position[2]) || 0);
+  }
+
+  const rotation = Array.isArray(descriptor.rotation) ? descriptor.rotation : null;
+  const rotationDegrees = Array.isArray(descriptor.rotationDegrees) ? descriptor.rotationDegrees : null;
+  if (rotation){
+    target.rotation.set(Number(rotation[0]) || 0, Number(rotation[1]) || 0, Number(rotation[2]) || 0);
+  } else if (rotationDegrees){
+    const toRad = Math.PI / 180;
+    target.rotation.set((Number(rotationDegrees[0]) || 0) * toRad, (Number(rotationDegrees[1]) || 0) * toRad, (Number(rotationDegrees[2]) || 0) * toRad);
+  }
+
+  const scale = descriptor.scale;
+  if (Array.isArray(scale)){
+    target.scale.set(Number(scale[0]) || 1, Number(scale[1]) || 1, Number(scale[2]) || 1);
+  } else if (typeof scale === 'number'){
+    target.scale.set(scale, scale, scale);
+  }
+}
+
+function resolveColor(input, fallback){
+  if (!input){
+    return fallback || '#ffffff';
+  }
+  if (typeof input === 'string'){
+    return input;
+  }
+  if (typeof input === 'number'){
+    return `#${input.toString(16).padStart(6, '0')}`;
+  }
+  if (typeof input === 'object' && input){
+    if (Array.isArray(input)){ return `#${input.map((c) => Math.max(0, Math.min(255, Math.round(c)))).map((c) => c.toString(16).padStart(2, '0')).join('')}`; }
+    if (typeof input.hex === 'string') return input.hex;
+  }
+  return fallback || '#ffffff';
 }
 
 function createStylizedLowpolyTemplate(){

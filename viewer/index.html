@@ -51,6 +51,12 @@
       gap: 6px;
     }
 
+    #map-picker {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+
     #plane-selector {
       display: flex;
       flex-direction: column;
@@ -180,6 +186,10 @@
       min-height: 16px;
     }
 
+    #map-status {
+      min-height: 16px;
+    }
+
 
     #control-instructions {
       margin: 0;
@@ -244,6 +254,13 @@
       <label for="model-set-select" class="control-label">Aircraft Model</label>
       <select id="model-set-select" class="control-select"></select>
       <p id="model-set-status" class="controls-subtext">Preparing…</p>
+    </div>
+    <div id="map-picker">
+      <label for="map-select" class="control-label">Map Layout</label>
+      <select id="map-select" class="control-select">
+        <option value="procedural:endless">Procedural Airstrip</option>
+      </select>
+      <p id="map-status" class="controls-subtext">Loading maps…</p>
     </div>
     <div id="plane-selector">
       <label for="plane-follow-select" class="control-label">Tracked Aircraft</label>
