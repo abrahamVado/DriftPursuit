@@ -52,13 +52,23 @@ const planeController = new PlaneController();
 planeController.attachMesh(planeMesh);
 
 const input = new InputManager();
-const chaseCamera = new ChaseCamera(camera, { distance: 70, height: 26, stiffness: 3.6, lookAhead: 18 });
+const chaseCamera = new ChaseCamera(camera, {
+  distance: 78,
+  height: 24,
+  stiffness: 3.8,
+  lookStiffness: 7,
+  forwardResponsiveness: 5.2,
+  pitchInfluence: 0.42,
+});
 const hud = new HUD({ controls: describeControls() });
 const collisionSystem = new CollisionSystem({ world, crashMargin: 2.2, obstaclePadding: 3 });
 
 const startAnchor = new THREE.Vector3(0, -320, 0);
 let crashCount = 0;
 let crashCooldown = 0;
+let elapsedFlightTime = 0;
+let traveledDistance = 0;
+const lastPlanePosition = new THREE.Vector3();
 
 function computeStartPosition(){
   const spawn = startAnchor.clone();
@@ -71,10 +81,15 @@ function resetPlane(){
   const spawn = computeStartPosition();
   planeController.reset({ position: spawn, yaw: 0, pitch: THREE.MathUtils.degToRad(2), throttle: 0.42 });
   chaseCamera.currentPosition.copy(spawn.clone().add(new THREE.Vector3(-40, -60, 30)));
+  chaseCamera.currentForward.set(0, 1, 0);
+  chaseCamera.currentLookTarget.copy(planeController.position);
   camera.position.copy(chaseCamera.currentPosition);
   crashCooldown = 0.8;
+  elapsedFlightTime = 0;
+  traveledDistance = 0;
+  lastPlanePosition.copy(planeController.position);
   world.update(planeController.position);
-  chaseCamera.update(planeController.getState(), 0.016);
+  chaseCamera.update(planeController.getState(), 0);
 }
 
 resetPlane();
@@ -99,7 +114,9 @@ function animate(now){
   const dt = Math.min(0.08, (now - lastTime) / 1000 || 0);
   lastTime = now;
 
-  const inputState = crashCooldown > 0 ? { pitch: 0, yaw: 0, roll: 0, throttleAdjust: 0, brake: false } : input.readState();
+  const inputState = crashCooldown > 0
+    ? { pitch: 0, yaw: 0, roll: 0, throttleAdjust: 0, brake: false }
+    : input.readState(dt);
   planeController.update(dt, inputState, {
     sampleGroundHeight: (x, y) => world.getHeightAt(x, y),
     clampAltitude,
@@ -120,6 +137,15 @@ function animate(now){
     }
   }
 
+  if (crashCooldown <= 0){
+    elapsedFlightTime += dt;
+    const frameDistance = planeState.position.distanceTo(lastPlanePosition);
+    if (Number.isFinite(frameDistance)){
+      traveledDistance += frameDistance;
+    }
+  }
+  lastPlanePosition.copy(planeState.position);
+
   rebaseWorldIfNeeded();
 
   world.update(planeState.position);
@@ -128,8 +154,9 @@ function animate(now){
   hud.update({
     throttle: planeState.throttle,
     speed: planeState.speed,
-    altitude: planeState.altitude ?? 0,
     crashCount,
+    elapsedTime: elapsedFlightTime,
+    distance: traveledDistance,
   });
 
   renderer.render(scene, camera);
@@ -144,6 +171,7 @@ function rebaseWorldIfNeeded(){
     planeMesh.position.copy(planeController.position);
     chaseCamera.currentPosition.sub(shift);
     camera.position.sub(shift);
+    lastPlanePosition.sub(shift);
     world.handleOriginShift(shift);
   }
 }
