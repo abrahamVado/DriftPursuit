@@ -7,6 +7,9 @@ const TMP_POSITION = new THREE.Vector3();
 const TMP_QUATERNION = new THREE.Quaternion();
 const TMP_DIRECTION = new THREE.Vector3();
 const TMP_CENTER = new THREE.Vector3();
+const TMP_IMPACT_POSITION = new THREE.Vector3();
+const TMP_ORIGIN_OFFSET = new THREE.Vector3();
+const TMP_NORMAL = new THREE.Vector3(0, 0, 1);
 
 const PROJECTILE_SPEED = 320;
 const PROJECTILE_LIFESPAN = 6;
@@ -108,8 +111,9 @@ const DEFAULT_AMMO_TYPES = [
 ];
 
 export class TerraProjectileManager {
-  constructor({ scene, ammoTypes = [] } = {}){
+  constructor({ scene, world = null, ammoTypes = [] } = {}){
     this.scene = scene ?? null;
+    this.world = world ?? null;
     this.projectiles = [];
     this.geometry = new THREE.SphereGeometry(0.36, 20, 20);
     this.ammoTypes = new Map();
@@ -158,6 +162,10 @@ export class TerraProjectileManager {
 
   setScene(scene){
     this.scene = scene ?? null;
+  }
+
+  setWorld(world){
+    this.world = world ?? null;
   }
 
   spawnFromMuzzle(muzzle, { ownerId = null, inheritVelocity = null } = {}){
@@ -215,7 +223,7 @@ export class TerraProjectileManager {
     this.projectiles = survivors;
   }
 
-  update(dt, { vehicles = null, onVehicleHit = null } = {}){
+  update(dt, { vehicles = null, onVehicleHit = null, onImpact = null } = {}){
     if (dt <= 0) return;
     const survivors = [];
     for (const projectile of this.projectiles){
@@ -228,6 +236,7 @@ export class TerraProjectileManager {
       projectile.mesh.position.addScaledVector(projectile.velocity, dt);
       this._applyProjectileBehavior(projectile, dt);
 
+      let impacted = false;
       if (vehicles){
         const hitVehicle = this._findVehicleHit(projectile, vehicles);
         if (hitVehicle){
@@ -235,8 +244,19 @@ export class TerraProjectileManager {
             onVehicleHit(hitVehicle, projectile);
           }
           this._disposeProjectile(projectile);
-          continue;
+          impacted = true;
         }
+      }
+
+      if (!impacted && this.world){
+        impacted = this._handleEnvironmentCollision(projectile, { onImpact });
+        if (impacted){
+          this._disposeProjectile(projectile);
+        }
+      }
+
+      if (impacted){
+        continue;
       }
 
       survivors.push(projectile);
@@ -350,6 +370,74 @@ export class TerraProjectileManager {
       }
       default:
         break;
+    }
+  }
+
+  _handleEnvironmentCollision(projectile, { onImpact } = {}){
+    const position = projectile.mesh.position;
+    if (!position || !this.world) return false;
+
+    const originOffset = typeof this.world.getOriginOffset === 'function'
+      ? this.world.getOriginOffset()
+      : TMP_ORIGIN_OFFSET.set(0, 0, 0);
+
+    const height = this.world.getHeightAt(position.x, position.y);
+    if (Number.isFinite(height) && position.z <= height + (projectile.radius ?? PROJECTILE_RADIUS)){
+      const impactPosition = TMP_IMPACT_POSITION.set(position.x, position.y, height);
+      const normal = typeof this.world.getSurfaceNormalAt === 'function'
+        ? this.world.getSurfaceNormalAt(position.x, position.y)
+        : TMP_NORMAL.set(0, 0, 1);
+      this._notifyImpact({ position: impactPosition.clone(), normal: normal.clone(), projectile }, onImpact);
+      return true;
+    }
+
+    const obstacles = typeof this.world.getObstaclesNear === 'function'
+      ? this.world.getObstaclesNear(position.x, position.y, 40)
+      : null;
+    if (!obstacles?.length) return false;
+
+    const projectileWorld = TMP_IMPACT_POSITION.set(
+      position.x + originOffset.x,
+      position.y + originOffset.y,
+      position.z + originOffset.z,
+    );
+
+    for (const obstacle of obstacles){
+      if (!obstacle?.worldPosition) continue;
+      const dx = obstacle.worldPosition.x - projectileWorld.x;
+      const dy = obstacle.worldPosition.y - projectileWorld.y;
+      const radius = (obstacle.radius ?? 3) + (projectile.radius ?? PROJECTILE_RADIUS);
+      if (dx * dx + dy * dy > radius * radius) continue;
+      const topHeight = obstacle.topHeight ?? obstacle.worldPosition.z;
+      if (projectileWorld.z - topHeight > (projectile.radius ?? PROJECTILE_RADIUS) + 0.1) continue;
+      const impactPosition = TMP_IMPACT_POSITION.set(
+        obstacle.worldPosition.x - originOffset.x,
+        obstacle.worldPosition.y - originOffset.y,
+        topHeight - originOffset.z,
+      );
+      this._notifyImpact({ position: impactPosition.clone(), normal: TMP_NORMAL.set(0, 0, 1).clone(), projectile, obstacle }, onImpact);
+      return true;
+    }
+
+    return false;
+  }
+
+  _notifyImpact(impact, onImpact){
+    if (!impact) return;
+    const projectileRadius = impact.projectile?.radius ?? PROJECTILE_RADIUS;
+    const craterRadius = Math.max(0.05, projectileRadius);
+    const craterDepth = Math.max(0.025, craterRadius * 0.5);
+    const payload = {
+      position: impact.position,
+      normal: impact.normal ?? TMP_NORMAL.set(0, 0, 1),
+      obstacle: impact.obstacle ?? null,
+      radius: craterRadius,
+      depth: craterDepth,
+    };
+    if (typeof onImpact === 'function'){
+      onImpact(payload);
+    } else if (typeof this.world?.applyProjectileImpact === 'function'){
+      this.world.applyProjectileImpact(payload);
     }
   }
 }
