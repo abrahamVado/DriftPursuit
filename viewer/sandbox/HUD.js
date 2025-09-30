@@ -156,6 +156,24 @@ const MESSAGE_STYLE = `
   text-transform: uppercase;
 `;
 
+const ACTION_BUTTON_STYLE = `
+  position: absolute;
+  bottom: 38px;
+  right: 38px;
+  padding: 12px 18px;
+  border-radius: 12px;
+  background: linear-gradient(135deg, rgba(38, 58, 92, 0.92), rgba(64, 118, 184, 0.92));
+  color: #f8fbff;
+  border: 1px solid rgba(140, 190, 255, 0.45);
+  font-size: 14px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  cursor: pointer;
+  box-shadow: 0 18px 42px rgba(0, 0, 0, 0.32);
+  pointer-events: auto;
+  transition: transform 0.18s ease, box-shadow 0.18s ease;
+`;
+
 function createMetric(label){
   const wrapper = document.createElement('div');
   wrapper.setAttribute('style', METRIC_STYLE);
@@ -274,6 +292,19 @@ export class HUD {
     this.message.style.display = 'none';
     this.overlay.appendChild(this.message);
 
+    this.dropHandler = null;
+    this.dropButton = document.createElement('button');
+    this.dropButton.type = 'button';
+    this.dropButton.textContent = 'Drop Vehicle';
+    this.dropButton.setAttribute('style', `${ACTION_BUTTON_STYLE}`);
+    this.dropButton.style.display = 'none';
+    this.dropButton.addEventListener('click', () => {
+      if (typeof this.dropHandler === 'function'){
+        this.dropHandler();
+      }
+    });
+    this.overlay.appendChild(this.dropButton);
+
     this.controls = Array.isArray(controls.items) ? controls.items : [];
     this.renderControls();
     this.setMetricLabels(controls.metricLabels ?? {});
@@ -351,5 +382,16 @@ export class HUD {
     this.messageTimer = setTimeout(() => {
       this.message.style.display = 'none';
     }, durationMs);
+  }
+
+  setDropHandler(handler){
+    this.dropHandler = typeof handler === 'function' ? handler : null;
+  }
+
+  setDropEnabled(enabled){
+    if (!this.dropButton) return;
+    const visible = Boolean(enabled);
+    this.dropButton.style.display = visible ? 'block' : 'none';
+    this.dropButton.disabled = !visible;
   }
 }

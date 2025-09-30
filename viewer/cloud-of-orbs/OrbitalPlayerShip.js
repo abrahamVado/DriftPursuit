@@ -3,13 +3,16 @@ import { createPlaneMesh as createSurfacePlaneMesh } from '../terra/PlaneControl
 
 const THREE = requireTHREE();
 
+const BOOST_LIGHT_COLOR = new THREE.Color(0xfff0d2);
+const BOOST_GLOW_COLOR = new THREE.Color(0xfff4dc);
+
 const DEFAULT_CONFIG = Object.freeze({
-  maxSpeed: 9600,
+  maxSpeed: 24000,
   minSpeed: 0,
-  acceleration: 1.8,
-  velocityResponsiveness: 4.5,
-  brakeDeceleration: 6200,
-  throttleResponsiveness: 1.6,
+  acceleration: 3.6,
+  velocityResponsiveness: 6.5,
+  brakeDeceleration: 14800,
+  throttleResponsiveness: 1.85,
   turnRates: {
     yaw: THREE.MathUtils.degToRad(55),
     pitch: THREE.MathUtils.degToRad(48),
@@ -50,9 +53,17 @@ function createShipMesh(){
       propulsor.light.decay = 2.4;
       propulsor.light.intensity = 0;
       propulsor.light.color.set(0xffc27a);
+      propulsor.light.userData ??= {};
+      if (!propulsor.light.userData.baseColor){
+        propulsor.light.userData.baseColor = propulsor.light.color.clone();
+      }
     }
     if (propulsor.glowMaterial){
       propulsor.glowMaterial.color.set(0xffc68a);
+      propulsor.glowMaterial.userData ??= {};
+      if (!propulsor.glowMaterial.userData.baseColor){
+        propulsor.glowMaterial.userData.baseColor = propulsor.glowMaterial.color.clone();
+      }
     }
   });
 
@@ -88,6 +99,8 @@ export class OrbitalPlayerShip {
     this.propulsorRefs = Array.isArray(this.mesh.userData?.propulsors) ? this.mesh.userData.propulsors : [];
     this.propulsorHeat = 0;
     this.propulsorResponse = 4.5;
+    this.propulsorBoost = 0;
+    this.propulsorBoostResponse = 5.8;
     this._applyPropulsorIntensity(0);
 
     this.state = {
@@ -202,10 +215,16 @@ export class OrbitalPlayerShip {
     return this.state;
   }
 
-  update(dt = 0, input = {}, { drag = 0.0025 } = {}){
+  update(dt = 0, input = {}, { drag = 0.0025, launchBoost = 0 } = {}){
     if (!this.active){
       return this.state;
     }
+
+    const boostLevel = THREE.MathUtils.clamp(
+      Number.isFinite(launchBoost) ? launchBoost : (launchBoost ? 1 : 0),
+      0,
+      1,
+    );
 
     const { turnRates } = this.config;
     const yawInput = input?.yaw ?? 0;
@@ -230,17 +249,39 @@ export class OrbitalPlayerShip {
       this.throttle = THREE.MathUtils.clamp(this.throttle + throttleAdjust * rate, 0, 1);
     }
 
+    const throttleOverride = input?.throttleOverride;
+    if (Number.isFinite(throttleOverride)){
+      this.throttle = THREE.MathUtils.clamp(throttleOverride, 0, 1);
+    }
+
     if (input?.brake){
       this.speed = Math.max(0, this.speed - this.config.brakeDeceleration * dt);
       this.throttle = Math.max(0, this.throttle - 1.4 * dt);
     }
 
+    if (boostLevel > 0 && !input?.brake){
+      const assistedThrottle = THREE.MathUtils.lerp(0.42, 0.78, boostLevel);
+      if (this.throttle < assistedThrottle){
+        const catchUp = dt > 0 ? 1 - Math.exp(-this.config.throttleResponsiveness * 2.2 * dt) : 1;
+        this.throttle = THREE.MathUtils.clamp(
+          this.throttle + (assistedThrottle - this.throttle) * catchUp,
+          0,
+          1,
+        );
+      }
+    }
+
+    const maxSpeedBoost = THREE.MathUtils.lerp(1, 1.18, boostLevel);
+    const accelerationBoost = THREE.MathUtils.lerp(1, 1.75, boostLevel);
+    const velocityResponseBoost = THREE.MathUtils.lerp(1, 1.45, boostLevel);
+    const desiredMaxSpeed = this.config.maxSpeed * maxSpeedBoost;
     const desiredSpeed = THREE.MathUtils.clamp(
-      this.config.minSpeed + (this.config.maxSpeed - this.config.minSpeed) * this.throttle,
+      this.config.minSpeed + (desiredMaxSpeed - this.config.minSpeed) * this.throttle,
       this.config.minSpeed,
-      this.config.maxSpeed,
+      desiredMaxSpeed,
     );
-    const accelBlend = dt > 0 ? 1 - Math.exp(-this.config.acceleration * dt) : 1;
+    const accelRate = this.config.acceleration * accelerationBoost;
+    const accelBlend = dt > 0 ? 1 - Math.exp(-accelRate * dt) : 1;
     this.speed += (desiredSpeed - this.speed) * accelBlend;
     if (this.speed < 0.5){
       this.speed = 0;
@@ -248,11 +289,13 @@ export class OrbitalPlayerShip {
 
     const forward = this.getForwardVector(this.forward);
     const desiredVelocity = TMP_FORWARD.copy(forward).multiplyScalar(this.speed);
-    const velocityBlend = dt > 0 ? 1 - Math.exp(-this.config.velocityResponsiveness * dt) : 1;
+    const velocityRate = this.config.velocityResponsiveness * velocityResponseBoost;
+    const velocityBlend = dt > 0 ? 1 - Math.exp(-velocityRate * dt) : 1;
     this.velocity.lerp(desiredVelocity, velocityBlend);
 
-    if (drag > 0){
-      const damping = Math.max(0, 1 - drag * dt * 60);
+    const effectiveDrag = drag * THREE.MathUtils.lerp(1, 0.52, boostLevel);
+    if (effectiveDrag > 0){
+      const damping = Math.max(0, 1 - effectiveDrag * dt * 60);
       this.velocity.multiplyScalar(damping);
     }
 
@@ -262,8 +305,11 @@ export class OrbitalPlayerShip {
       this.hasLaunched = true;
     }
 
-    const throttleLevel = Math.max(this.throttle, THREE.MathUtils.clamp(this.speed / Math.max(1, this.config.maxSpeed), 0, 1));
-    this._updatePropulsors(dt, throttleLevel);
+    const throttleLevel = Math.max(
+      this.throttle,
+      THREE.MathUtils.clamp(this.speed / Math.max(1, desiredMaxSpeed), 0, 1),
+    );
+    this._updatePropulsors(dt, throttleLevel, { boostLevel });
 
     if (this._needsMatrixUpdate){
       this.mesh.updateMatrixWorld?.();
@@ -275,42 +321,59 @@ export class OrbitalPlayerShip {
     return this.state;
   }
 
-  _updatePropulsors(dt, target = 0){
+  _updatePropulsors(dt, target = 0, { boostLevel = 0 } = {}){
     if (!this.propulsorRefs || this.propulsorRefs.length === 0) return;
     const blend = dt > 0 ? 1 - Math.exp(-this.propulsorResponse * dt) : 1;
     const clampedTarget = THREE.MathUtils.clamp(target, 0, 1);
     this.propulsorHeat += (clampedTarget - this.propulsorHeat) * blend;
     this.propulsorHeat = THREE.MathUtils.clamp(this.propulsorHeat, 0, 1);
+    const boost = THREE.MathUtils.clamp(boostLevel ?? 0, 0, 1);
+    const boostBlend = dt > 0 ? 1 - Math.exp(-this.propulsorBoostResponse * dt) : 1;
+    this.propulsorBoost += (boost - this.propulsorBoost) * boostBlend;
+    this.propulsorBoost = THREE.MathUtils.clamp(this.propulsorBoost, 0, 1);
     this._applyPropulsorIntensity(this.propulsorHeat);
   }
 
   _applyPropulsorIntensity(level){
     if (!this.propulsorRefs || this.propulsorRefs.length === 0) return;
     const intensity = THREE.MathUtils.clamp(level ?? 0, 0, 1);
+    const boost = THREE.MathUtils.clamp(this.propulsorBoost ?? 0, 0, 1);
+    const boostIntensityScale = THREE.MathUtils.lerp(1, 1.75, boost);
+    const boostOpacityScale = THREE.MathUtils.lerp(1, 1.22, boost);
+    const boostScale = THREE.MathUtils.lerp(1, 1.38, boost);
+    const boostEmissiveScale = THREE.MathUtils.lerp(1, 1.6, boost);
     for (const propulsor of this.propulsorRefs){
       if (!propulsor) continue;
       if (propulsor.light){
         const min = propulsor.minIntensity ?? 0.4;
-        const max = propulsor.maxIntensity ?? 4.6;
+        const max = (propulsor.maxIntensity ?? 4.6) * boostIntensityScale;
         propulsor.light.intensity = THREE.MathUtils.lerp(min, max, intensity);
+        const baseColor = propulsor.light.userData?.baseColor;
+        if (baseColor){
+          propulsor.light.color.copy(baseColor).lerp(BOOST_LIGHT_COLOR, boost);
+        }
       }
       if (propulsor.glowMaterial){
         const minOpacity = propulsor.minOpacity ?? 0.18;
         const maxOpacity = propulsor.maxOpacity ?? 1.0;
         propulsor.glowMaterial.opacity = intensity <= 0.001
           ? 0
-          : THREE.MathUtils.lerp(minOpacity, maxOpacity, intensity);
+          : THREE.MathUtils.lerp(minOpacity, maxOpacity * boostOpacityScale, intensity);
+        const baseGlowColor = propulsor.glowMaterial.userData?.baseColor;
+        if (baseGlowColor){
+          propulsor.glowMaterial.color.copy(baseGlowColor).lerp(BOOST_GLOW_COLOR, boost);
+        }
       }
       if (propulsor.glowMesh){
         const minScale = propulsor.minScale ?? 0.9;
-        const maxScale = propulsor.maxScale ?? 2.3;
+        const maxScale = (propulsor.maxScale ?? 2.3) * boostScale;
         const scale = THREE.MathUtils.lerp(minScale, maxScale, intensity);
         const scaleZ = propulsor.scaleZ ?? 2.2;
         propulsor.glowMesh.scale.set(scale, scale, scale * scaleZ);
       }
       if (propulsor.housingMaterial && typeof propulsor.housingMaterial.emissiveIntensity === 'number'){
         const minEmissive = propulsor.minEmissive ?? 0.12;
-        const maxEmissive = propulsor.maxEmissive ?? 0.9;
+        const maxEmissive = (propulsor.maxEmissive ?? 0.9) * boostEmissiveScale;
         propulsor.housingMaterial.emissiveIntensity = THREE.MathUtils.lerp(minEmissive, maxEmissive, intensity);
       }
     }
