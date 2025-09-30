@@ -3,6 +3,7 @@ import { TerraInputManager } from '../terra/InputManager.js';
 const DEFAULT_SYSTEM_BINDINGS = Object.freeze({
   systemNextPlanet: ['BracketRight', 'Period'],
   systemPreviousPlanet: ['BracketLeft', 'Comma'],
+  systemExitPlanet: ['KeyO'],
 });
 
 function mergeBindings(base, override){
@@ -22,6 +23,7 @@ export class CloudOfOrbsInputManager extends TerraInputManager {
     super({ keyBindings: { ...mergedBindings, ...keyBindings }, ...rest });
     this.systemBindings = mergedBindings;
     this.pendingSystemCycle = 0;
+    this.exitRequested = false;
     this.orbitalControlsEnabled = true;
     this.primaryPointerActive = false;
   }
@@ -40,6 +42,9 @@ export class CloudOfOrbsInputManager extends TerraInputManager {
       event.preventDefault();
     } else if (this._matchesBinding(this.systemBindings.systemPreviousPlanet, event.code)){
       this.pendingSystemCycle -= 1;
+      event.preventDefault();
+    } else if (this._matchesBinding(this.systemBindings.systemExitPlanet, event.code)){
+      this.exitRequested = true;
       event.preventDefault();
     }
   }
@@ -84,10 +89,13 @@ export class CloudOfOrbsInputManager extends TerraInputManager {
     const sample = super.readState(dt);
     const cycle = this.pendingSystemCycle;
     this.pendingSystemCycle = 0;
+    const exitPlanet = this.exitRequested;
+    this.exitRequested = false;
     sample.system = {
       zoomDelta: zoomImpulse,
       cycle,
       orbitActive: this.orbitActive,
+      exitPlanet,
     };
     return sample;
   }
