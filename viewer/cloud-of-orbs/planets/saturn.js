@@ -10,12 +10,16 @@ const PLANET_ID = 'saturn';
  * - radius: Relative radius in Earth units (Earth = 1).
  * - orbitDistance: Average orbital distance in astronomical units (AU).
  * - loadThresholds: Distance thresholds (in scene units) for LOD transitions.
+ * - angularVelocity: Orbital angular velocity in radians per Earth year.
+ * - inclination: Orbital inclination in degrees relative to the ecliptic.
  */
 export const metadata = Object.freeze({
   id: PLANET_ID,
   label: 'Saturn',
   radius: 9.45,
   orbitDistance: 9.58,
+  angularVelocity: 0.21336907153129228,
+  inclination: 2.5,
   loadThresholds: {
     low: 0,
     medium: 340,

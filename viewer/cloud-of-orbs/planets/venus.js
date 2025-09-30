@@ -10,12 +10,16 @@ const PLANET_ID = 'venus';
  * - radius: Relative radius in Earth units (Earth = 1).
  * - orbitDistance: Average orbital distance in astronomical units (AU).
  * - loadThresholds: Distance thresholds (in scene units) for LOD transitions.
+ * - angularVelocity: Orbital angular velocity in radians per Earth year.
+ * - inclination: Orbital inclination in degrees relative to the ecliptic.
  */
 export const metadata = Object.freeze({
   id: PLANET_ID,
   label: 'Venus',
   radius: 0.949,
   orbitDistance: 0.72,
+  angularVelocity: 10.213285584496242,
+  inclination: 3.4,
   loadThresholds: {
     low: 0,
     medium: 120,

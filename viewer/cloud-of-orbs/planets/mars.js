@@ -10,12 +10,16 @@ const PLANET_ID = 'mars';
  * - radius: Relative radius in Earth units (Earth = 1).
  * - orbitDistance: Average orbital distance in astronomical units (AU).
  * - loadThresholds: Distance thresholds (in scene units) for LOD transitions.
+ * - angularVelocity: Orbital angular velocity in radians per Earth year.
+ * - inclination: Orbital inclination in degrees relative to the ecliptic.
  */
 export const metadata = Object.freeze({
   id: PLANET_ID,
   label: 'Mars',
   radius: 0.532,
   orbitDistance: 1.52,
+  angularVelocity: 3.340670206609061,
+  inclination: 1.85,
   loadThresholds: {
     low: 0,
     medium: 130,

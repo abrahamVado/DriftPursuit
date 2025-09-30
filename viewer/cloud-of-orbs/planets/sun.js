@@ -10,12 +10,16 @@ const PLANET_ID = 'sun';
  * - radius: Relative radius in Earth units (Earth = 1).
  * - orbitDistance: Average orbital distance in astronomical units (AU).
  * - loadThresholds: Distance thresholds (in scene units) for LOD transitions.
+ * - angularVelocity: Orbital angular velocity in radians per Earth year.
+ * - inclination: Orbital inclination in degrees relative to the ecliptic.
  */
 export const metadata = Object.freeze({
   id: PLANET_ID,
   label: 'Sun',
   radius: 109,
   orbitDistance: 0,
+  angularVelocity: 0,
+  inclination: 0,
   loadThresholds: {
     low: 0,
     medium: 200,
