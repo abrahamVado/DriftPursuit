@@ -1,4 +1,4 @@
-import * as THREE from 'three';
+import { THREE } from './threeLoader.js';
 import { MarsVehicle, createMarsSkiff } from './vehicle.js';
 import { MarsChaseCamera } from './chaseCamera.js';
 import { MarsInputManager } from './input.js';

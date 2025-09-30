@@ -1,4 +1,4 @@
-import * as THREE from 'three';
+import { THREE } from './threeLoader.js';
 
 const FORWARD = new THREE.Vector3(0, 1, 0);
 const RIGHT = new THREE.Vector3(1, 0, 0);
