@@ -51,6 +51,14 @@ function mergeGeneratorConfig(base, override){
   return result;
 }
 
+function circleIntersectsRect(cx, cy, radius, rx0, ry0, rx1, ry1){
+  const closestX = Math.max(rx0, Math.min(cx, rx1));
+  const closestY = Math.max(ry0, Math.min(cy, ry1));
+  const dx = cx - closestX;
+  const dy = cy - closestY;
+  return dx * dx + dy * dy <= radius * radius;
+}
+
 function getQueryPreset(){
   try {
     const p = new URLSearchParams(window.location.search).get('preset');
@@ -111,6 +119,7 @@ export class BaseWorldStreamer {
     this.sharedMaterials = new Set(Object.values(this.materials));
     this.disposables.push(...this.sharedMaterials);
     this.scene?.add(this.worldGroup);
+    this.dynamicCraters = [];
 
     if (this.generatorConfig.features?.ocean !== false){
       this._ocean = this._createOcean();
@@ -217,6 +226,7 @@ export class BaseWorldStreamer {
     if (this._stars && this.scene) this.scene.remove(this._stars);
     this.disposables.forEach((item) => item.dispose?.());
     this.disposables = [];
+    this.dynamicCraters = [];
   }
 
   _positionChunk(chunk){
@@ -266,6 +276,40 @@ export class BaseWorldStreamer {
       noise: this.noise,
       THREE: this.THREE,
     });
+  }
+
+  _rebuildChunkGeometry(chunk){
+    const terrain = chunk?.terrain;
+    if (!terrain?.geometry) return;
+    const geometry = terrain.geometry;
+    const positions = geometry.attributes.position;
+    if (!positions) return;
+    const colorsAttr = geometry.attributes.color;
+    const chunkOriginX = chunk.coords.x * this.chunkSize;
+    const chunkOriginY = chunk.coords.y * this.chunkSize;
+    const colorArray = colorsAttr?.array;
+    const count = positions.count;
+    for (let i = 0; i < count; i += 1){
+      const localX = positions.getX(i);
+      const localY = positions.getY(i);
+      const worldX = chunkOriginX + localX;
+      const worldY = chunkOriginY + localY;
+      const height = this._sampleHeight(worldX, worldY);
+      positions.setZ(i, height);
+      if (colorArray){
+        const colorIndex = i * 3;
+        const color = this._sampleBiomeColor(worldX, worldY, height);
+        colorArray[colorIndex] = color.r;
+        colorArray[colorIndex + 1] = color.g;
+        colorArray[colorIndex + 2] = color.b;
+      }
+    }
+    positions.needsUpdate = true;
+    if (colorsAttr) colorsAttr.needsUpdate = true;
+    geometry.computeVertexNormals();
+    geometry.attributes.normal.needsUpdate = true;
+    geometry.computeBoundingBox();
+    geometry.computeBoundingSphere();
   }
 
   _createSharedMaterials(){
@@ -349,7 +393,7 @@ export class BaseWorldStreamer {
   }
 
   _sampleHeight(worldX, worldY){
-    return sampleHeightUtil({
+    let height = sampleHeightUtil({
       worldX,
       worldY,
       generatorConfig: this.generatorConfig,
@@ -358,6 +402,28 @@ export class BaseWorldStreamer {
       seed: this.seed,
       volcano: this.volcano,
     });
+    if (this.dynamicCraters?.length){
+      for (let i = 0; i < this.dynamicCraters.length; i += 1){
+        const crater = this.dynamicCraters[i];
+        const dx = worldX - crater.worldX;
+        const dy = worldY - crater.worldY;
+        const dist = Math.hypot(dx, dy);
+        if (dist <= crater.radius){
+          const t = 1 - dist / Math.max(1, crater.radius);
+          const depth = crater.depth;
+          const profile = Math.pow(t, crater.falloff ?? 2.2);
+          height -= profile * depth;
+          if (Number.isFinite(crater.rimHeight) && crater.rimHeight !== 0){
+            const rimZone = crater.radius * 1.12;
+            if (dist <= rimZone){
+              const rimT = 1 - dist / Math.max(1, rimZone);
+              height += Math.pow(rimT, 1.4) * crater.rimHeight;
+            }
+          }
+        }
+      }
+    }
+    return height;
   }
 
   _slopeMagnitude(worldX, worldY){
@@ -424,5 +490,38 @@ export class BaseWorldStreamer {
 
     this.disposables.push(mat);
     group.userData.__lavaAdded = true;
+  }
+
+  addDynamicCrater({ worldX, worldY, radius, depth, rimHeight = null, falloff = 2.2 } = {}){
+    if (!Number.isFinite(worldX) || !Number.isFinite(worldY)) return null;
+    const r = Math.max(40, Number.isFinite(radius) ? radius : 220);
+    const d = Math.max(10, Number.isFinite(depth) ? depth : 160);
+    const crater = {
+      worldX,
+      worldY,
+      radius: r,
+      depth: d,
+      rimHeight: Number.isFinite(rimHeight) ? rimHeight : d * 0.15,
+      falloff: Number.isFinite(falloff) ? falloff : 2.2,
+    };
+    this.dynamicCraters.push(crater);
+    this._refreshChunksForCrater(crater);
+    return crater;
+  }
+
+  _refreshChunksForCrater(crater){
+    if (!crater) return;
+    const radius = crater.radius;
+    const cx = crater.worldX;
+    const cy = crater.worldY;
+    this.chunkMap.forEach((chunk) => {
+      const chunkMinX = chunk.coords.x * this.chunkSize;
+      const chunkMinY = chunk.coords.y * this.chunkSize;
+      const chunkMaxX = chunkMinX + this.chunkSize;
+      const chunkMaxY = chunkMinY + this.chunkSize;
+      if (circleIntersectsRect(cx, cy, radius, chunkMinX, chunkMinY, chunkMaxX, chunkMaxY)){
+        this._rebuildChunkGeometry(chunk);
+      }
+    });
   }
 }

@@ -14,6 +14,7 @@ const DEFAULT_KEY_BINDINGS = {
   brake: ['Space'],
   throttleUp: [],
   throttleDown: [],
+  fire: ['KeyF'],
 };
 
 const DEADZONE = 0.06;
@@ -88,6 +89,10 @@ export class InputManager {
 
     // throttle impulses (mouse wheel adds bursts)
     this.throttleImpulse = 0;
+
+    this.buttonStates = {
+      fire: false,
+    };
 
     // camera orbit
     this.cameraOrbitSensitivity = {
@@ -217,6 +222,9 @@ export class InputManager {
     this.throttleImpulse = 0;
 
     const brake = (this.keyBindings.brake || []).some((key) => this.activeKeys.has(key));
+    const fireHeld = (this.keyBindings.fire || []).some((key) => this.activeKeys.has(key));
+    const firePressed = fireHeld && !this.buttonStates.fire;
+    this.buttonStates.fire = fireHeld;
 
     // --- Analog (pointer) contributions ---
     const pointerYaw = applyDeadzone(this.pointer.x * this.pointerSensitivity.yaw);
@@ -246,6 +254,7 @@ export class InputManager {
 
     return {
       plane: { pitch, roll, yaw, throttleAdjust, brake, aim: planeAim },
+      fire: firePressed,
       car: {
         throttle: pitchDigital,
         steer: yawDigital,
@@ -283,6 +292,7 @@ export function describeControls(mode = 'plane') {
       { label: 'Turn', detail: 'A yaw & roll left · D yaw & roll right' },
       { label: 'Throttle', detail: 'Mouse wheel to adjust thrust' },
       { label: 'Brake', detail: 'Space for airbrake' },
+      { label: 'Fire', detail: 'Press F to launch torpedoes' },
       { label: 'Camera', detail: 'Hold Left Mouse to orbit view' },
       { label: 'Mode', detail: 'Press 1 for plane · 2 for car' },
     ],

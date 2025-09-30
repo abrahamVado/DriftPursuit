@@ -5,6 +5,8 @@ import { ChaseCamera } from './ChaseCamera.js';
 import { WorldStreamer } from './WorldStreamer.js';
 import { CollisionSystem } from './CollisionSystem.js';
 import { HUD } from './HUD.js';
+import { SpaceScene } from './SpaceScene.js';
+import { ProjectileSystem } from './ProjectileSystem.js';
 import {
   createRenderer,
   createPerspectiveCamera,
@@ -14,19 +16,28 @@ import {
 
 const THREE = requireTHREE();
 
+const SCENARIOS = { PLANET: 'planet', SPACE: 'space' };
 const SKY_CEILING = 1800;
+const SPACE_CEILING = 22000;
+const SPACE_TRANSITION_ALTITUDE = 5000;
+const SPACE_RETURN_ALTITUDE = 4400;
 const ORIGIN_REBASE_DISTANCE = 1400;
 const ORIGIN_REBASE_DISTANCE_SQ = ORIGIN_REBASE_DISTANCE * ORIGIN_REBASE_DISTANCE;
 
+const PLANET_BACKGROUND = new THREE.Color(0x90b6ff);
+const SPACE_BACKGROUND = new THREE.Color(0x050913);
+const planetFog = new THREE.Fog(0xa4c6ff, 1500, 4200);
+const PLANET_BODY_BACKGROUND = 'linear-gradient(180deg, #79a7ff 0%, #cfe5ff 45%, #f6fbff 100%)';
+const SPACE_BODY_BACKGROUND = 'radial-gradient(140deg, #020512 0%, #050c18 46%, #000000 100%)';
+
 document.body.style.margin = '0';
 document.body.style.overflow = 'hidden';
+document.body.style.background = PLANET_BODY_BACKGROUND;
 const renderer = createRenderer();
 
-document.body.style.background = 'linear-gradient(180deg, #79a7ff 0%, #cfe5ff 45%, #f6fbff 100%)';
-
 const scene = new THREE.Scene();
-scene.background = new THREE.Color(0x90b6ff);
-scene.fog = new THREE.Fog(0xa4c6ff, 1500, 4200);
+scene.background = PLANET_BACKGROUND.clone();
+scene.fog = planetFog;
 
 const camera = createPerspectiveCamera({ fov: 60, near: 0.1, far: 20000 });
 
@@ -43,6 +54,11 @@ sun.shadow.camera.top = 800;
 sun.shadow.camera.bottom = -800;
 sun.shadow.camera.far = 2200;
 scene.add(sun);
+const BASE_HEMISPHERE_INTENSITY = hemisphere.intensity;
+const BASE_SUN_INTENSITY = sun.intensity;
+
+const spaceScene = new SpaceScene({ scene, seed: 1836311903 });
+spaceScene.setVisible(false);
 
 const world = new WorldStreamer({ scene, chunkSize: 640, radius: 3, seed: 982451653 });
 
@@ -51,6 +67,9 @@ scene.add(planeMesh);
 
 const planeController = new PlaneController();
 planeController.attachMesh(planeMesh);
+planeController.setAuxiliaryLightsActive(false);
+const BASE_PLANE_GRAVITY = planeController.gravity;
+const BASE_PROPULSOR_LIFT = planeController.propulsorLift;
 
 const carRig = createCarRig();
 scene.add(carRig.carMesh);
@@ -90,6 +109,7 @@ const carControls = describeControls('car');
 const hud = new HUD({ controls: planeControls });
 hud.setDropHandler(dropVehicleFromDrone);
 const collisionSystem = new CollisionSystem({ world, crashMargin: 2.2, obstaclePadding: 3 });
+const projectileSystem = new ProjectileSystem({ scene, world });
 updateDropButtonState();
 
 const startAnchor = new THREE.Vector3(0, -320, 0);
@@ -106,6 +126,7 @@ const TMP_EULER = new THREE.Euler();
 
 const VEHICLE_MODES = { PLANE: 'plane', CAR: 'car' };
 let activeVehicle = VEHICLE_MODES.PLANE;
+let activeScenario = SCENARIOS.PLANET;
 let carAttachedToDrone = true;
 
 function computeStartPosition(){
@@ -159,6 +180,62 @@ function computeDroneHoldPosition(){
 
 function updateDropButtonState(){
   hud.setDropEnabled(carAttachedToDrone && activeVehicle === VEHICLE_MODES.PLANE);
+}
+
+function applyPlanetEnvironment(){
+  document.body.style.background = PLANET_BODY_BACKGROUND;
+  if (!scene.background || !scene.background.isColor){
+    scene.background = PLANET_BACKGROUND.clone();
+  } else {
+    scene.background.copy(PLANET_BACKGROUND);
+  }
+  scene.fog = planetFog;
+  hemisphere.intensity = BASE_HEMISPHERE_INTENSITY;
+  sun.intensity = BASE_SUN_INTENSITY;
+  sun.visible = true;
+  world.worldGroup.visible = true;
+  if (world._ocean) world._ocean.visible = true;
+  spaceScene.setVisible(false);
+  planeController.setAuxiliaryLightsActive(false);
+  planeController.gravity = BASE_PLANE_GRAVITY;
+  planeController.propulsorLift = BASE_PROPULSOR_LIFT;
+}
+
+function applySpaceEnvironment(){
+  document.body.style.background = SPACE_BODY_BACKGROUND;
+  if (!scene.background || !scene.background.isColor){
+    scene.background = SPACE_BACKGROUND.clone();
+  } else {
+    scene.background.copy(SPACE_BACKGROUND);
+  }
+  scene.fog = null;
+  hemisphere.intensity = BASE_HEMISPHERE_INTENSITY * 0.3;
+  sun.visible = false;
+  world.worldGroup.visible = false;
+  if (world._ocean) world._ocean.visible = false;
+  spaceScene.setVisible(true);
+  planeController.setAuxiliaryLightsActive(true, 1.3);
+  planeController.gravity = BASE_PLANE_GRAVITY * 0.14;
+  planeController.propulsorLift = BASE_PROPULSOR_LIFT * 0.32;
+}
+
+function enterSpaceScenario(){
+  if (activeScenario === SCENARIOS.SPACE) return;
+  activeScenario = SCENARIOS.SPACE;
+  applySpaceEnvironment();
+  if (activeVehicle !== VEHICLE_MODES.PLANE){
+    activatePlaneMode();
+  }
+  resetCar({ attachToDrone: true });
+  hud.showMessage('Leaving atmosphere', 1400);
+}
+
+function enterPlanetScenario(){
+  if (activeScenario === SCENARIOS.PLANET) return;
+  activeScenario = SCENARIOS.PLANET;
+  applyPlanetEnvironment();
+  world.update(planeController.position);
+  hud.showMessage('Atmospheric re-entry', 1400);
 }
 
 function resetCar({ alignCamera = false, attachToDrone = false } = {}){
@@ -240,13 +317,21 @@ function activateCarMode({ focus = true } = {}){
 
 resetPlane();
 resetCar({ attachToDrone: true });
+applyPlanetEnvironment();
 
 enableWindowResizeHandling({ renderer, camera });
 
 function clampAltitude(controller, ground){
-  if (controller.position.z > SKY_CEILING){
-    controller.position.z = SKY_CEILING;
-    if (controller.velocity.z > 0) controller.velocity.z = 0;
+  if (activeScenario === SCENARIOS.PLANET){
+    if (controller.position.z > SKY_CEILING){
+      controller.position.z = SKY_CEILING;
+      if (controller.velocity.z > 0) controller.velocity.z = 0;
+    }
+  } else if (activeScenario === SCENARIOS.SPACE){
+    if (controller.position.z > SPACE_CEILING){
+      controller.position.z = SPACE_CEILING;
+      if (controller.velocity.z > 0) controller.velocity.z = 0;
+    }
   }
 }
 
@@ -254,6 +339,10 @@ let lastTime = performance.now();
 
 function setActiveVehicle(mode){
   if (mode === activeVehicle) return;
+  if (activeScenario === SCENARIOS.SPACE && mode === VEHICLE_MODES.CAR){
+    hud.showMessage('Ground vehicle unavailable in space', 1000);
+    return;
+  }
   if (mode === VEHICLE_MODES.PLANE){
     activatePlaneMode();
   } else if (mode === VEHICLE_MODES.CAR){
@@ -279,7 +368,18 @@ function animate(now){
   lastTime = now;
 
   const inputSample = input.readState(dt);
-  const planeInput = crashCooldown > 0 ? { pitch: 0, yaw: 0, roll: 0, throttleAdjust: 0, brake: false } : inputSample.plane;
+  const planeInputRaw = inputSample.plane;
+  const planeInput = crashCooldown > 0
+    ? {
+        pitch: 0,
+        yaw: 0,
+        roll: 0,
+        throttleAdjust: 0,
+        brake: false,
+        aim: { x: planeController.aim?.x ?? 0, y: planeController.aim?.y ?? 0 },
+      }
+    : planeInputRaw;
+  const firePressed = crashCooldown > 0 ? false : !!inputSample.fire;
 
   if (crashCooldown > 0){
     crashCooldown = Math.max(0, crashCooldown - dt);
@@ -293,7 +393,22 @@ function animate(now){
 
     const planeState = planeController.getState();
 
-    if (crashCooldown <= 0){
+    const altitude = planeState.altitude ?? 0;
+    if (activeScenario === SCENARIOS.PLANET && altitude > SPACE_TRANSITION_ALTITUDE){
+      enterSpaceScenario();
+    } else if (activeScenario === SCENARIOS.SPACE && altitude < SPACE_RETURN_ALTITUDE){
+      enterPlanetScenario();
+    }
+
+    if (firePressed){
+      projectileSystem.tryFire({
+        position: planeState.position.clone(),
+        orientation: planeState.orientation.clone(),
+        velocity: planeState.velocity.clone(),
+      });
+    }
+
+    if (crashCooldown <= 0 && activeScenario === SCENARIOS.PLANET){
       const collision = collisionSystem.evaluate(planeState);
       if (collision.crashed){
         crashCount += 1;
@@ -325,8 +440,10 @@ function animate(now){
       lastCarPosition.copy(carController.position);
     }
 
-    rebaseWorldIfNeeded(planeController.position);
-    world.update(planeState.position);
+    if (activeScenario === SCENARIOS.PLANET){
+      rebaseWorldIfNeeded(planeController.position);
+      world.update(planeState.position);
+    }
     chaseCamera.update(planeState, dt, inputSample.cameraOrbit);
 
     hud.update({
@@ -336,7 +453,7 @@ function animate(now){
       elapsedTime: elapsedFlightTime,
       distance: traveledDistance,
     });
-  } else {
+  } else if (activeScenario === SCENARIOS.PLANET){
     carController.update(dt, inputSample.car, {
       sampleGroundHeight: (x, y) => world.getHeightAt(x, y),
     });
@@ -360,12 +477,21 @@ function animate(now){
       elapsedTime: elapsedDriveTime,
       distance: drivenDistance,
     });
+  } else {
+    chaseCamera.update(planeController.getState(), dt, inputSample.cameraOrbit);
   }
+
+  spaceScene.update(dt, activeScenario === SCENARIOS.SPACE ? planeController.position : null);
+
+  const originOffset = world.getOriginOffset ? world.getOriginOffset() : new THREE.Vector3();
+  const spaceBodies = activeScenario === SCENARIOS.SPACE ? spaceScene.getBodies() : [];
+  projectileSystem.update(dt, { scenario: activeScenario, originOffset, spaceBodies });
 
   renderer.render(scene, camera);
 }
 
 function rebaseWorldIfNeeded(referencePosition){
+  if (activeScenario !== SCENARIOS.PLANET) return;
   const pos = referencePosition ?? planeController.position;
   const distanceSq = pos.x * pos.x + pos.y * pos.y;
   if (distanceSq > ORIGIN_REBASE_DISTANCE_SQ){
@@ -379,6 +505,7 @@ function rebaseWorldIfNeeded(referencePosition){
     lastPlanePosition.sub(shift);
     lastCarPosition.sub(shift);
     world.handleOriginShift(shift);
+    projectileSystem.handleOriginShift(shift);
   }
 }
 
