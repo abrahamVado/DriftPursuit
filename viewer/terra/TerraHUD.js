@@ -307,6 +307,7 @@ export class TerraHUD extends BaseHUD {
     this.ammoButtons = new Map();
     this.selectedMapId = null;
     this.mapOptions = [];
+    this.mapLabelText = 'Active Map';
 
     this._applyTheme();
     this._createToolbar();
@@ -352,7 +353,7 @@ export class TerraHUD extends BaseHUD {
 
     this.mapLabel = document.createElement('div');
     applyStyle(this.mapLabel, MAP_LABEL_STYLE);
-    this.mapLabel.textContent = 'Active Map';
+    this.mapLabel.textContent = this.mapLabelText;
     this.mapSection.appendChild(this.mapLabel);
 
     this.mapSelect = document.createElement('select');
@@ -457,6 +458,14 @@ export class TerraHUD extends BaseHUD {
     });
     if (this.selectedMapId){
       this.mapSelect.value = this.selectedMapId;
+    }
+  }
+
+  setMapLabel(label){
+    const text = typeof label === 'string' && label.trim() ? label : 'Active Map';
+    this.mapLabelText = text;
+    if (this.mapLabel){
+      this.mapLabel.textContent = text;
     }
   }
 
