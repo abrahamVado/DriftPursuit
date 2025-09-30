@@ -1,6 +1,6 @@
 import { THREE } from './threeLoader.js';
 
-import { MarsPlaneController, createPlaneMesh } from './PlaneController.js';
+import { MarsPlaneController, createShipMesh } from './PlaneController.js';
 
 import { MarsVehicle, createMarsSkiff } from './vehicle.js';
 
@@ -146,11 +146,11 @@ export class MarsSandbox {
     this._buildTerrain();
 
     this.vehicle = new MarsPlaneController();
-    const planeMesh = createPlaneMesh();
-    this.vehicle.attachMesh(planeMesh);
+    const shipMesh = createShipMesh();
+    this.vehicle.attachMesh(shipMesh);
     this.vehicle.setAuxiliaryLightsActive(false);
-    this.scene.add(planeMesh);
-    this.vehicleMesh = planeMesh;
+    this.scene.add(shipMesh);
+    this.vehicleMesh = shipMesh;
 
     const sampleHeight = this.terrain?.sampleHeight ?? null;
     const anchorY = 48;
