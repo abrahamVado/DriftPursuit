@@ -10,6 +10,9 @@ Open [`index.html`](./index.html) in a browser (served from a local web server) 
 
 - `index.html` – entry point that loads Three.js and bootstraps the Terra sandbox module.
 
+- `mars/` – fully self-contained Ares Expanse sandbox with procedural terrain generation and HUD. The Mars sandbox does not
+  rely on shared helpers or `maps.json`; every system (noise, terrain authoring, lighting, and HUD wiring) lives directly
+  inside this folder so it can be iterated in isolation.
 - `terra/` – Terra-specific gameplay logic, HUD, world streamer wiring, and map configuration.
 - `sandbox/` – reusable controllers, camera helpers, HUD overlays, and supporting systems extracted from the original viewer.
 - `shared/` – shared Three.js bootstrap helpers.
