@@ -520,24 +520,37 @@ func buildHandler(b *Broker) (http.Handler, error) {
 	if err != nil {
 		return nil, err
 	}
-	fs := http.FileServer(http.Dir(viewerDir))
-	mux.Handle("/viewer/", http.StripPrefix("/viewer/", fs))
+	mux.Handle("/viewer/", http.StripPrefix("/viewer/", http.FileServer(http.Dir(viewerDir))))
+
+	terraSandboxDir, err := resolveTerraSandboxDir()
+	if err != nil {
+		return nil, err
+	}
+	mux.Handle("/terra-sandbox/", http.StripPrefix("/terra-sandbox/", http.FileServer(http.Dir(terraSandboxDir))))
 
 	return mux, nil
 }
 
 func resolveViewerDir() (string, error) {
+	return resolveStaticDir("viewer")
+}
+
+func resolveTerraSandboxDir() (string, error) {
+	return resolveStaticDir("terra-sandbox")
+}
+
+func resolveStaticDir(name string) (string, error) {
 	_, currentFile, _, ok := runtime.Caller(0)
 	if !ok {
 		return "", fmt.Errorf("unable to determine current file path")
 	}
-	viewerDir := filepath.Join(filepath.Dir(currentFile), "..", "viewer")
-	viewerDir, err := filepath.Abs(viewerDir)
+	dir := filepath.Join(filepath.Dir(currentFile), "..", name)
+	dir, err := filepath.Abs(dir)
 	if err != nil {
 		return "", err
 	}
-	if _, err := os.Stat(viewerDir); err != nil {
+	if _, err := os.Stat(dir); err != nil {
 		return "", err
 	}
-	return viewerDir, nil
+	return dir, nil
 }
