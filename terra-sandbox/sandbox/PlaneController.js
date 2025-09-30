@@ -176,7 +176,17 @@ export class PlaneController {
   /**
    * @param {number} dt
    * @param {Object} input  { pitch, yaw, roll, throttleAdjust, brake, aim?:{x,y} }
-   * @param {Object} hooks  { clampAltitude?:fn(controller, groundZ), sampleGroundHeight?:fn(x,y):z }
+   * @param {Object} hooks  {
+   *    queryVolume?: fn(position:THREE.Vector3, options?:Object):{
+   *      floor?:number|null,
+   *      ceiling?:number|null,
+   *      distanceToSurface?:number,
+   *      inside?:boolean,
+   *      normal?:THREE.Vector3|null
+   *    },
+   *    collisionRadius?:number,
+   *    clearance?:{ floor?:number, ceiling?:number, lateral?:number },
+   *  }
    */
   update(dt, input = {}, hooks = {}){
     const delta = Math.max(0, dt ?? 0);
@@ -275,14 +285,70 @@ export class PlaneController {
     // Integrate position
     this.position.addScaledVector(this.velocity, delta);
 
-    // Altitude + optional ground clamp
-    const sampleGroundHeight = hooks.sampleGroundHeight;
-    if (typeof sampleGroundHeight === 'function'){
-      const ground = sampleGroundHeight(this.position.x, this.position.y);
-      if (Number.isFinite(ground)){
-        this.altitude = this.position.z - ground;
-        if (typeof hooks.clampAltitude === 'function'){
-          hooks.clampAltitude(this, ground);
+    // Volumetric collision sampling
+    const collisionRadius = Math.max(0.25, hooks.collisionRadius ?? 6);
+    const clearanceDefaults = hooks.clearance ?? {};
+    const floorClearance = Number.isFinite(clearanceDefaults.floor)
+      ? clearanceDefaults.floor
+      : collisionRadius * 0.65;
+    const ceilingClearance = Number.isFinite(clearanceDefaults.ceiling)
+      ? clearanceDefaults.ceiling
+      : collisionRadius * 0.55;
+    const lateralClearance = Number.isFinite(clearanceDefaults.lateral)
+      ? clearanceDefaults.lateral
+      : collisionRadius * 0.75;
+
+    let volumeSample = null;
+    const queryVolume = hooks.queryVolume;
+    if (typeof queryVolume === 'function'){
+      volumeSample = queryVolume(this.position, {
+        radius: collisionRadius,
+      }) || null;
+    }
+
+    if (volumeSample){
+      const { floor, ceiling, normal, inside, distanceToSurface } = volumeSample;
+
+      if (Number.isFinite(floor)){
+        this.altitude = this.position.z - floor;
+        const minAltitude = floor + floorClearance;
+        if (this.position.z < minAltitude){
+          this.position.z = minAltitude;
+          if (this.velocity.z < 0){
+            this.velocity.z = 0;
+          }
+        }
+      }
+
+      if (Number.isFinite(ceiling)){
+        const maxAltitude = ceiling - ceilingClearance;
+        if (this.position.z > maxAltitude){
+          this.position.z = maxAltitude;
+          if (this.velocity.z > 0){
+            this.velocity.z = 0;
+          }
+        }
+      }
+
+      if (normal && typeof normal.x === 'number'){
+        const normalVector = normal.clone ? normal.clone() : new THREE.Vector3(normal.x, normal.y, normal.z);
+        const strength = normalVector.length();
+        if (strength > 1e-3){
+          normalVector.normalize();
+          const verticalWeight = Math.abs(normalVector.z);
+          const predominantlyLateral = verticalWeight < 0.6;
+          const separation = Math.max(0, distanceToSurface ?? 0);
+          if (inside || (predominantlyLateral && separation < lateralClearance)){
+            const required = inside ? (lateralClearance + separation) : (lateralClearance - separation);
+            const correction = inside ? required : Math.max(0, required);
+            if (correction > 0){
+              this.position.addScaledVector(normalVector, correction);
+              const velocityTowardsWall = this.velocity.dot(normalVector);
+              if (velocityTowardsWall < 0){
+                this.velocity.addScaledVector(normalVector, -velocityTowardsWall);
+              }
+            }
+          }
         }
       }
     }

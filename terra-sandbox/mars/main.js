@@ -17,6 +17,8 @@ const speedOutput = getElement('mars-speed');
 const throttleOutput = getElement('mars-throttle');
 const weaponOutput = getElement('mars-weapon');
 const seedOutput = getElement('mars-seed');
+const minimapCanvas = getElement('mars-minimap');
+const beaconList = getElement('mars-beacons');
 
 const sandbox = new MarsSandbox({
   canvas,
@@ -28,6 +30,8 @@ const sandbox = new MarsSandbox({
   throttleOutput,
   weaponOutput,
   seedOutput,
+  minimapCanvas,
+  beaconList,
 });
 
 sandbox.initialize();

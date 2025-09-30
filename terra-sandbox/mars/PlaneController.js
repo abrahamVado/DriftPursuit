@@ -79,13 +79,13 @@ export class MarsPlaneController extends BasePlaneController {
     return { origin, direction, velocity };
   }
 
-  getState(sampleHeightFn) {
+  getState(volumeQueryFn) {
     const base = super.getState();
     let altitude = base.altitude;
-    if (typeof sampleHeightFn === 'function') {
-      const ground = sampleHeightFn(this.position.x, this.position.y);
-      if (Number.isFinite(ground)) {
-        altitude = this.position.z - ground;
+    if (typeof volumeQueryFn === 'function') {
+      const sample = volumeQueryFn(this.position, { radius: 0 });
+      if (sample && Number.isFinite(sample.floor)) {
+        altitude = this.position.z - sample.floor;
       }
     }
 

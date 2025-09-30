@@ -1,6 +1,9 @@
 import { THREE } from './threeLoader.js';
 import { createNoiseContext } from './noiseContext.js';
 
+const TMP_VECTOR = new THREE.Vector3();
+const GRADIENT_EPSILON = 0.75;
+
 const FACE_DEFINITIONS = [
   {
     offset: [1, 0, 0],
@@ -225,6 +228,10 @@ export class MarsCaveTerrainManager {
     this.dustField = null;
     this.noise = createNoiseContext(this.seed);
     this.chunkMetadata = new Map();
+    this.lifecycleHandlers = {
+      onChunkActivated: null,
+      onChunkDeactivated: null,
+    };
 
     this._densityFn = this._densityAt.bind(this);
     this._desiredOffsets = [
@@ -246,11 +253,23 @@ export class MarsCaveTerrainManager {
     return { x, y, z };
   }
 
+  parseCoord(key) {
+    return this._parseKey(key);
+  }
+
   _originForCoord(coord) {
     return new THREE.Vector3(
       coord.x * this.chunkSize + this.horizontalOffset,
       coord.y * this.chunkSize + this.horizontalOffset,
       coord.z * this.chunkSize + this.verticalOffset,
+    );
+  }
+
+  getChunkCenter(coord) {
+    return new THREE.Vector3(
+      coord.x * this.chunkSize + this.horizontalOffset + this.chunkSize * 0.5,
+      coord.y * this.chunkSize + this.horizontalOffset + this.chunkSize * 0.5,
+      coord.z * this.chunkSize + this.verticalOffset + this.chunkSize * 0.5,
     );
   }
 
@@ -402,6 +421,77 @@ export class MarsCaveTerrainManager {
     return surface;
   }
 
+  setLifecycleHandlers({ onChunkActivated = null, onChunkDeactivated = null } = {}) {
+    this.lifecycleHandlers = {
+      onChunkActivated,
+      onChunkDeactivated,
+    };
+  }
+
+  _verticalIsoSurface({ x, y, z, direction = -1, range = 48, step = 0.5 }) {
+    const iso = this.threshold ?? 0;
+    const steps = Math.max(1, Math.ceil(range / Math.max(0.05, Math.abs(step))));
+    let previousZ = z;
+    let previousValue = this._densityAt(x, y, z) - iso;
+    for (let i = 1; i <= steps; i += 1) {
+      const currentZ = z + direction * step * i;
+      const currentValue = this._densityAt(x, y, currentZ) - iso;
+      if ((previousValue < 0 && currentValue >= 0) || (previousValue > 0 && currentValue <= 0)) {
+        const denom = currentValue - previousValue;
+        const t = Math.abs(denom) < 1e-5 ? 0 : (0 - previousValue) / denom;
+        return previousZ + (currentZ - previousZ) * THREE.MathUtils.clamp(t, 0, 1);
+      }
+      previousZ = currentZ;
+      previousValue = currentValue;
+    }
+    return null;
+  }
+
+  queryVolume(position, { radius = 6, verticalRange = 64, step = 0.5 } = {}) {
+    if (!position) return null;
+    const x = position.x ?? position[0];
+    const y = position.y ?? position[1];
+    const z = position.z ?? position[2];
+    if (![x, y, z].every(Number.isFinite)) {
+      return null;
+    }
+
+    const iso = this.threshold ?? 0;
+    const centerValue = this._densityAt(x, y, z) - iso;
+
+    const epsilon = Math.max(0.35, GRADIENT_EPSILON, radius * 0.12);
+    const sample = (sx, sy, sz) => this._densityAt(sx, sy, sz) - iso;
+
+    const dx = sample(x + epsilon, y, z) - sample(x - epsilon, y, z);
+    const dy = sample(x, y + epsilon, z) - sample(x, y - epsilon, z);
+    const dz = sample(x, y, z + epsilon) - sample(x, y, z - epsilon);
+    TMP_VECTOR.set(dx, dy, dz).multiplyScalar(0.5 / epsilon);
+    const gradLength = TMP_VECTOR.length();
+
+    let outwardNormal = null;
+    if (gradLength > 1e-4) {
+      outwardNormal = TMP_VECTOR.clone().multiplyScalar(-1 / gradLength);
+    }
+
+    const inside = centerValue >= 0;
+    const distanceToSurface = gradLength > 1e-4 ? Math.abs(centerValue) / gradLength : Math.abs(centerValue);
+
+    const floor = this._verticalIsoSurface({ x, y, z, direction: -1, range: verticalRange, step }) ?? null;
+    const ceiling = this._verticalIsoSurface({ x, y, z, direction: 1, range: verticalRange, step }) ?? null;
+    const floorDistance = Number.isFinite(floor) ? Math.max(0, z - floor) : null;
+    const ceilingDistance = Number.isFinite(ceiling) ? Math.max(0, ceiling - z) : null;
+
+    return {
+      floor,
+      ceiling,
+      floorDistance,
+      ceilingDistance,
+      inside,
+      distanceToSurface,
+      normal: outwardNormal,
+    };
+  }
+
   updateChunks(position) {
     if (!position) return;
     const center = {
@@ -418,8 +508,14 @@ export class MarsCaveTerrainManager {
 
     const neededKeys = new Set(desired.map((coord) => this._key(coord)));
 
+    const { onChunkDeactivated } = this.lifecycleHandlers;
     for (const [key, chunk] of this.activeChunks.entries()) {
       if (!neededKeys.has(key)) {
+        if (typeof onChunkDeactivated === 'function') {
+          const coord = this._parseKey(key);
+          const metadata = this.chunkMetadata.get(key) ?? null;
+          onChunkDeactivated({ key, coord, chunk, metadata });
+        }
         this.activeChunks.delete(key);
         this.group.remove(chunk.mesh);
         chunk.mesh.visible = false;
@@ -428,6 +524,7 @@ export class MarsCaveTerrainManager {
       }
     }
 
+    const { onChunkActivated } = this.lifecycleHandlers;
     for (const coord of desired) {
       const key = this._key(coord);
       let chunk = this.activeChunks.get(key);
@@ -447,9 +544,15 @@ export class MarsCaveTerrainManager {
         this.group.add(chunk.mesh);
         this.activeChunks.set(key, chunk);
         this.chunkMetadata.set(key, metadata);
+        if (typeof onChunkActivated === 'function') {
+          onChunkActivated({ key, coord, chunk, metadata });
+        }
       } else if (!this.chunkMetadata.has(key)) {
         const metadata = chunk.metadata ?? this._describeChunk(coord);
         this.chunkMetadata.set(key, metadata);
+        if (typeof onChunkActivated === 'function') {
+          onChunkActivated({ key, coord, chunk, metadata });
+        }
       }
     }
   }
@@ -470,8 +573,13 @@ export class MarsCaveTerrainManager {
     this.seed = seed >>> 0;
     this.noise = createNoiseContext(this.seed);
     this.chunkMetadata.clear();
+    const { onChunkActivated, onChunkDeactivated } = this.lifecycleHandlers;
     for (const chunk of this.activeChunks.values()) {
       const coord = this._parseKey(chunk.coordKey);
+      if (typeof onChunkDeactivated === 'function') {
+        const metadata = chunk.metadata ?? null;
+        onChunkDeactivated({ key: chunk.coordKey, coord, chunk, metadata });
+      }
       const metadata = this._describeChunk(coord);
       chunk.configure({
         coordKey: chunk.coordKey,
@@ -486,6 +594,9 @@ export class MarsCaveTerrainManager {
         this.group.add(chunk.mesh);
       }
       this.chunkMetadata.set(chunk.coordKey, metadata);
+      if (typeof onChunkActivated === 'function') {
+        onChunkActivated({ key: chunk.coordKey, coord, chunk, metadata });
+      }
     }
   }
 
