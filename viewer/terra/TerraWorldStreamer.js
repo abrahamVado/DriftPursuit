@@ -1,4 +1,4 @@
-import { WorldStreamer as BaseWorldStreamer } from '../sandbox/WorldStreamer.js';
+import { BaseWorldStreamer } from '../world/BaseWorldStreamer.js';
 import { requireTHREE } from '../shared/threeSetup.js';
 
 const THREE = requireTHREE();
@@ -28,7 +28,7 @@ const DEFAULT_CRATER_RADIUS = 0.55; // meters, scaled up slightly so it is visib
 export class TerraWorldStreamer extends BaseWorldStreamer {
   constructor(options = {}){
     const { generator = null, procedural = null, ...rest } = options ?? {};
-    super({ ...rest, generator, procedural });
+    super({ ...rest, generator, procedural, THREE });
     this.chunkDeformations = new Map();
     this.craterMaterial = new THREE.MeshStandardMaterial({
       color: 0x3a3a3a,
