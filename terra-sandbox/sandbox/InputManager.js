@@ -2,7 +2,8 @@
 // Three.js r150+
 // Unified controls: mouse aim (yaw/pitch), roll (A/D), throttle (wheel or W/S), airbrake (Space)
 
-const THREE = (typeof window !== 'undefined' ? window.THREE : globalThis?.THREE) ?? null;
+import THREE from '../shared/threeProxy.js';
+
 if (!THREE) throw new Error('Sandbox InputManager requires THREE to be loaded globally');
 
 const DEFAULT_KEY_BINDINGS = {
