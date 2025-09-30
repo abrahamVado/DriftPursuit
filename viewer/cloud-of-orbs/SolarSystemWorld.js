@@ -296,8 +296,12 @@ export class SolarSystemWorld {
     this.minDistance = base + orbitInfluence * 0.18;
     this.maxDistance = Math.max(this.minDistance * 4.5, base * 6.8, planet.orbitDistance * 1.4 + base * 1.8);
 
-    const preferred = planet.radius * 4.4 + orbitInfluence * 0.4;
-    const clampedTarget = THREE.MathUtils.clamp(preferred, this.minDistance * 1.05, this.maxDistance * 0.9);
+    const preferred = Math.max(
+      this.minDistance * 1.8,
+      base * 1.65,
+      planet.radius * 5.2 + orbitInfluence * 0.55,
+    );
+    const clampedTarget = THREE.MathUtils.clamp(preferred, this.minDistance * 1.1, this.maxDistance * 0.9);
 
     this.targetCameraDistance = clampedTarget;
     this.cameraDistance = clampedTarget;
