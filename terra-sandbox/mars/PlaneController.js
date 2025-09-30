@@ -1,5 +1,6 @@
 import THREE from '../shared/threeProxy.js';
-import { PlaneController as BasePlaneController, createPlaneMesh } from '../sandbox/PlaneController.js';
+import { PlaneController as BasePlaneController } from '../sandbox/PlaneController.js';
+import createShipMesh, { defaultBlueprint as defaultShipBlueprint } from './spaceship/createShipMesh.js';
 
 if (!THREE) throw new Error('Mars PlaneController requires THREE to be loaded globally');
 
@@ -102,4 +103,4 @@ export class MarsPlaneController extends BasePlaneController {
   }
 }
 
-export { createPlaneMesh };
+export { createShipMesh, defaultShipBlueprint };
