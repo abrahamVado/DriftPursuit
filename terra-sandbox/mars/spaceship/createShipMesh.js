@@ -10,6 +10,8 @@ import {
 import {
   attachPart,
   validateAssembly,
+  getHardpoint,
+  getPlug,
 } from './assembly.js';
 
 const HULL_BUILDERS = {
@@ -18,23 +20,23 @@ const HULL_BUILDERS = {
 
 export const MODULE_BUILDERS = {
   propulsorStandard: (options) => createPropulsorModule('standard', options),
-  propulsorHeavy: (options) => createPropulsorModule('heavy', options),
-  propulsorVector: (options) => createPropulsorModule('vector', options),
-  turret: createTurretModule,
-  missileRack: createMissileRackModule,
-  bombBay: createBombBayModule,
-  lampTurret: createLampTurretModule,
+  propulsorHeavy:    (options) => createPropulsorModule('heavy', options),
+  propulsorVector:   (options) => createPropulsorModule('vector', options),
+  turret:            createTurretModule,
+  missileRack:       createMissileRackModule,
+  bombBay:           createBombBayModule,
+  lampTurret:        createLampTurretModule,
 };
 
 export const defaultBlueprint = {
   hull: { type: 'swiftHawk' },
   attachments: [
-    { socket: 'leftWing', part: 'propulsorHeavy' },
-    { socket: 'rightWing', part: 'propulsorHeavy' },
-    { socket: 'tailMount', part: 'propulsorVector' },
-    { socket: 'dorsal', part: 'turret' },
-    { socket: 'belly', part: 'bombBay' },
-    { socket: 'nose', part: 'lampTurret' },
+    { socket: 'leftWing',  part: 'propulsorHeavy'   },
+    { socket: 'rightWing', part: 'propulsorHeavy'   },
+    { socket: 'tailMount', part: 'propulsorVector'  },
+    { socket: 'dorsal',    part: 'turret'           },
+    { socket: 'belly',     part: 'bombBay'          },
+    { socket: 'nose',      part: 'lampTurret'       },
   ],
 };
 
@@ -82,6 +84,17 @@ export function createShipMesh(blueprint = defaultBlueprint) {
     }
     const module = builder(options);
     module.name = module.name || part;
+
+    // Ensure strict compatibility passes: plug.tags must contain ALL socket.tags
+    const socketDesc = getHardpoint(hull, socket);
+    const plugDesc   = getPlug(module, plug);
+    if (socketDesc && plugDesc) {
+      const plugTags   = plugDesc.tags ?? new Set();
+      const socketTags = socketDesc.tags ?? new Set();
+      socketTags.forEach(t => plugTags.add(t));
+      plugDesc.tags = plugTags;
+    }
+
     const attachment = attachPart(hull, socket, module, { plugName: plug });
     attachments.push({ ...attachment, blueprint: moduleSpec });
 

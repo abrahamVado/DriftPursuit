@@ -1,4 +1,3 @@
-// spaceship/parts.js
 import THREE from '../../shared/threeProxy.js';
 import {
   createHardpoint,
@@ -152,19 +151,17 @@ export function createHull(options = {}) {
     navLights.push(entry);
   });
 
-  // Hardpoints (kinds and tags align with modules below)
+  // Hardpoints (note wing sockets are size 1.2 to accept heavy propulsors)
   const hardpoints = [
-    // Engines on wings + tail
-    createHardpoint({ name: 'leftWing',  kind: 'propulsor', size: 1,   tags: ['wing','port'],      position: new THREE.Vector3(-5.9, -2.8, -0.4) }),
-    createHardpoint({ name: 'rightWing', kind: 'propulsor', size: 1,   tags: ['wing','starboard'], position: new THREE.Vector3( 5.9, -2.8, -0.4) }),
+    createHardpoint({ name: 'leftWing',  kind: 'propulsor', size: 1.2, tags: ['wing','port'],      position: new THREE.Vector3(-5.9, -2.8, -0.4) }),
+    createHardpoint({ name: 'rightWing', kind: 'propulsor', size: 1.2, tags: ['wing','starboard'], position: new THREE.Vector3( 5.9, -2.8, -0.4) }),
     createHardpoint({ name: 'tailMount', kind: 'propulsor', size: 1.2, tags: ['tail'],             position: new THREE.Vector3( 0.0, -9.2, -0.4) }),
 
-    // Weapons / utility
     createHardpoint({ name: 'dorsal',    kind: 'turret',    size: 1,   tags: ['dorsal'],           position: new THREE.Vector3( 0.0, -1.6,  2.5) }),
     createHardpoint({ name: 'belly',     kind: 'payload',   size: 1.4, tags: ['belly'],            position: new THREE.Vector3( 0.0, -2.8, -2.6) }),
     createHardpoint({ name: 'nose',      kind: 'utility',   size: 1,   tags: ['nose'],             position: new THREE.Vector3( 0.0,  7.2, -0.2) }),
 
-    // NEW: wing payload pylons for missile racks
+    // Wing payload pylons for missile racks
     createHardpoint({ name: 'pylonL',    kind: 'payload',   size: 1,   tags: ['wing','port'],      position: new THREE.Vector3(-7.2, -2.2, -0.2) }),
     createHardpoint({ name: 'pylonR',    kind: 'payload',   size: 1,   tags: ['wing','starboard'], position: new THREE.Vector3( 7.2, -2.2, -0.2) }),
   ];
@@ -234,6 +231,7 @@ export function createPropulsorModule(variant = 'standard', options = {}) {
     side: THREE.DoubleSide,
   });
   const glowMesh = new THREE.Mesh(new THREE.ConeGeometry(0.92, 3.6, 20, 1, true), glowMaterial);
+  
   glowMesh.rotation.x = Math.PI;
   glowMesh.position.set(0, -2.8, 0);
   glowMesh.renderOrder = 3;
@@ -243,22 +241,30 @@ export function createPropulsorModule(variant = 'standard', options = {}) {
   light.position.set(0, -1.8, 0);
   group.add(light);
 
-  // Plug anchor (child's +Y forward, +Z up basis)
+  // Plug anchor (+Y fwd, +Z up)
   const plugAnchor = new THREE.Object3D();
   plugAnchor.name = 'mount';
   plugAnchor.position.set(0, 0.6, 0);
   group.add(plugAnchor);
 
-  // IMPORTANT: Propulsor can mount to wing or tail. Do not force side tags here.
+  // Decide plug tags by mount policy
+  const mountPolicy = options.mount ?? 'any'; // 'any' | 'wing' | 'tail'
+  const plugTags =
+    mountPolicy === 'wing' ? ['wing']
+    : mountPolicy === 'tail' ? ['tail']
+    : []; // 'any' → no extra constraints
+
   const plug = createPlugDescriptor({
     name: 'mount',
     kind: 'propulsor',
     size: variant === 'heavy' ? 1.2 : 1,
-    tags: ['wing', 'tail'], // compatible with either; socket determines side via 'port'/'starboard'
+    tags: plugTags,
     node: plugAnchor,
   });
 
   group.userData.plugs = [plug];
+
+  // VFX hook for PlaneController
   group.userData.propulsorRef = {
     light,
     glowMesh,
@@ -283,11 +289,11 @@ export function createPropulsorModule(variant = 'standard', options = {}) {
     speedScalePower: variant === 'vector' ? 1.2 : 1.1,
     lengthPower: 1.18,
   };
+
   group.userData.boundingRadius = variant === 'heavy' ? 2.4 : 2.1;
   group.userData.boundingCenter = new THREE.Vector3(0, -1.2, 0);
 
   applyShadowSettings(group);
-
   return group;
 }
 
@@ -365,7 +371,7 @@ export function createMissileRackModule(options = {}) {
   plugAnchor.position.set(0, 1.4, 0);
   group.add(plugAnchor);
 
-  // Wing-only payload (fits pylonL/pylonR). You can also add 'belly' if you want centerline carriage.
+  // Wing-only payload (fits pylonL/pylonR)
   const plug = createPlugDescriptor({
     name: 'mount',
     kind: 'payload',
@@ -495,7 +501,7 @@ export function createLampTurretModule(options = {}) {
 }
 
 export const PART_BUILDERS = {
-  hull: createHull,
+  hull:               createHull,
   propulsorStandard: (options) => createPropulsorModule('standard', options),
   propulsorHeavy:    (options) => createPropulsorModule('heavy', options),
   propulsorVector:   (options) => createPropulsorModule('vector', options),
