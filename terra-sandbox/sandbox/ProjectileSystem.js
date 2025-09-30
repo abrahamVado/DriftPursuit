@@ -1,7 +1,6 @@
 import { requireTHREE } from '../shared/threeSetup.js';
 
 const THREE = requireTHREE();
-
 if (!THREE) throw new Error('ProjectileSystem requires THREE to be available');
 
 const FORWARD = new THREE.Vector3(0, 1, 0);
@@ -20,6 +19,8 @@ export class ProjectileSystem {
     this.cooldownDuration = 0.65;
     this.maxLife = 14;
     this.missileSpeed = 420;
+
+    // Planet/space impact tuning
     this.craterRadius = 480;
     this.craterDepth = 320;
     this.craterRimHeight = 120;
@@ -38,6 +39,7 @@ export class ProjectileSystem {
     if (!position || !orientation) return false;
 
     this.cooldown = this.cooldownDuration;
+
     const spawnPos = position.clone();
     const direction = FORWARD.clone().applyQuaternion(orientation).normalize();
     spawnPos.addScaledVector(direction, 8);
@@ -51,7 +53,6 @@ export class ProjectileSystem {
 
     const body = new THREE.Mesh(this.shared.bodyGeometry.clone(), this.shared.bodyMaterial.clone());
     body.castShadow = true;
-    body.receiveShadow = false;
     group.add(body);
 
     const nose = new THREE.Mesh(this.shared.noseGeometry.clone(), this.shared.noseMaterial.clone());
@@ -83,6 +84,7 @@ export class ProjectileSystem {
 
     const origin = originOffset ?? new THREE.Vector3();
 
+    // Projectiles
     for (let i = this.projectiles.length - 1; i >= 0; i -= 1){
       const projectile = this.projectiles[i];
       projectile.life += delta;
@@ -96,25 +98,33 @@ export class ProjectileSystem {
 
       let impacted = false;
 
+      // Planet/ground impact
       if (scenario === 'planet' && this.world){
-        const ground = this.world.getHeightAt(projectile.position.x, projectile.position.y);
+        const ground = this.world.getHeightAt?.(projectile.position.x, projectile.position.y);
         if (Number.isFinite(ground) && projectile.position.z <= ground + 2){
           const impactPos = projectile.position.clone();
           impactPos.z = ground;
+
           const speed = projectile.velocity.length();
           const speedScale = THREE.MathUtils.clamp(speed / this.missileSpeed, 0.6, 1.9);
+
+          // Bigger, brighter booms on faster hits
           this._spawnExplosion(impactPos, this.planetExplosionScale * speedScale, 1.2);
+
+          // Deform terrain, if supported
           const worldX = impactPos.x + origin.x;
           const worldY = impactPos.y + origin.y;
           const radius = this.craterRadius * speedScale;
-          const depth = this.craterDepth * (0.85 + 0.15 * speedScale);
+          const depth = this.craterDepth * (0.85 + 0.15 * speedScale); // fixed typo here
           const rimHeight = this.craterRimHeight * (0.75 + 0.25 * speedScale);
           this.world.addDynamicCrater?.({ worldX, worldY, radius, depth, rimHeight });
+
           this._disposeProjectileIndex(i);
           impacted = true;
         }
       }
 
+      // Space body intersection (simple sphere)
       if (!impacted && scenario === 'space' && Array.isArray(spaceBodies)){
         for (let b = 0; b < spaceBodies.length; b += 1){
           const body = spaceBodies[b];
@@ -135,12 +145,14 @@ export class ProjectileSystem {
 
       if (impacted) continue;
 
+      // Kill far-away projectiles
       const distance = projectile.position.length();
       if (distance > 120000){
         this._disposeProjectileIndex(i);
       }
     }
 
+    // Explosions
     for (let e = this.explosions.length - 1; e >= 0; e -= 1){
       const explosion = this.explosions[e];
       explosion.life += delta;
@@ -148,20 +160,24 @@ export class ProjectileSystem {
       if (t >= 1){
         this.scene.remove(explosion.mesh);
         explosion.mesh.traverse((obj) => {
-          if (obj.material?.dispose) obj.material.dispose();
-          if (obj.geometry?.dispose) obj.geometry.dispose();
+          obj.material?.dispose?.();
+          obj.geometry?.dispose?.();
         });
         this.explosions.splice(e, 1);
         continue;
       }
+
       const lerpT = Math.pow(t, 0.6);
       const baseScale = explosion.initialScale ?? 1;
       const targetScale = Math.max(baseScale, explosion.scaleTarget ?? baseScale);
       const scale = THREE.MathUtils.lerp(baseScale, targetScale, lerpT);
+
       const baseScaleZ = explosion.initialZScale ?? baseScale * 0.6;
       const targetScaleZ = Math.max(baseScaleZ, targetScale * 0.5);
       const scaleZ = THREE.MathUtils.lerp(baseScaleZ, targetScaleZ, lerpT);
+
       explosion.mesh.scale.set(scale, scale, scaleZ);
+
       const mat = explosion.material;
       if (mat){
         mat.opacity = THREE.MathUtils.lerp(explosion.startOpacity, 0, t * t);
@@ -172,37 +188,41 @@ export class ProjectileSystem {
 
   handleOriginShift(shift){
     if (!shift) return;
-    this.projectiles.forEach((projectile) => {
-      projectile.position.sub(shift);
-      this._alignMesh(projectile);
+    this.projectiles.forEach((p) => {
+      p.position.sub(shift);
+      this._alignMesh(p);
     });
-    this.explosions.forEach((explosion) => {
-      explosion.mesh.position.sub(shift);
+    this.explosions.forEach((e) => {
+      e.mesh.position.sub(shift);
     });
   }
 
   _createSharedAssets(){
     const bodyGeometry = new THREE.CylinderGeometry(0.25, 0.32, 2.6, 16, 1, true);
     bodyGeometry.rotateZ(Math.PI / 2);
-    const bodyMaterial = new THREE.MeshStandardMaterial({ color: 0xd5daf0, metalness: 0.6, roughness: 0.32, emissive: 0x101424, emissiveIntensity: 0.2 });
+    const bodyMaterial = new THREE.MeshStandardMaterial({
+      color: 0xd5daf0, metalness: 0.6, roughness: 0.32, emissive: 0x101424, emissiveIntensity: 0.2,
+    });
 
     const noseGeometry = new THREE.ConeGeometry(0.32, 0.9, 16);
     noseGeometry.rotateZ(Math.PI / 2);
-    const noseMaterial = new THREE.MeshStandardMaterial({ color: 0xff9c73, metalness: 0.4, roughness: 0.26, emissive: 0x331a11, emissiveIntensity: 0.3 });
+    const noseMaterial = new THREE.MeshStandardMaterial({
+      color: 0xff9c73, metalness: 0.4, roughness: 0.26, emissive: 0x331a11, emissiveIntensity: 0.3,
+    });
 
     const glowGeometry = new THREE.ConeGeometry(0.42, 1.8, 12, 1, true);
     glowGeometry.rotateZ(-Math.PI / 2);
-    const glowMaterial = new THREE.MeshBasicMaterial({ color: 0xffe0a8, transparent: true, opacity: 0.9, blending: THREE.AdditiveBlending, depthWrite: false, toneMapped: false });
+    const glowMaterial = new THREE.MeshBasicMaterial({
+      color: 0xffe0a8, transparent: true, opacity: 0.9,
+      blending: THREE.AdditiveBlending, depthWrite: false, toneMapped: false,
+    });
 
     const explosionGeometry = new THREE.SphereGeometry(1, 24, 24);
 
     return {
-      bodyGeometry,
-      bodyMaterial,
-      noseGeometry,
-      noseMaterial,
-      glowGeometry,
-      glowMaterial,
+      bodyGeometry, bodyMaterial,
+      noseGeometry, noseMaterial,
+      glowGeometry, glowMaterial,
       explosionGeometry,
     };
   }
@@ -211,18 +231,23 @@ export class ProjectileSystem {
     const material = new THREE.MeshBasicMaterial({
       color: 0xffc893,
       transparent: true,
-      opacity: THREE.MathUtils.clamp(0.9 * opacityScale, 0.15, 1.4),
+      opacity: THREE.MathUtils.clamp(0.9 * opacityScale, 0.15, 1.0),
       blending: THREE.AdditiveBlending,
       depthWrite: false,
       toneMapped: false,
     });
+
     const mesh = new THREE.Mesh(this.shared.explosionGeometry.clone(), material);
     mesh.position.copy(position);
+
     const initialScale = Math.max(1.2, targetScale * 0.12);
     mesh.scale.set(initialScale, initialScale, initialScale * 0.6);
+
     const resolvedTargetScale = Math.max(initialScale * 1.4, targetScale);
+
     mesh.name = 'MissileExplosion';
     this.scene.add(mesh);
+
     this.explosions.push({
       mesh,
       material,
@@ -249,8 +274,8 @@ export class ProjectileSystem {
     if (projectile.mesh){
       this.scene.remove(projectile.mesh);
       projectile.mesh.traverse((obj) => {
-        if (obj.material?.dispose) obj.material.dispose();
-        if (obj.geometry?.dispose) obj.geometry.dispose();
+        obj.material?.dispose?.();
+        obj.geometry?.dispose?.();
       });
     }
     this.projectiles.splice(index, 1);

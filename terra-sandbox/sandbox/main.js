@@ -54,6 +54,7 @@ sun.shadow.camera.top = 800;
 sun.shadow.camera.bottom = -800;
 sun.shadow.camera.far = 2200;
 scene.add(sun);
+
 const BASE_HEMISPHERE_INTENSITY = hemisphere.intensity;
 const BASE_SUN_INTENSITY = sun.intensity;
 
@@ -68,6 +69,8 @@ scene.add(planeMesh);
 const planeController = new PlaneController();
 planeController.attachMesh(planeMesh);
 planeController.setAuxiliaryLightsActive(false);
+
+// Capture baseline flight dynamics once
 const BASE_PLANE_GRAVITY = planeController.gravity;
 const BASE_PROPULSOR_LIFT = planeController.propulsorLift;
 const BASE_MIN_SPEED = planeController.minSpeed;
@@ -204,6 +207,8 @@ function applyPlanetEnvironment(){
   if (world._ocean) world._ocean.visible = true;
   spaceScene.setVisible(false);
   planeController.setAuxiliaryLightsActive(false);
+
+  // Restore baseline flight dynamics
   planeController.gravity = BASE_PLANE_GRAVITY;
   planeController.propulsorLift = BASE_PROPULSOR_LIFT;
   planeController.minSpeed = BASE_MIN_SPEED;
@@ -229,6 +234,8 @@ function applySpaceEnvironment(){
   if (world._ocean) world._ocean.visible = false;
   spaceScene.setVisible(true);
   planeController.setAuxiliaryLightsActive(true, 1.3);
+
+  // Zero-G-ish tuning
   planeController.gravity = BASE_PLANE_GRAVITY * 0.14;
   planeController.propulsorLift = BASE_PROPULSOR_LIFT * 0.32;
   planeController.minSpeed = Math.min(8, BASE_MIN_SPEED * 0.25);
