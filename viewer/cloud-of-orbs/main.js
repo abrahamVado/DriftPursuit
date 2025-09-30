@@ -318,7 +318,11 @@ function handleAmmoSelection(ammoId){
 
 function handlePlanetSelection(planetId){
   if (!planetId) return;
-  solarSystem.setFocusPlanet(planetId);
+  if (surfaceManager.getState() === PlanetSurfaceState.SYSTEM_VIEW){
+    solarSystem.enterSystemView({ planetId });
+  } else {
+    solarSystem.setFocusPlanet(planetId);
+  }
   surfaceManager.selectPlanet(planetId);
   hud.setActiveMap(planetId);
   if (surfaceManager.getState() === PlanetSurfaceState.SYSTEM_VIEW){
@@ -329,6 +333,11 @@ function handlePlanetSelection(planetId){
 
 function handleSurfaceStateChange({ next, planetId }){
   input.setOrbitalControlsEnabled(next === PlanetSurfaceState.SYSTEM_VIEW);
+  if (next === PlanetSurfaceState.SYSTEM_VIEW){
+    solarSystem.enterSystemView({ planetId: planetId ?? solarSystem.getFocusPlanetId() });
+  } else {
+    solarSystem.exitSystemView();
+  }
   switch (next){
     case PlanetSurfaceState.SYSTEM_VIEW:
       hud.setControls(hudPresets.system);

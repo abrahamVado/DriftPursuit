@@ -1,14 +1,23 @@
 import { requireTHREE } from '../shared/threeSetup.js';
+import { OrbitalPlayerShip } from './OrbitalPlayerShip.js';
 
 const THREE = requireTHREE();
 
-const TMP_SPHERICAL = new THREE.Spherical();
+const TMP_TARGET = new THREE.Vector3();
+const TMP_FORWARD = new THREE.Vector3();
+const TMP_RIGHT = new THREE.Vector3();
+const TMP_UP = new THREE.Vector3(0, 0, 1);
+const TMP_PLANET_POS = new THREE.Vector3();
+const TMP_RADIAL = new THREE.Vector3();
 
 const DEFAULT_RADIUS_SCALE = 120;
 const DEFAULT_ORBIT_SCALE = 3200;
-const DEFAULT_AUTO_ORBIT_SPEED = 0.045;
 const CAMERA_BLEND_RATE = 6.4;
+const CAMERA_LOOK_BLEND = 5.6;
 const DISTANCE_BLEND_RATE = 5.1;
+const CAMERA_ORBIT_DECAY = 3.2;
+const MAX_ORBIT_YAW = THREE.MathUtils.degToRad(145);
+const MAX_ORBIT_PITCH = THREE.MathUtils.degToRad(72);
 
 function createFallbackMesh(label = 'Body'){
   const geometry = new THREE.SphereGeometry(1, 24, 24);
@@ -35,14 +44,12 @@ export class SolarSystemWorld {
     planetRegistry = new Map(),
     radiusScale = DEFAULT_RADIUS_SCALE,
     orbitScale = DEFAULT_ORBIT_SCALE,
-    autoOrbitSpeed = DEFAULT_AUTO_ORBIT_SPEED,
     initialPlanetId = null,
   } = {}){
     this.scene = scene;
     this.camera = camera;
     this.radiusScale = radiusScale;
     this.orbitScale = orbitScale;
-    this.autoOrbitSpeed = autoOrbitSpeed;
 
     this.root = new THREE.Group();
     this.root.name = 'SolarSystemWorld';
@@ -56,14 +63,18 @@ export class SolarSystemWorld {
     this.cameraTarget = new THREE.Vector3();
     this.cameraPosition = new THREE.Vector3();
     this.orbitAngles = { yaw: 0, pitch: 0 };
-    this.autoOrbitEnabled = true;
+    this.lastOrbitInput = null;
+    this.lastInputOrbitActive = false;
 
-    this.cameraDistance = 6400;
-    this.targetCameraDistance = this.cameraDistance;
+    this.followDistance = 620;
+    this.targetFollowDistance = this.followDistance;
+    this.followMinDistance = 260;
+    this.followMaxDistance = 3600;
+    this.zoomSpeed = 620;
+    this.zoomNormalized = 0;
+
     this.minDistance = 1800;
     this.maxDistance = 38000;
-    this.zoomSpeed = 620;
-    this.zoomNormalized = 0.25;
 
     this.metrics = {
       planetId: null,
@@ -74,13 +85,19 @@ export class SolarSystemWorld {
 
     this._initializePlanets(planetRegistry);
 
+    this.playerShip = new OrbitalPlayerShip({ scene: this.root });
+    this.playerShipNeedsPlacement = true;
+    this.systemViewActive = true;
+    this.lastShipState = this.playerShip.getState();
+
     this.focusPlanetId = initialPlanetId ?? this._getDefaultPlanetId();
     this.setFocusPlanet(this.focusPlanetId);
 
     this.cameraRig = {
       camera: this.camera,
       update: (dt, _metrics, orbitInput) => {
-        this._updateCamera(dt, orbitInput);
+        const planet = this.planets.get(this.focusPlanetId);
+        this._updateCamera(dt, orbitInput, this.lastShipState, planet);
       },
     };
   }
@@ -89,6 +106,7 @@ export class SolarSystemWorld {
     if (this.scene && this.root){
       this.scene.remove(this.root);
     }
+    this.playerShip?.dispose?.();
     this.planets.clear();
     this.planetList.length = 0;
   }
@@ -123,6 +141,38 @@ export class SolarSystemWorld {
     return this.zoomNormalized;
   }
 
+  enterSystemView({ planetId = null } = {}){
+    const wasActive = this.systemViewActive;
+    this.systemViewActive = true;
+    const forcePlacement = Boolean(planetId);
+    if (forcePlacement){
+      this.playerShipNeedsPlacement = true;
+    } else if (!wasActive){
+      this.playerShipNeedsPlacement = true;
+    }
+    this.playerShip?.setActive(true);
+    this.playerShip?.setVisible(true);
+    if (planetId && planetId !== this.focusPlanetId){
+      this.setFocusPlanet(planetId);
+      return;
+    }
+    if (!this.playerShipNeedsPlacement){
+      return;
+    }
+    const planet = this.planets.get(this.focusPlanetId);
+    if (planet){
+      this._ensureShipPlacement(planet, { snapCamera: true });
+    }
+  }
+
+  exitSystemView(){
+    if (!this.systemViewActive) return;
+    this.systemViewActive = false;
+    this.playerShipNeedsPlacement = true;
+    this.playerShip?.setActive(false);
+    this.playerShip?.setVisible(false);
+  }
+
   cycleFocus(delta = 1){
     if (!Number.isFinite(delta) || this.planetList.length === 0) return this.focusPlanetId;
     const index = this.planetList.findIndex((entry) => entry.id === this.focusPlanetId);
@@ -143,6 +193,7 @@ export class SolarSystemWorld {
     this.focusPlanetId = planetId;
     this.metrics.planetId = planetId;
     this._updateDistanceBounds(entry);
+    this._ensureShipPlacement(entry, { snapCamera: true });
     this._updateMetrics(entry);
     return true;
   }
@@ -157,13 +208,24 @@ export class SolarSystemWorld {
     }
 
     const zoomDelta = inputSample?.system?.zoomDelta ?? 0;
-    this._updateZoom(dt, zoomDelta, planet);
+    this._updateZoom(dt, zoomDelta);
 
     const orbitDelta = dt * planet.orbitAngularSpeed;
     planet.pivot.rotation.y += orbitDelta;
     planet.mesh.rotation.y += dt * planet.spinSpeed;
 
-    this._updateMetrics(planet);
+    if (this.systemViewActive){
+      this._ensureShipPlacement(planet);
+      const shipState = this.playerShip?.update(dt, inputSample?.plane ?? {}, {});
+      if (shipState){
+        this.lastShipState = shipState;
+        this._updateMetricsFromShip(planet, shipState);
+      } else {
+        this._updateMetrics(planet);
+      }
+    } else {
+      this._updateMetrics(planet);
+    }
     this.lastInputOrbitActive = inputSample?.system?.orbitActive ?? false;
     this.lastOrbitInput = inputSample?.cameraOrbit ?? null;
     return this.metrics;
@@ -230,30 +292,29 @@ export class SolarSystemWorld {
     return this.planetList[Math.min(2, this.planetList.length - 1)].id;
   }
 
-  _updateZoom(dt, zoomDelta, planet){
+  _updateZoom(dt, zoomDelta){
     if (Number.isFinite(zoomDelta) && zoomDelta !== 0){
       const step = zoomDelta * this.zoomSpeed;
-      this.targetCameraDistance = THREE.MathUtils.clamp(
-        this.targetCameraDistance - step,
-        this.minDistance,
-        this.maxDistance,
+      this.targetFollowDistance = THREE.MathUtils.clamp(
+        this.targetFollowDistance - step,
+        this.followMinDistance,
+        this.followMaxDistance,
       );
     }
     const blend = dt > 0 ? 1 - Math.exp(-DISTANCE_BLEND_RATE * dt) : 1;
-    this.cameraDistance += (this.targetCameraDistance - this.cameraDistance) * blend;
+    this.followDistance += (this.targetFollowDistance - this.followDistance) * blend;
     this.zoomNormalized = this._computeZoomNormalized();
   }
 
   _computeZoomNormalized(){
-    if (!Number.isFinite(this.minDistance) || !Number.isFinite(this.maxDistance)) return 0;
-    if (this.maxDistance <= this.minDistance) return 0;
-    const ratio = (this.cameraDistance - this.minDistance) / (this.maxDistance - this.minDistance);
+    if (!Number.isFinite(this.followMinDistance) || !Number.isFinite(this.followMaxDistance)) return 0;
+    if (this.followMaxDistance <= this.followMinDistance) return 0;
+    const ratio = (this.followDistance - this.followMinDistance) / (this.followMaxDistance - this.followMinDistance);
     return THREE.MathUtils.clamp(ratio, 0, 1);
   }
 
-  _updateCamera(dt, orbitInput){
-    const planet = this.planets.get(this.focusPlanetId);
-    if (!planet || !this.camera) return;
+  _updateCamera(dt, orbitInput, shipState, planet){
+    if (!this.camera || !shipState?.position) return;
 
     const input = orbitInput ?? this.lastOrbitInput ?? {};
     const yawDelta = input?.yawDelta ?? 0;
@@ -261,33 +322,56 @@ export class SolarSystemWorld {
     const active = input?.active ?? this.lastInputOrbitActive ?? false;
 
     if (active){
-      this.orbitAngles.yaw += yawDelta;
-      this.orbitAngles.pitch += pitchDelta;
+      this.orbitAngles.yaw = THREE.MathUtils.clamp(this.orbitAngles.yaw + yawDelta, -MAX_ORBIT_YAW, MAX_ORBIT_YAW);
+      this.orbitAngles.pitch = THREE.MathUtils.clamp(this.orbitAngles.pitch + pitchDelta, -MAX_ORBIT_PITCH, MAX_ORBIT_PITCH);
     } else {
-      this.orbitAngles.yaw += yawDelta * 0.5;
-      this.orbitAngles.pitch += pitchDelta * 0.5;
-      if (this.autoOrbitEnabled){
-        this.orbitAngles.yaw += this.autoOrbitSpeed * (dt || 0);
+      const decay = dt > 0 ? Math.exp(-CAMERA_ORBIT_DECAY * dt) : 0;
+      this.orbitAngles.yaw = THREE.MathUtils.clamp((this.orbitAngles.yaw * decay) + yawDelta * 0.25, -MAX_ORBIT_YAW, MAX_ORBIT_YAW);
+      this.orbitAngles.pitch = THREE.MathUtils.clamp((this.orbitAngles.pitch * decay) + pitchDelta * 0.25, -MAX_ORBIT_PITCH, MAX_ORBIT_PITCH);
+    }
+
+    const forward = this.playerShip?.getForwardVector(TMP_FORWARD) ?? TMP_FORWARD.set(0, 1, 0);
+    const upVector = TMP_UP;
+
+    const rotatedForward = TMP_FORWARD.copy(forward).normalize();
+    if (this.orbitAngles.yaw !== 0){
+      rotatedForward.applyAxisAngle(upVector, this.orbitAngles.yaw);
+    }
+    const right = TMP_RIGHT.crossVectors(rotatedForward, upVector);
+    if (right.lengthSq() > 1e-5){
+      right.normalize();
+      if (this.orbitAngles.pitch !== 0){
+        rotatedForward.applyAxisAngle(right, this.orbitAngles.pitch);
       }
     }
+    rotatedForward.normalize();
 
-    this.orbitAngles.pitch = THREE.MathUtils.clamp(this.orbitAngles.pitch, -Math.PI / 2 + 0.14, Math.PI / 2 - 0.14);
+    const followDistance = Math.max(this.followDistance, 180);
+    const heightBase = planet ? Math.max(followDistance * 0.32, planet.radius * 0.6, 200) : followDistance * 0.32;
+    const pitchLift = Math.sin(this.orbitAngles.pitch) * followDistance * 0.45;
 
-    const worldTarget = planet.mesh.getWorldPosition(this.cameraTarget);
-    const distance = Math.max(this.cameraDistance, planet.radius * 1.2);
-    const phi = Math.PI / 2 - this.orbitAngles.pitch;
-    const theta = this.orbitAngles.yaw;
-    TMP_SPHERICAL.set(distance, phi, theta);
-    this.cameraPosition.setFromSpherical(TMP_SPHERICAL).add(worldTarget);
+    this.cameraPosition.copy(shipState.position)
+      .addScaledVector(rotatedForward, -followDistance)
+      .addScaledVector(upVector, heightBase + pitchLift);
 
-    if (dt > 0){
-      const blend = 1 - Math.exp(-CAMERA_BLEND_RATE * dt);
-      this.camera.position.lerp(this.cameraPosition, blend);
-    } else {
+    const blend = dt > 0 ? 1 - Math.exp(-CAMERA_BLEND_RATE * dt) : 1;
+    if (blend >= 1 || !Number.isFinite(blend)){
       this.camera.position.copy(this.cameraPosition);
+    } else {
+      this.camera.position.lerp(this.cameraPosition, blend);
     }
-    this.camera.lookAt(worldTarget);
-    this.camera.up.set(0, 1, 0);
+
+    const lookOffset = Math.sin(this.orbitAngles.pitch) * 48;
+    TMP_TARGET.copy(shipState.position).addScaledVector(upVector, lookOffset);
+    const lookBlend = dt > 0 ? 1 - Math.exp(-CAMERA_LOOK_BLEND * dt) : 1;
+    if (lookBlend >= 1 || !Number.isFinite(lookBlend)){
+      this.cameraTarget.copy(TMP_TARGET);
+    } else {
+      this.cameraTarget.lerp(TMP_TARGET, lookBlend);
+    }
+
+    this.camera.up.copy(upVector);
+    this.camera.lookAt(this.cameraTarget);
   }
 
   _updateDistanceBounds(planet){
@@ -296,21 +380,91 @@ export class SolarSystemWorld {
     this.minDistance = base + orbitInfluence * 0.18;
     this.maxDistance = Math.max(this.minDistance * 4.5, base * 6.8, planet.orbitDistance * 1.4 + base * 1.8);
 
-    const preferred = Math.max(
-      this.minDistance * 1.8,
-      base * 1.65,
-      planet.radius * 5.2 + orbitInfluence * 0.55,
-    );
-    const clampedTarget = THREE.MathUtils.clamp(preferred, this.minDistance * 1.1, this.maxDistance * 0.9);
+    const followBase = Math.max(planet.radius * 1.4, 260);
+    const followMax = Math.max(followBase * 6.2, this.minDistance * 0.75, followBase + 420);
+    this.followMinDistance = followBase;
+    this.followMaxDistance = followMax;
 
-    this.targetCameraDistance = clampedTarget;
-    this.cameraDistance = clampedTarget;
+    const preferred = Math.max(followBase * 2.4, planet.radius * 3.2, 520);
+    const clamped = THREE.MathUtils.clamp(preferred, this.followMinDistance, this.followMaxDistance);
+
+    this.targetFollowDistance = clamped;
+    this.followDistance = clamped;
+    this.cameraDistance = Math.max(this.minDistance, planet.radius * 3.2);
     this.zoomNormalized = this._computeZoomNormalized();
   }
 
+  _ensureShipPlacement(planet, { snapCamera = false } = {}){
+    if (!this.playerShip || !planet) return;
+    if (!this.systemViewActive) return;
+    if (!this.playerShipNeedsPlacement && this.playerShip.hasLaunched){
+      return;
+    }
+
+    const spawn = this._computeShipSpawnPosition(planet);
+    this.playerShip.setPosition(spawn.position, { keepVelocity: false });
+    this.playerShip.lookTowards(spawn.target, { up: TMP_UP });
+    this.playerShip.setActive(true);
+    this.playerShip.setVisible(true);
+    this.playerShipNeedsPlacement = false;
+    this.lastShipState = this.playerShip.getState();
+    this._updateMetricsFromShip(planet, this.lastShipState);
+
+    if (snapCamera){
+      this.orbitAngles.yaw = 0;
+      this.orbitAngles.pitch = 0;
+      this._updateCamera(0, this.lastOrbitInput, this.lastShipState, planet);
+    }
+  }
+
+  _computeShipSpawnPosition(planet){
+    const planetPosition = planet.mesh.getWorldPosition(TMP_PLANET_POS);
+    const radial = TMP_RADIAL.copy(planetPosition);
+    if (radial.lengthSq() < 1e-6){
+      radial.set(1, 0, 0);
+    }
+    radial.normalize();
+
+    const tangent = TMP_RIGHT.set(0, 0, 1).cross(radial);
+    if (tangent.lengthSq() < 1e-6){
+      tangent.set(0, 1, 0);
+    }
+    tangent.normalize();
+
+    const altitude = Math.max(planet.radius * 0.85, 320);
+    const standoff = Math.max(planet.radius * 3.6, 900 + planet.orbitDistance * 0.08);
+
+    const position = planetPosition.clone()
+      .addScaledVector(radial, altitude)
+      .addScaledVector(tangent, standoff);
+
+    return { position, target: planetPosition.clone() };
+  }
+
+  _updateMetricsFromShip(planet, shipState){
+    if (!planet || !shipState?.position) return;
+    const planetPosition = planet.mesh.getWorldPosition(TMP_PLANET_POS);
+    const distanceToCenter = shipState.position.distanceTo(planetPosition);
+    const altitude = Math.max(0, distanceToCenter - planet.radius);
+    this.cameraDistance = distanceToCenter;
+    this.metrics.planetId = planet.id;
+    this.metrics.distanceToSurface = altitude;
+    this.metrics.altitude = altitude;
+    this.metrics.thresholds = this._computeThresholds(planet);
+  }
+
   _updateMetrics(planet){
+    if (!planet){
+      this.metrics.distanceToSurface = Number.POSITIVE_INFINITY;
+      this.metrics.altitude = Number.POSITIVE_INFINITY;
+      this.metrics.thresholds = null;
+      return;
+    }
     const thresholds = this._computeThresholds(planet);
-    const altitude = Math.max(0, this.cameraDistance - planet.radius);
+    const referenceDistance = Number.isFinite(this.cameraDistance)
+      ? this.cameraDistance
+      : Math.max(this.minDistance, planet.radius * 3.2);
+    const altitude = Math.max(0, referenceDistance - planet.radius);
     this.metrics.planetId = planet.id;
     this.metrics.distanceToSurface = altitude;
     this.metrics.altitude = altitude;
