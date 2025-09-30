@@ -69,6 +69,41 @@ func ensureViewerFixture(t *testing.T) {
 	})
 }
 
+func ensureTerraSandboxFixture(t *testing.T) {
+	t.Helper()
+
+	_, thisFile, _, ok := runtime.Caller(0)
+	if !ok {
+		t.Fatalf("runtime.Caller failed")
+	}
+	sandboxDir := filepath.Clean(filepath.Join(filepath.Dir(thisFile), "..", "terra-sandbox"))
+	indexPath := filepath.Join(sandboxDir, "index.html")
+
+	var createdDir, createdFile bool
+
+	if _, err := os.Stat(sandboxDir); os.IsNotExist(err) {
+		if err := os.MkdirAll(sandboxDir, 0o755); err != nil {
+			t.Fatalf("mkdir terra-sandbox dir: %v", err)
+		}
+		createdDir = true
+	}
+	if _, err := os.Stat(indexPath); os.IsNotExist(err) {
+		if err := os.WriteFile(indexPath, []byte("<!doctype html><title>terra sandbox</title>ok"), 0o644); err != nil {
+			t.Fatalf("write terra-sandbox/index.html: %v", err)
+		}
+		createdFile = true
+	}
+
+	t.Cleanup(func() {
+		if createdFile {
+			_ = os.Remove(indexPath)
+		}
+		if createdDir {
+			_ = os.Remove(sandboxDir)
+		}
+	})
+}
+
 // generateSelfSignedCert returns temp file paths for a short-lived self-signed cert/key.
 func generateSelfSignedCert(t *testing.T) (certFile, keyFile string) {
 	t.Helper()
@@ -133,6 +168,7 @@ func generateSelfSignedCert(t *testing.T) (certFile, keyFile string) {
 
 func TestBrokerServesViewerOverTLS(t *testing.T) {
 	ensureViewerFixture(t)
+	ensureTerraSandboxFixture(t)
 
 	certFile, keyFile := generateSelfSignedCert(t)
 
@@ -171,6 +207,17 @@ func TestBrokerServesViewerOverTLS(t *testing.T) {
 
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("unexpected status: %d", resp.StatusCode)
+	}
+
+	sandboxURL := fmt.Sprintf("https://%s/terra-sandbox/index.html", ln.Addr().String())
+	respSandbox, err := client.Get(sandboxURL)
+	if err != nil {
+		t.Fatalf("GET terra-sandbox: %v", err)
+	}
+	defer respSandbox.Body.Close()
+
+	if respSandbox.StatusCode != http.StatusOK {
+		t.Fatalf("unexpected terra-sandbox status: %d", respSandbox.StatusCode)
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
