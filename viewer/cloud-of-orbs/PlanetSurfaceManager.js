@@ -187,6 +187,8 @@ export class PlanetSurfaceManager {
     this.selectedPlanetId = null;
     this.currentPlanetId = null;
     this.lastProximityMetrics = null;
+    this.pendingExitToSystemView = null;
+    this.lastExitReason = null;
 
     this.pendingAssetLoads = new Map();
 
@@ -228,6 +230,37 @@ export class PlanetSurfaceManager {
     }
     this.selectedPlanetId = planetId;
     this._preparePlanetAssets(planetId);
+  }
+
+  requestSystemView({ immediate = false, reason = 'manual', planetId = null } = {}){
+    if (this.state === PlanetSurfaceState.SYSTEM_VIEW){
+      return false;
+    }
+
+    const targetPlanetId = planetId
+      ?? this.currentPlanetId
+      ?? this.selectedPlanetId
+      ?? this.lastProximityMetrics?.planetId
+      ?? null;
+
+    this.lastExitReason = reason;
+
+    if (immediate){
+      this.pendingExitToSystemView = null;
+      this._transitionTo(PlanetSurfaceState.SYSTEM_VIEW, { planetId: null });
+      return true;
+    }
+
+    this.pendingExitToSystemView = {
+      planetId: targetPlanetId,
+      reason,
+    };
+
+    if (this.state !== PlanetSurfaceState.DEPARTING){
+      this._transitionTo(PlanetSurfaceState.DEPARTING, { planetId: targetPlanetId });
+    }
+
+    return true;
   }
 
   update({
@@ -322,6 +355,17 @@ export class PlanetSurfaceManager {
     const thresholds = resolveThresholds(metrics ?? {}, this.thresholdDefaults);
     const previousState = this.state;
 
+    if (this.pendingExitToSystemView){
+      if (this.state === PlanetSurfaceState.SYSTEM_VIEW){
+        this.pendingExitToSystemView = null;
+      } else if (this.state === PlanetSurfaceState.DEPARTING){
+        this._transitionTo(PlanetSurfaceState.SYSTEM_VIEW, { planetId: null });
+        this.pendingExitToSystemView = null;
+      } else {
+        this._transitionTo(PlanetSurfaceState.DEPARTING, { planetId: this.pendingExitToSystemView.planetId ?? planetId });
+      }
+    }
+
     switch (this.state){
       case PlanetSurfaceState.SYSTEM_VIEW:
         if (planetId && distance <= thresholds.approachEnter){
@@ -351,8 +395,21 @@ export class PlanetSurfaceManager {
         this._transitionTo(PlanetSurfaceState.SYSTEM_VIEW, { planetId: null });
     }
 
-    if (previousState !== this.state && this.callbacks.stateChange){
-      this.callbacks.stateChange({ previous: previousState, next: this.state, planetId: this.currentPlanetId });
+    if (previousState !== this.state){
+      if (typeof console !== 'undefined' && typeof console.debug === 'function'){
+        console.debug('[PlanetSurfaceManager] State change', {
+          previous: previousState,
+          next: this.state,
+          planetId: this.currentPlanetId,
+          exitReason: this.lastExitReason ?? 'auto',
+        });
+      }
+      if (this.callbacks.stateChange){
+        this.callbacks.stateChange({ previous: previousState, next: this.state, planetId: this.currentPlanetId });
+      }
+      if (this.state === PlanetSurfaceState.SYSTEM_VIEW){
+        this.lastExitReason = null;
+      }
     }
   }
 

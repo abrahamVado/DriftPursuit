@@ -22,6 +22,14 @@ import { CloudOfOrbsInputManager } from './InputManager.js';
 
 const THREE = requireTHREE();
 
+const SPACE_ENVIRONMENT = Object.freeze({
+  bodyBackground: 'radial-gradient(circle at 50% 20%, #071427 0%, #030912 55%, #010308 100%)',
+  background: 0x050b16,
+  fog: { color: 0x050b16, near: 12000, far: 36000 },
+  sun: { color: 0xfff0d2, intensity: 2.15, position: [-5200, 4200, 2600] },
+  hemisphere: { skyColor: 0x3a4c72, groundColor: 0x040608, intensity: 0.45 },
+});
+
 const DEFAULT_SURFACE_DESCRIPTOR = {
   id: 'aurora-basin',
   name: 'Aurora Basin',
@@ -91,16 +99,20 @@ document.body.style.margin = '0';
 document.body.style.overflow = 'hidden';
 
 const scene = new THREE.Scene();
-scene.background = new THREE.Color(0x050b16);
-scene.fog = new THREE.Fog(0x050b16, 12000, 36000);
+scene.background = new THREE.Color(SPACE_ENVIRONMENT.background);
+scene.fog = new THREE.Fog(SPACE_ENVIRONMENT.fog.color, SPACE_ENVIRONMENT.fog.near, SPACE_ENVIRONMENT.fog.far);
 
 const camera = createPerspectiveCamera({ fov: 60, near: 0.1, far: 260000 });
 
 const hemisphere = new THREE.HemisphereLight(0x3a4c72, 0x040608, 0.45);
 scene.add(hemisphere);
 
-const sunLight = new THREE.DirectionalLight(0xfff0d2, 2.15);
-sunLight.position.set(-5200, 4200, 2600);
+const sunLight = new THREE.DirectionalLight(SPACE_ENVIRONMENT.sun.color, SPACE_ENVIRONMENT.sun.intensity);
+sunLight.position.set(
+  SPACE_ENVIRONMENT.sun.position[0],
+  SPACE_ENVIRONMENT.sun.position[1],
+  SPACE_ENVIRONMENT.sun.position[2],
+);
 sunLight.castShadow = true;
 sunLight.shadow.mapSize.set(4096, 4096);
 sunLight.shadow.camera.near = 100;
@@ -113,6 +125,8 @@ scene.add(sunLight);
 
 const ambient = new THREE.AmbientLight(0x0f1c34, 0.32);
 scene.add(ambient);
+
+applySpaceEnvironment();
 
 const solarSystem = new SolarSystemWorld({
   scene,
@@ -244,6 +258,11 @@ function animate(now){
   }
 
   const proximityMetrics = solarSystem.update(dt, { inputSample });
+  const exitRequested = Boolean(inputSample.system?.exitPlanet);
+
+  if (exitRequested && surfaceManager.getState() !== PlanetSurfaceState.SYSTEM_VIEW){
+    surfaceManager.requestSystemView({ reason: 'manual' });
+  }
 
   surfaceManager.update({
     dt,
@@ -335,8 +354,12 @@ function handleSurfaceStateChange({ next, planetId }){
   input.setOrbitalControlsEnabled(next === PlanetSurfaceState.SYSTEM_VIEW);
   if (next === PlanetSurfaceState.SYSTEM_VIEW){
     solarSystem.enterSystemView({ planetId: planetId ?? solarSystem.getFocusPlanetId() });
+    applySpaceEnvironment();
   } else {
     solarSystem.exitSystemView();
+  }
+  if (typeof console !== 'undefined' && typeof console.debug === 'function'){
+    console.debug('[CloudOfOrbs] Surface state change', { next, planetId });
   }
   switch (next){
     case PlanetSurfaceState.SYSTEM_VIEW:
@@ -381,4 +404,30 @@ function setFireSourceActive(source, active){
 function resetFireInput(){
   activeFireSources.clear();
   fireInputHeld = false;
+}
+
+function applySpaceEnvironment(){
+  if (typeof document !== 'undefined' && document.body){
+    document.body.style.background = SPACE_ENVIRONMENT.bodyBackground;
+  }
+  if (scene.background?.set){
+    scene.background.set(SPACE_ENVIRONMENT.background);
+  } else {
+    scene.background = new THREE.Color(SPACE_ENVIRONMENT.background);
+  }
+  if (scene.fog){
+    scene.fog.color.set(SPACE_ENVIRONMENT.fog.color);
+    scene.fog.near = SPACE_ENVIRONMENT.fog.near;
+    scene.fog.far = SPACE_ENVIRONMENT.fog.far;
+  }
+  hemisphere.color.set(SPACE_ENVIRONMENT.hemisphere.skyColor);
+  hemisphere.groundColor.set(SPACE_ENVIRONMENT.hemisphere.groundColor);
+  hemisphere.intensity = SPACE_ENVIRONMENT.hemisphere.intensity;
+  sunLight.color.set(SPACE_ENVIRONMENT.sun.color);
+  sunLight.intensity = SPACE_ENVIRONMENT.sun.intensity;
+  sunLight.position.set(
+    SPACE_ENVIRONMENT.sun.position[0],
+    SPACE_ENVIRONMENT.sun.position[1],
+    SPACE_ENVIRONMENT.sun.position[2],
+  );
 }
