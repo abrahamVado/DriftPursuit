@@ -45,6 +45,7 @@ export class SolarSystemWorld {
     radiusScale = DEFAULT_RADIUS_SCALE,
     orbitScale = DEFAULT_ORBIT_SCALE,
     initialPlanetId = null,
+    playerShipFactory = (options) => new OrbitalPlayerShip(options),
   } = {}){
     this.scene = scene;
     this.camera = camera;
@@ -85,10 +86,17 @@ export class SolarSystemWorld {
 
     this._initializePlanets(planetRegistry);
 
-    this.playerShip = new OrbitalPlayerShip({ scene: this.root });
+    this.playerShipFactory = playerShipFactory;
+    this.playerShip = this.playerShipFactory?.({ scene: this.root }) ?? null;
     this.playerShipNeedsPlacement = true;
     this.systemViewActive = true;
-    this.lastShipState = this.playerShip.getState();
+    this.lastShipState = this.playerShip?.getState?.() ?? {
+      position: new THREE.Vector3(),
+      orientation: new THREE.Quaternion(),
+      velocity: new THREE.Vector3(),
+      forward: new THREE.Vector3(0, 1, 0),
+      up: new THREE.Vector3(0, 0, 1),
+    };
 
     this.focusPlanetId = initialPlanetId ?? this._getDefaultPlanetId();
     this.setFocusPlanet(this.focusPlanetId);
@@ -144,6 +152,9 @@ export class SolarSystemWorld {
   enterSystemView({ planetId = null } = {}){
     const wasActive = this.systemViewActive;
     this.systemViewActive = true;
+    if (this.root){
+      this.root.visible = true;
+    }
     const forcePlacement = Boolean(planetId);
     if (forcePlacement){
       this.playerShipNeedsPlacement = true;
@@ -171,6 +182,9 @@ export class SolarSystemWorld {
     this.playerShipNeedsPlacement = true;
     this.playerShip?.setActive(false);
     this.playerShip?.setVisible(false);
+    if (this.root){
+      this.root.visible = false;
+    }
   }
 
   cycleFocus(delta = 1){
@@ -210,9 +224,12 @@ export class SolarSystemWorld {
     const zoomDelta = inputSample?.system?.zoomDelta ?? 0;
     this._updateZoom(dt, zoomDelta);
 
-    const orbitDelta = dt * planet.orbitAngularSpeed;
-    planet.pivot.rotation.y += orbitDelta;
-    planet.mesh.rotation.y += dt * planet.spinSpeed;
+    const shouldAnimatePlanets = this.root?.visible !== false;
+    if (shouldAnimatePlanets){
+      const orbitDelta = dt * planet.orbitAngularSpeed;
+      planet.pivot.rotation.y += orbitDelta;
+      planet.mesh.rotation.y += dt * planet.spinSpeed;
+    }
 
     if (this.systemViewActive){
       this._ensureShipPlacement(planet);
