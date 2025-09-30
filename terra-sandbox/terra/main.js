@@ -144,7 +144,8 @@ const mapSelectionHandler = createMapSelectionHandler((mapId) => {
   }
 });
 
-let hudNavigationLightsEnabled = true;
+// Single source of truth for nav lights
+let navigationLightsEnabled = true;
 
 const hudPresets = createHudPresets();
 const { hud } = createHud({
@@ -159,7 +160,7 @@ const { hud } = createHud({
   },
   onMapSelect: mapSelectionHandler,
   onToggleLights: handleNavigationLightsToggle,
-  initialLightsActive: hudNavigationLightsEnabled,
+  initialLightsActive: navigationLightsEnabled,
   presets: hudPresets,
 });
 hud.setActiveAmmo(projectileManager.getCurrentAmmoId());
@@ -389,10 +390,10 @@ function resetFireInput(){
 }
 
 function handleNavigationLightsToggle(active){
-  hudNavigationLightsEnabled = !!active;
-  vehicleSystem.setNavigationLightsEnabled?.(hudNavigationLightsEnabled);
-  if (hud?.lightsActive !== hudNavigationLightsEnabled){
-    hud?.setLightsActive?.(hudNavigationLightsEnabled, { silent: true });
+  navigationLightsEnabled = !!active;
+  vehicleSystem.setNavigationLightsEnabled?.(navigationLightsEnabled);
+  if (hud?.lightsActive !== navigationLightsEnabled){
+    hud?.setLightsActive?.(navigationLightsEnabled, { silent: true });
   }
 }
 
@@ -496,8 +497,8 @@ async function bootstrap(){
 
   vehicleSystem.spawnDefaultVehicles();
   vehicleSystem.handlePlayerJoin(LOCAL_PLAYER_ID, { initialMode: 'plane' });
-  vehicleSystem.setNavigationLightsEnabled?.(hudNavigationLightsEnabled);
-  hud.setLightsActive?.(hudNavigationLightsEnabled, { silent: true });
+  vehicleSystem.setNavigationLightsEnabled?.(navigationLightsEnabled);
+  hud.setLightsActive?.(navigationLightsEnabled, { silent: true });
 
   const initialVehicle = vehicleSystem.getActiveVehicle()
     ?? vehicleSystem.getVehicles().get(LOCAL_PLAYER_ID)
