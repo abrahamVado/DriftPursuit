@@ -10,6 +10,7 @@ const TMP_CENTER = new THREE.Vector3();
 const TMP_IMPACT_POSITION = new THREE.Vector3();
 const TMP_ORIGIN_OFFSET = new THREE.Vector3();
 const TMP_NORMAL = new THREE.Vector3(0, 0, 1);
+const LAMP_BEHAVIOR_TYPE = 'lamp';
 
 const PROJECTILE_SPEED = 320;
 const PROJECTILE_LIFESPAN = 6;
@@ -106,6 +107,30 @@ const DEFAULT_AMMO_TYPES = [
     behavior: { type: 'ember', flicker: 0.55, speed: 7.8, scaleAmount: 0.18 },
     explosion: { color: 0xffef90, duration: 1.35, scale: 8.5, startScale: 0.8, fadePower: 1.4 },
   }),
+  normalizeAmmoConfig({
+    id: 'lumen-lamp',
+    name: 'Lumen Lamp',
+    effect: 'Turret-mounted illumination beam',
+    color: 0xfff6d0,
+    emissive: 0xfff0a2,
+    emissiveIntensity: 0.45,
+    speed: 0,
+    lifespan: 0,
+    stretch: 0.4,
+    scale: { x: 0.8, y: 0.8, z: 0.8 },
+    behavior: {
+      type: 'lamp',
+      intensity: 3.4,
+      distance: 520,
+      angle: THREE.MathUtils.degToRad(36),
+      penumbra: 0.42,
+      decay: 1.2,
+      color: 0xfff3c4,
+      targetDistance: 52,
+      castShadow: false,
+    },
+    explosion: null,
+  }),
 ];
 
 export class TerraProjectileManager {
@@ -119,6 +144,13 @@ export class TerraProjectileManager {
     this.currentAmmoId = null;
     this.explosions = [];
     this.explosionGeometry = new THREE.SphereGeometry(1, 18, 18);
+    this.lamp = {
+      light: null,
+      target: null,
+      muzzle: null,
+      ownerId: null,
+      behavior: null,
+    };
     this.setAmmoTypes(ammoTypes.length ? ammoTypes : DEFAULT_AMMO_TYPES);
   }
 
@@ -142,6 +174,10 @@ export class TerraProjectileManager {
       this.ammoTypes.set(fallback.id, fallback);
       this.currentAmmoId = fallback.id;
     }
+
+    if (!this.isLampAmmoActive()){
+      this.clearLampTarget();
+    }
   }
 
   getAmmoTypes(){
@@ -152,11 +188,19 @@ export class TerraProjectileManager {
     return this.currentAmmoId;
   }
 
+  isLampAmmoActive(){
+    const ammo = this._getActiveAmmo();
+    return this._isLampAmmo(ammo);
+  }
+
   setAmmoType(id){
     if (!id || !this.ammoTypes.has(id)){
       return false;
     }
     this.currentAmmoId = id;
+    if (!this.isLampAmmoActive()){
+      this.clearLampTarget();
+    }
     return true;
   }
 
@@ -164,15 +208,102 @@ export class TerraProjectileManager {
     if (this.scene && this.scene !== scene){
       this._clearExplosions();
     }
+    if (this.lamp.light && this.scene && this.scene !== scene){
+      this.scene.remove(this.lamp.light);
+      if (this.lamp.target){
+        this.scene.remove(this.lamp.target);
+      }
+    }
     this.scene = scene ?? null;
+    if (!this.scene){
+      this.clearLampTarget();
+    } else if (this.lamp.light){
+      this.scene.add(this.lamp.light);
+      if (this.lamp.target){
+        this.scene.add(this.lamp.target);
+      }
+    }
   }
 
   setWorld(world){
     this.world = world ?? null;
   }
 
+  syncLampTarget(muzzle, { ownerId = null } = {}){
+    const ammo = this._getActiveAmmo();
+    if (!this._isLampAmmo(ammo)){
+      this.clearLampTarget();
+      return;
+    }
+    if (!muzzle || !this.scene){
+      this.clearLampTarget();
+      return;
+    }
+
+    muzzle.updateMatrixWorld?.(true);
+
+    if (!this.lamp.light){
+      const behavior = ammo.behavior ?? {};
+      const light = new THREE.SpotLight(
+        behavior.color ?? 0xfff0c0,
+        behavior.intensity ?? 3.2,
+        behavior.distance ?? 480,
+        behavior.angle ?? THREE.MathUtils.degToRad(36),
+        behavior.penumbra ?? 0.4,
+        behavior.decay ?? 1,
+      );
+      light.castShadow = !!behavior.castShadow;
+      const target = new THREE.Object3D();
+      this.scene.add(light);
+      this.scene.add(target);
+      light.target = target;
+      this.lamp.light = light;
+      this.lamp.target = target;
+    }
+
+    const behavior = ammo.behavior ?? {};
+    this.lamp.behavior = behavior;
+    this.lamp.muzzle = muzzle;
+    this.lamp.ownerId = ownerId;
+
+    const { light } = this.lamp;
+    light.color.set(behavior.color ?? 0xfff0c0);
+    light.intensity = behavior.intensity ?? 3.2;
+    light.distance = behavior.distance ?? 480;
+    light.angle = behavior.angle ?? THREE.MathUtils.degToRad(36);
+    light.penumbra = behavior.penumbra ?? 0.4;
+    light.decay = behavior.decay ?? 1;
+
+    this._updateLampTransform();
+  }
+
+  clearLampTarget(){
+    if (this.lamp.light){
+      if (this.scene){
+        this.scene.remove(this.lamp.light);
+      }
+      if (typeof this.lamp.light.dispose === 'function'){
+        this.lamp.light.dispose();
+      }
+    }
+    if (this.lamp.target && this.scene){
+      this.scene.remove(this.lamp.target);
+    }
+    this.lamp.light = null;
+    this.lamp.target = null;
+    this.lamp.muzzle = null;
+    this.lamp.ownerId = null;
+    this.lamp.behavior = null;
+  }
+
   spawnFromMuzzle(muzzle, { ownerId = null, inheritVelocity = null } = {}){
     if (!muzzle || !this.scene) return null;
+
+    const ammo = this._getActiveAmmo();
+    if (this._isLampAmmo(ammo)){
+      this.syncLampTarget(muzzle, { ownerId });
+      return null;
+    }
 
     muzzle.updateMatrixWorld(true);
     muzzle.getWorldPosition(TMP_POSITION);
@@ -183,7 +314,6 @@ export class TerraProjectileManager {
       direction.copy(FORWARD_AXIS);
     }
 
-    const ammo = this._getActiveAmmo();
     const material = this._createMaterial(ammo);
     const mesh = new THREE.Mesh(this.geometry, material);
     mesh.name = 'terraProjectile';
@@ -228,6 +358,7 @@ export class TerraProjectileManager {
 
   update(dt, { vehicles = null, onVehicleHit = null, onImpact = null } = {}){
     if (dt <= 0) return;
+    this._updateLampTransform();
     const survivors = [];
     for (const projectile of this.projectiles){
       projectile.age += dt;
@@ -317,6 +448,10 @@ export class TerraProjectileManager {
     this.ammoTypes.set(fallback.id, fallback);
     this.currentAmmoId = fallback.id;
     return fallback;
+  }
+
+  _isLampAmmo(ammo){
+    return !!ammo && ammo.behavior?.type === LAMP_BEHAVIOR_TYPE;
   }
 
   _createMaterial(ammo){
@@ -480,6 +615,20 @@ export class TerraProjectileManager {
       startScale: Math.max(0.01, config.startScale ?? DEFAULT_EXPLOSION.startScale),
       fadePower: Math.max(0.5, config.fadePower ?? DEFAULT_EXPLOSION.fadePower),
     });
+  }
+
+  _updateLampTransform(){
+    const { light, target, muzzle, behavior } = this.lamp;
+    if (!light || !target || !muzzle){
+      return;
+    }
+    muzzle.updateMatrixWorld?.(true);
+    muzzle.getWorldPosition(TMP_POSITION);
+    muzzle.getWorldQuaternion(TMP_QUATERNION);
+    light.position.copy(TMP_POSITION);
+    const distance = behavior?.targetDistance ?? 48;
+    const direction = TMP_DIRECTION.set(0, 1, 0).applyQuaternion(TMP_QUATERNION).normalize();
+    target.position.copy(TMP_POSITION).addScaledVector(direction, distance);
   }
 
   _updateExplosions(dt){
