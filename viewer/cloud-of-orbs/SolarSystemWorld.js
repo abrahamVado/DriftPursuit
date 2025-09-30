@@ -9,9 +9,10 @@ const TMP_RIGHT = new THREE.Vector3();
 const TMP_UP = new THREE.Vector3(0, 0, 1);
 const TMP_PLANET_POS = new THREE.Vector3();
 const TMP_RADIAL = new THREE.Vector3();
+const TMP_SHIP_POS = new THREE.Vector3();
 
-const DEFAULT_RADIUS_SCALE = 120;
-const DEFAULT_ORBIT_SCALE = 3200;
+const DEFAULT_RADIUS_SCALE = 180;
+const DEFAULT_ORBIT_SCALE = 4200;
 const CAMERA_BLEND_RATE = 6.4;
 const CAMERA_LOOK_BLEND = 5.6;
 const DISTANCE_BLEND_RATE = 5.1;
@@ -101,6 +102,9 @@ export class SolarSystemWorld {
     this.focusPlanetId = initialPlanetId ?? this._getDefaultPlanetId();
     this.setFocusPlanet(this.focusPlanetId);
 
+    this.savedShipState = null;
+    this.savedShipFocusPlanetId = null;
+
     this.cameraRig = {
       camera: this.camera,
       update: (dt, _metrics, orbitInput) => {
@@ -178,6 +182,7 @@ export class SolarSystemWorld {
 
   exitSystemView(){
     if (!this.systemViewActive) return;
+    this._captureShipStateForReturn();
     this.systemViewActive = false;
     this.playerShipNeedsPlacement = true;
     this.playerShip?.setActive(false);
@@ -414,13 +419,24 @@ export class SolarSystemWorld {
   _ensureShipPlacement(planet, { snapCamera = false } = {}){
     if (!this.playerShip || !planet) return;
     if (!this.systemViewActive) return;
-    if (!this.playerShipNeedsPlacement && this.playerShip.hasLaunched){
+
+    const hasSavedState = Boolean(this.savedShipState && this.savedShipFocusPlanetId === planet.id);
+    if (!hasSavedState && !this.playerShipNeedsPlacement && this.playerShip.hasLaunched){
+      return;
+    }
+
+    if (hasSavedState && this._applySavedShipState(planet)){
+      if (snapCamera){
+        this.orbitAngles.yaw = 0;
+        this.orbitAngles.pitch = 0;
+        this._updateCamera(0, this.lastOrbitInput, this.lastShipState, planet);
+      }
       return;
     }
 
     const spawn = this._computeShipSpawnPosition(planet);
     this.playerShip.setPosition(spawn.position, { keepVelocity: false });
-    this.playerShip.lookTowards(spawn.target, { up: TMP_UP });
+    this._orientShipAwayFromPlanet(planet, { alignVelocity: true, speed: this.playerShip?.velocity?.length?.() ?? 0 });
     this.playerShip.setActive(true);
     this.playerShip.setVisible(true);
     this.playerShipNeedsPlacement = false;
@@ -448,14 +464,98 @@ export class SolarSystemWorld {
     }
     tangent.normalize();
 
-    const altitude = Math.max(planet.radius * 0.85, 320);
-    const standoff = Math.max(planet.radius * 3.6, 900 + planet.orbitDistance * 0.08);
+    const altitude = Math.max(planet.radius * 1.25, 520);
+    const standoff = Math.max(planet.radius * 4.2, 1200 + planet.orbitDistance * 0.12);
 
     const position = planetPosition.clone()
       .addScaledVector(radial, altitude)
       .addScaledVector(tangent, standoff);
 
     return { position, target: planetPosition.clone() };
+  }
+
+  _captureShipStateForReturn(){
+    if (!this.playerShip || !this.focusPlanetId) return;
+    const state = this.playerShip.getState?.();
+    if (!state?.position || !state?.orientation){
+      return;
+    }
+    this.savedShipState = {
+      position: state.position.clone(),
+      orientation: state.orientation.clone(),
+      velocity: state.velocity?.clone?.() ?? new THREE.Vector3(),
+      forward: this.playerShip.getForwardVector?.(new THREE.Vector3())
+        ?? state.forward?.clone?.()
+        ?? new THREE.Vector3(0, 1, 0),
+      up: this.playerShip.getUpVector?.(new THREE.Vector3())
+        ?? state.up?.clone?.()
+        ?? new THREE.Vector3(0, 0, 1),
+      throttle: typeof this.playerShip.throttle === 'number' ? this.playerShip.throttle : 0,
+      hasLaunched: Boolean(this.playerShip.hasLaunched),
+    };
+    this.savedShipFocusPlanetId = this.focusPlanetId;
+  }
+
+  _applySavedShipState(planet){
+    if (!this.savedShipState || this.savedShipFocusPlanetId !== planet.id){
+      return false;
+    }
+
+    const { position, velocity, throttle, hasLaunched } = this.savedShipState;
+    const speed = velocity.length?.() ?? 0;
+
+    this.playerShip.setPosition(position, { keepVelocity: true });
+    if (this.playerShip.velocity && velocity){
+      this.playerShip.velocity.copy(velocity);
+    }
+    if (typeof throttle === 'number'){
+      this.playerShip.throttle = throttle;
+      this.playerShip.speed = speed;
+      if (typeof this.playerShip._applyPropulsorIntensity === 'function'){
+        this.playerShip._applyPropulsorIntensity(throttle);
+      }
+    }
+    this.playerShip.hasLaunched = hasLaunched || this.playerShip.hasLaunched;
+
+    this._orientShipAwayFromPlanet(planet, {
+      alignVelocity: true,
+      speed: speed > 0 ? speed : this.playerShip.velocity?.length?.() ?? 0,
+    });
+    this.playerShip.setActive(true);
+    this.playerShip.setVisible(true);
+    this.playerShipNeedsPlacement = false;
+
+    this.lastShipState = this.playerShip.getState?.() ?? this.savedShipState;
+    this._updateMetricsFromShip(planet, this.lastShipState);
+
+    const planetPosition = planet.mesh.getWorldPosition(TMP_PLANET_POS);
+    this.cameraDistance = position.distanceTo(planetPosition);
+
+    this.savedShipState = null;
+    this.savedShipFocusPlanetId = null;
+    return true;
+  }
+
+  _orientShipAwayFromPlanet(planet, { alignVelocity = false, speed = 0 } = {}){
+    if (!this.playerShip || !planet) return;
+    const planetPosition = planet.mesh.getWorldPosition(TMP_PLANET_POS);
+    const shipPosition = this.playerShip.getPosition?.(TMP_SHIP_POS)
+      ?? TMP_SHIP_POS.copy(this.playerShip.mesh?.position ?? TMP_SHIP_POS.set(0, 0, 0));
+    const outward = TMP_FORWARD.copy(shipPosition).sub(planetPosition);
+    if (outward.lengthSq() < 1e-6){
+      outward.set(0, 1, 0);
+    } else {
+      outward.normalize();
+    }
+    const lookTarget = TMP_TARGET.copy(shipPosition).add(outward);
+    this.playerShip.lookTowards(lookTarget, { up: TMP_UP });
+    if (alignVelocity && this.playerShip.velocity){
+      const magnitude = Number.isFinite(speed) && speed > 0
+        ? speed
+        : this.playerShip.velocity.length();
+      this.playerShip.velocity.copy(outward).multiplyScalar(magnitude);
+      this.playerShip.speed = magnitude;
+    }
   }
 
   _updateMetricsFromShip(planet, shipState){
