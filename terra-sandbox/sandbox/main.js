@@ -54,6 +54,7 @@ sun.shadow.camera.top = 800;
 sun.shadow.camera.bottom = -800;
 sun.shadow.camera.far = 2200;
 scene.add(sun);
+
 const BASE_HEMISPHERE_INTENSITY = hemisphere.intensity;
 const BASE_SUN_INTENSITY = sun.intensity;
 
@@ -68,8 +69,17 @@ scene.add(planeMesh);
 const planeController = new PlaneController();
 planeController.attachMesh(planeMesh);
 planeController.setAuxiliaryLightsActive(false);
+
+// Capture baseline flight dynamics once
 const BASE_PLANE_GRAVITY = planeController.gravity;
 const BASE_PROPULSOR_LIFT = planeController.propulsorLift;
+const BASE_MIN_SPEED = planeController.minSpeed;
+const BASE_MAX_SPEED = planeController.maxSpeed;
+const BASE_MAX_BOOST_SPEED = planeController.maxBoostSpeed;
+const BASE_ACCELERATION = planeController.acceleration;
+const BASE_AFTERBURNER_ACCELERATION = planeController.afterburnerAcceleration;
+const BASE_DRAG = planeController.drag;
+const BASE_BRAKE_DRAG = planeController.brakeDrag;
 
 const carRig = createCarRig();
 scene.add(carRig.carMesh);
@@ -197,8 +207,17 @@ function applyPlanetEnvironment(){
   if (world._ocean) world._ocean.visible = true;
   spaceScene.setVisible(false);
   planeController.setAuxiliaryLightsActive(false);
+
+  // Restore baseline flight dynamics
   planeController.gravity = BASE_PLANE_GRAVITY;
   planeController.propulsorLift = BASE_PROPULSOR_LIFT;
+  planeController.minSpeed = BASE_MIN_SPEED;
+  planeController.maxSpeed = BASE_MAX_SPEED;
+  planeController.maxBoostSpeed = BASE_MAX_BOOST_SPEED;
+  planeController.acceleration = BASE_ACCELERATION;
+  planeController.afterburnerAcceleration = BASE_AFTERBURNER_ACCELERATION;
+  planeController.drag = BASE_DRAG;
+  planeController.brakeDrag = BASE_BRAKE_DRAG;
 }
 
 function applySpaceEnvironment(){
@@ -215,8 +234,17 @@ function applySpaceEnvironment(){
   if (world._ocean) world._ocean.visible = false;
   spaceScene.setVisible(true);
   planeController.setAuxiliaryLightsActive(true, 1.3);
+
+  // Zero-G-ish tuning
   planeController.gravity = BASE_PLANE_GRAVITY * 0.14;
   planeController.propulsorLift = BASE_PROPULSOR_LIFT * 0.32;
+  planeController.minSpeed = Math.min(8, BASE_MIN_SPEED * 0.25);
+  planeController.maxSpeed = BASE_MAX_SPEED * 1.8;
+  planeController.maxBoostSpeed = BASE_MAX_BOOST_SPEED * 2.2;
+  planeController.acceleration = BASE_ACCELERATION * 1.5;
+  planeController.afterburnerAcceleration = BASE_AFTERBURNER_ACCELERATION * 1.7;
+  planeController.drag = BASE_DRAG * 0.35;
+  planeController.brakeDrag = BASE_BRAKE_DRAG * 0.5;
 }
 
 function enterSpaceScenario(){
