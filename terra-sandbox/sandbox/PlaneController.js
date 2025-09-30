@@ -87,6 +87,8 @@ export class PlaneController {
     // Visual propulsion hooks
     this.propulsorHeat = 0;
     this.propulsorRefs = [];
+    this.navigationLightsEnabled = true;
+    this.navigationLights = [];
 
     // Extras
     this.altitude = 0;
@@ -101,6 +103,9 @@ export class PlaneController {
   attachMesh(mesh){
     this.mesh = mesh ?? null;
     this.propulsorRefs = Array.isArray(mesh?.userData?.propulsors) ? mesh.userData.propulsors : [];
+    this.navigationLights = Array.isArray(mesh?.userData?.navigationLights)
+      ? mesh.userData.navigationLights
+      : [];
     if (this.mesh){
       this.mesh.position.copy(this.position);
       this.mesh.quaternion.copy(this.orientation);
@@ -117,7 +122,8 @@ export class PlaneController {
         leadTarget.renderOrder = 2;
         this.mesh.add(leadTarget);
       }
-      this._applyPropulsorIntensity(this.propulsorHeat);
+      this._applyPropulsorIntensity(this.propulsorHeat, this._getNormalizedSpeed());
+      this._applyNavigationLights();
     }
   }
 
@@ -147,7 +153,8 @@ export class PlaneController {
     this._updateOrientation();
 
     this.propulsorHeat = this.throttle;
-    this._applyPropulsorIntensity(this.propulsorHeat);
+    this._applyPropulsorIntensity(this.propulsorHeat, this._getNormalizedSpeed());
+    this._applyNavigationLights();
 
     if (this.mesh){
       this.mesh.position.copy(this.position);
@@ -291,6 +298,7 @@ export class PlaneController {
       targetThrottle: this.targetThrottle,
       altitude: this.altitude,
       aim: { x: this.aim.x, y: this.aim.y },
+      navigationLights: this.navigationLightsEnabled,
     };
   }
 
@@ -304,15 +312,23 @@ export class PlaneController {
 
   _updatePropulsors(dt, targetIntensity = this.throttle){
     const blend = dt > 0 ? 1 - Math.exp(-this.propulsorResponse * dt) : 1;
-    const clampedTarget = THREE.MathUtils.clamp(targetIntensity, 0, 1);
-    this.propulsorHeat += (clampedTarget - this.propulsorHeat) * blend;
+    const { intensityTarget, speedFactor } = this._resolvePropulsorIntensity(targetIntensity);
+    this.propulsorHeat += (intensityTarget - this.propulsorHeat) * blend;
     this.propulsorHeat = THREE.MathUtils.clamp(this.propulsorHeat, 0, 1);
-    this._applyPropulsorIntensity(this.propulsorHeat);
+    this._applyPropulsorIntensity(this.propulsorHeat, speedFactor);
   }
 
-  _applyPropulsorIntensity(level){
+  _resolvePropulsorIntensity(targetIntensity){
+    const baseTarget = THREE.MathUtils.clamp(targetIntensity ?? 0, 0, 1.2);
+    const speedFactor = THREE.MathUtils.clamp(this._getNormalizedSpeed(), 0, 1);
+    const intensityTarget = THREE.MathUtils.clamp(Math.max(baseTarget, speedFactor), 0, 1);
+    return { intensityTarget, speedFactor };
+  }
+
+  _applyPropulsorIntensity(level, speedFactor = this._getNormalizedSpeed()){
     if (!this.propulsorRefs || this.propulsorRefs.length === 0) return;
     const intensity = THREE.MathUtils.clamp(level ?? 0, 0, 1);
+    const velocityLevel = THREE.MathUtils.clamp(speedFactor ?? intensity, 0, 1);
     for (const propulsor of this.propulsorRefs){
       if (!propulsor) continue;
 
@@ -320,6 +336,9 @@ export class PlaneController {
         const min = propulsor.minIntensity ?? 0.25;
         const max = propulsor.maxIntensity ?? 2.8;
         propulsor.light.intensity = THREE.MathUtils.lerp(min, max, intensity);
+        if (propulsor.coolLightColor && propulsor.hotLightColor){
+          propulsor.light.color.copy(propulsor.coolLightColor).lerp(propulsor.hotLightColor, velocityLevel);
+        }
         if (propulsor.light.shadow){
           propulsor.light.shadow.needsUpdate = true;
         }
@@ -331,14 +350,19 @@ export class PlaneController {
         propulsor.glowMaterial.opacity = intensity <= 0.001
           ? 0
           : THREE.MathUtils.lerp(minOpacity, maxOpacity, intensity);
+        if (propulsor.coolColor && propulsor.hotColor){
+          propulsor.glowMaterial.color.copy(propulsor.coolColor).lerp(propulsor.hotColor, velocityLevel);
+        }
       }
 
       if (propulsor.glowMesh){
         const minScale = propulsor.minScale ?? 0.7;
         const maxScale = propulsor.maxScale ?? 1.65;
         const scale = THREE.MathUtils.lerp(minScale, maxScale, intensity);
-        const scaleZ = propulsor.scaleZ ?? 1.6;
-        propulsor.glowMesh.scale.set(scale, scale, scale * scaleZ);
+        const minLength = propulsor.minLength ?? ((propulsor.scaleZ ?? 1.6) * 0.7);
+        const maxLength = propulsor.maxLength ?? ((propulsor.scaleZ ?? 1.6) * 1.6);
+        const length = THREE.MathUtils.lerp(minLength, maxLength, velocityLevel);
+        propulsor.glowMesh.scale.set(scale, scale, length);
       }
 
       if (propulsor.housingMaterial && typeof propulsor.housingMaterial.emissiveIntensity === 'number'){
@@ -347,6 +371,59 @@ export class PlaneController {
         propulsor.housingMaterial.emissiveIntensity = THREE.MathUtils.lerp(minEmissive, maxEmissive, intensity);
       }
     }
+  }
+
+  _getNormalizedSpeed(){
+    const reference = Number.isFinite(this.maxBoostSpeed) && this.maxBoostSpeed > 0
+      ? this.maxBoostSpeed
+      : Number.isFinite(this.maxSpeed) && this.maxSpeed > 0
+        ? this.maxSpeed
+        : Math.max(1, this.minSpeed);
+    if (reference <= 0) return 0;
+    const current = Math.max(0, this.velocity.length(), Number.isFinite(this.speed) ? this.speed : 0);
+    return THREE.MathUtils.clamp(current / reference, 0, 1.2);
+  }
+
+  _applyNavigationLights(){
+    if (!Array.isArray(this.navigationLights)) return;
+    for (const lightRef of this.navigationLights){
+      if (!lightRef) continue;
+      if (lightRef.light){
+        const maxIntensity = Number.isFinite(lightRef.maxIntensity)
+          ? lightRef.maxIntensity
+          : lightRef.light.intensity ?? 1;
+        const minIntensity = Number.isFinite(lightRef.minIntensity)
+          ? lightRef.minIntensity
+          : 0;
+        lightRef.light.intensity = this.navigationLightsEnabled ? maxIntensity : minIntensity;
+        lightRef.light.visible = this.navigationLightsEnabled || minIntensity > 0;
+      }
+      if (lightRef.material){
+        const maxOpacity = Number.isFinite(lightRef.maxOpacity)
+          ? lightRef.maxOpacity
+          : lightRef.material.opacity ?? 1;
+        const minOpacity = Number.isFinite(lightRef.minOpacity)
+          ? lightRef.minOpacity
+          : 0;
+        lightRef.material.opacity = this.navigationLightsEnabled ? maxOpacity : minOpacity;
+        lightRef.material.needsUpdate = true;
+      }
+      if (lightRef.mesh){
+        const keepVisible = this.navigationLightsEnabled || lightRef.keepVisibleWhenOff;
+        lightRef.mesh.visible = keepVisible;
+      }
+    }
+  }
+
+  setNavigationLightsEnabled(enabled){
+    const desired = !!enabled;
+    if (desired === this.navigationLightsEnabled) return;
+    this.navigationLightsEnabled = desired;
+    this._applyNavigationLights();
+  }
+
+  areNavigationLightsEnabled(){
+    return this.navigationLightsEnabled;
   }
 }
 
@@ -398,7 +475,7 @@ export function createPlaneMesh(){
     emissive: 0x121c33, emissiveIntensity: 0.08,
   });
   const baseGlowMaterial = new THREE.MeshBasicMaterial({
-    color: 0xffa86a, transparent: true, opacity: 0,
+    color: 0xffffff, transparent: true, opacity: 0,
     blending: THREE.AdditiveBlending, depthWrite: false, depthTest: false,
     toneMapped: false, side: THREE.DoubleSide,
   });
@@ -433,9 +510,17 @@ export function createPlaneMesh(){
     glow.scale.set(0.8, 0.8, index === 2 ? 1.8 : 1.5);
     group.add(glow);
 
-    const light = new THREE.PointLight(0xffb978, 0, index === 2 ? 120 : 80, 2.8);
+    const isCenter = index === 2;
+    const coolColor = new THREE.Color(isCenter ? 0x66d8ff : 0x58caff);
+    const hotColor = new THREE.Color(isCenter ? 0xfff0c4 : 0xffc884);
+    glowMaterial.color.copy(coolColor);
+
+    const light = new THREE.PointLight(0xffffff, 0, isCenter ? 140 : 90, 2.8);
     light.position.copy(offset);
-    light.position.y -= index === 2 ? 1.2 : 0.8;
+    light.position.y -= isCenter ? 1.2 : 0.8;
+    const coolLightColor = new THREE.Color(isCenter ? 0x74d4ff : 0x65e2ff);
+    const hotLightColor = new THREE.Color(isCenter ? 0xfff3d2 : 0xffd2a4);
+    light.color.copy(coolLightColor);
     group.add(light);
 
     propulsors.push({
@@ -444,19 +529,66 @@ export function createPlaneMesh(){
       glowMaterial,
       housingMaterial: housing.material,
       minIntensity: 0.35,
-      maxIntensity: index === 2 ? 3.8 : 2.9,
+      maxIntensity: isCenter ? 3.8 : 2.9,
       minOpacity: 0.12,
       maxOpacity: 0.95,
       minScale: 0.75,
-      maxScale: index === 2 ? 1.8 : 1.55,
-      scaleZ: index === 2 ? 2.2 : 1.6,
+      maxScale: isCenter ? 1.8 : 1.55,
+      scaleZ: isCenter ? 2.2 : 1.6,
       minEmissive: 0.08,
-      maxEmissive: index === 2 ? 0.7 : 0.5,
+      maxEmissive: isCenter ? 0.7 : 0.5,
+      minLength: isCenter ? 1.9 : 1.3,
+      maxLength: isCenter ? 3.6 : 2.4,
+      coolColor,
+      hotColor,
+      coolLightColor,
+      hotLightColor,
+    });
+  });
+
+  const navigationLights = [];
+  const navigationLightConfigs = [
+    { position: new THREE.Vector3(-9.3, 0.6, 0.8), color: 0xff5f72, intensity: 1.1, range: 200, minOpacity: 0.08 },
+    { position: new THREE.Vector3(9.3, 0.6, 0.8), color: 0x68ff9c, intensity: 1.1, range: 200, minOpacity: 0.08 },
+    { position: new THREE.Vector3(0, 8.1, -0.3), color: 0x9edaff, intensity: 1.45, range: 320, minOpacity: 0.16, keepVisibleWhenOff: true, radius: 0.42 },
+  ];
+  navigationLightConfigs.forEach((config) => {
+    const light = new THREE.PointLight(
+      config.color,
+      config.intensity ?? 1.1,
+      config.range ?? 220,
+      2.4,
+    );
+    light.position.copy(config.position);
+    group.add(light);
+
+    const lensMaterial = new THREE.MeshBasicMaterial({
+      color: config.color,
+      transparent: true,
+      opacity: config.opacity ?? 0.92,
+      toneMapped: false,
+    });
+    const lens = new THREE.Mesh(new THREE.SphereGeometry(config.radius ?? 0.34, 12, 12), lensMaterial);
+    lens.position.copy(config.position);
+    lens.renderOrder = 4;
+    lens.userData.skipShadowAuto = true;
+    group.add(lens);
+
+    navigationLights.push({
+      light,
+      mesh: lens,
+      material: lensMaterial,
+      maxIntensity: light.intensity,
+      minIntensity: config.minIntensity ?? 0,
+      maxOpacity: lensMaterial.opacity,
+      minOpacity: config.minOpacity ?? 0.12,
+      keepVisibleWhenOff: !!config.keepVisibleWhenOff,
     });
   });
 
   group.traverse((obj) => {
     if (obj.isMesh){
+      if (obj.userData?.skipShadowAuto) return;
       obj.castShadow = true;
       obj.receiveShadow = true;
     }
@@ -464,6 +596,7 @@ export function createPlaneMesh(){
 
   group.name = 'ArcadePlane';
   group.userData.propulsors = propulsors;
+  group.userData.navigationLights = navigationLights;
 
   return group;
 }

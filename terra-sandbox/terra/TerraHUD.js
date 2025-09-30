@@ -247,6 +247,36 @@ const THROTTLE_BAR_FILL_STYLE = `
   box-shadow: 0 0 18px rgba(110, 220, 255, 0.55);
 `;
 
+const LIGHT_TOGGLE_BUTTON_STYLE = `
+  min-width: 156px;
+  padding: 12px 18px;
+  border-radius: 14px;
+  border: 1px solid rgba(112, 188, 255, 0.38);
+  background: linear-gradient(180deg, rgba(18, 36, 62, 0.78) 0%, rgba(8, 18, 32, 0.9) 100%);
+  color: #e3f4ff;
+  font-family: 'Rajdhani', 'Segoe UI', sans-serif;
+  font-size: 13px;
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
+  cursor: pointer;
+  pointer-events: auto;
+  transition: transform 160ms ease, box-shadow 160ms ease, border-color 160ms ease, background 160ms ease;
+`;
+
+const LIGHT_TOGGLE_BUTTON_ACTIVE_STYLE = `
+  background: linear-gradient(180deg, rgba(60, 128, 210, 0.88) 0%, rgba(42, 96, 188, 0.94) 100%);
+  border-color: rgba(162, 228, 255, 0.78);
+  box-shadow: 0 18px 44px rgba(54, 128, 210, 0.5);
+  transform: translateY(-2px);
+`;
+
+const LIGHT_TOGGLE_BUTTON_INACTIVE_STYLE = `
+  background: linear-gradient(180deg, rgba(18, 30, 48, 0.74) 0%, rgba(10, 18, 30, 0.9) 100%);
+  border-color: rgba(84, 132, 180, 0.42);
+  box-shadow: none;
+  opacity: 0.82;
+`;
+
 const AMMO_BUTTON_STYLE = `
   position: relative;
   display: flex;
@@ -299,18 +329,30 @@ function isElement(node){
 }
 
 export class TerraHUD extends BaseHUD {
-  constructor({ controls = {}, ammoOptions = [], mapOptions = [], onAmmoSelect = null, onMapSelect = null } = {}){
+  constructor({
+    controls = {},
+    ammoOptions = [],
+    mapOptions = [],
+    onAmmoSelect = null,
+    onMapSelect = null,
+    onToggleLights = null,
+    initialLightsActive = true,
+  } = {}){
     super({ controls });
     this.onAmmoSelect = onAmmoSelect;
     this.onMapSelect = onMapSelect;
+    this.onLightsToggle = onToggleLights;
     this.selectedAmmoId = null;
     this.ammoButtons = new Map();
     this.selectedMapId = null;
     this.mapOptions = [];
     this.mapLabelText = 'Active Map';
+    this.lightsActive = initialLightsActive !== undefined ? !!initialLightsActive : true;
+    this.lightToggleButton = null;
 
     this._applyTheme();
     this._createToolbar();
+    this.setLightsActive(this.lightsActive, { silent: true });
     this.setAmmoOptions(ammoOptions);
     this.setMapOptions(mapOptions);
     this._updateThrottleIndicatorLabel();
@@ -392,11 +434,36 @@ export class TerraHUD extends BaseHUD {
     this.throttleBadge.appendChild(this.throttleBar);
     this.toolbar.appendChild(this.throttleBadge);
 
+    this.lightToggleButton = document.createElement('button');
+    this.lightToggleButton.type = 'button';
+    this.lightToggleButton.id = 'terra-hud-light-toggle';
+    this.lightToggleButton.addEventListener('click', () => {
+      this.setLightsActive(!this.lightsActive);
+    });
+    this.toolbar.appendChild(this.lightToggleButton);
+
     this.ammoContainer = document.createElement('div');
     applyStyle(this.ammoContainer, AMMO_GROUP_STYLE);
     this.toolbar.appendChild(this.ammoContainer);
 
     document.body.appendChild(this.toolbar);
+  }
+
+  setLightsActive(active, options = {}){
+    const silent = !!options?.silent;
+    const value = !!active;
+    this.lightsActive = value;
+    if (this.lightToggleButton){
+      const style = `${LIGHT_TOGGLE_BUTTON_STYLE}${value
+        ? LIGHT_TOGGLE_BUTTON_ACTIVE_STYLE
+        : LIGHT_TOGGLE_BUTTON_INACTIVE_STYLE}`;
+      applyStyle(this.lightToggleButton, style);
+      this.lightToggleButton.textContent = value ? 'Lights ON' : 'Lights OFF';
+      this.lightToggleButton.setAttribute('aria-pressed', value ? 'true' : 'false');
+    }
+    if (!silent && typeof this.onLightsToggle === 'function'){
+      this.onLightsToggle(value);
+    }
   }
 
   setAmmoOptions(options = []){
