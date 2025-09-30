@@ -62,6 +62,8 @@ export function createHud({
   mapOptions = [],
   onAmmoSelect,
   onMapSelect,
+  onToggleLights,
+  initialLightsActive,
   presets = createHudPresets(),
 } = {}){
   const hud = new TerraHUDClass({
@@ -70,6 +72,8 @@ export function createHud({
     mapOptions,
     onAmmoSelect,
     onMapSelect,
+    onToggleLights,
+    initialLightsActive,
   });
   return { hud, presets };
 }

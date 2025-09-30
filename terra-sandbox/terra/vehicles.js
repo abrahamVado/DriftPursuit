@@ -61,6 +61,7 @@ export function createVehicleSystem({
   const vehicles = new Map();
   const trackedVehicles = [];
   let activeVehicleId = null;
+  let navigationLightsEnabled = true;
 
   const METERS_PER_LATITUDE_DEGREE = 111320;
 
@@ -184,6 +185,7 @@ export function createVehicleSystem({
       throttle: 1,
     });
     if (planeController){
+      planeController.setNavigationLightsEnabled?.(navigationLightsEnabled);
       planeController.throttle = 1;
       planeController.targetThrottle = 1;
       const diveDirection = new THREE.Vector3(0, 1, 0).applyQuaternion(planeController.orientation).normalize();
@@ -698,6 +700,13 @@ export function createVehicleSystem({
     focusCameraOnVehicle(vehicle);
   }
 
+  function setNavigationLightsEnabled(enabled){
+    navigationLightsEnabled = !!enabled;
+    for (const vehicle of vehicles.values()){
+      vehicle.modes?.plane?.controller?.setNavigationLightsEnabled?.(navigationLightsEnabled);
+    }
+  }
+
   function update({ dt, elapsedTime, inputSample, movementScale = 1 }){
     const clampedScale = Number.isFinite(movementScale) ? Math.max(0, movementScale) : 1;
     for (const vehicle of vehicles.values()){
@@ -751,6 +760,8 @@ export function createVehicleSystem({
     registerVehicleCrash,
     handleProjectileHit,
     teleportActiveVehicle,
+    setNavigationLightsEnabled,
+    getNavigationLightsEnabled: () => navigationLightsEnabled,
   };
 }
   function teleportActiveVehicle({ position = null, velocity = null } = {}){
