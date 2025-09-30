@@ -90,6 +90,9 @@ export class PlaneController {
     this.propulsorRefs = [];
     this.navigationLightsEnabled = true;
     this.navigationLights = [];
+    this.auxiliaryLights = [];
+    this.auxiliaryLightsEnabled = false;
+    this.auxiliaryLightIntensity = 1;
 
     // Extras
     this.altitude = 0;
@@ -106,6 +109,9 @@ export class PlaneController {
     this.propulsorRefs = Array.isArray(mesh?.userData?.propulsors) ? mesh.userData.propulsors : [];
     this.navigationLights = Array.isArray(mesh?.userData?.navigationLights)
       ? mesh.userData.navigationLights
+      : [];
+    this.auxiliaryLights = Array.isArray(mesh?.userData?.auxiliaryLights)
+      ? mesh.userData.auxiliaryLights
       : [];
     if (this.mesh){
       this.mesh.position.copy(this.position);
@@ -125,6 +131,7 @@ export class PlaneController {
       }
       this._applyPropulsorIntensity(this.propulsorHeat, this._getNormalizedSpeed());
       this._applyNavigationLights();
+      this._applyAuxiliaryLights();
     }
   }
 
@@ -156,6 +163,7 @@ export class PlaneController {
     this.propulsorHeat = this.throttle;
     this._applyPropulsorIntensity(this.propulsorHeat, this._getNormalizedSpeed());
     this._applyNavigationLights();
+    this._applyAuxiliaryLights();
 
     if (this.mesh){
       this.mesh.position.copy(this.position);
@@ -300,6 +308,7 @@ export class PlaneController {
       altitude: this.altitude,
       aim: { x: this.aim.x, y: this.aim.y },
       navigationLights: this.navigationLightsEnabled,
+      auxiliaryLights: this.auxiliaryLightsEnabled,
     };
   }
 
@@ -359,17 +368,51 @@ export class PlaneController {
       if (propulsor.glowMesh){
         const minScale = propulsor.minScale ?? 0.7;
         const maxScale = propulsor.maxScale ?? 1.65;
-        const scale = THREE.MathUtils.lerp(minScale, maxScale, intensity);
+        const speedScale = THREE.MathUtils.lerp(1, propulsor.speedScale ?? 1.6, Math.pow(velocityLevel, propulsor.speedScalePower ?? 1.15));
+        const scale = THREE.MathUtils.lerp(minScale, maxScale, intensity) * speedScale;
         const minLength = propulsor.minLength ?? ((propulsor.scaleZ ?? 1.6) * 0.7);
         const maxLength = propulsor.maxLength ?? ((propulsor.scaleZ ?? 1.6) * 1.6);
-        const length = THREE.MathUtils.lerp(minLength, maxLength, velocityLevel);
-        propulsor.glowMesh.scale.set(scale, scale, length);
-      }
+        const length = THREE.MathUtils.lerp(minLength, maxLength, Math.pow(velocityLevel, propulsor.lengthPower ?? 1.1));
+        propulsor.glowMesh.scale.set(scale, scale, length * speedScale);
+        }
 
       if (propulsor.housingMaterial && typeof propulsor.housingMaterial.emissiveIntensity === 'number'){
         const minEmissive = propulsor.minEmissive ?? 0.05;
         const maxEmissive = propulsor.maxEmissive ?? 0.45;
         propulsor.housingMaterial.emissiveIntensity = THREE.MathUtils.lerp(minEmissive, maxEmissive, intensity);
+      }
+    }
+  }
+
+  setAuxiliaryLightsActive(enabled, intensity = null){
+    this.auxiliaryLightsEnabled = !!enabled;
+    if (Number.isFinite(intensity)){
+      this.auxiliaryLightIntensity = Math.max(0, intensity);
+    }
+    this._applyAuxiliaryLights();
+  }
+
+  _applyAuxiliaryLights(){
+    if (!Array.isArray(this.auxiliaryLights)) return;
+    const enabled = this.auxiliaryLightsEnabled;
+    const level = enabled ? Math.max(0, this.auxiliaryLightIntensity ?? 1) : 0;
+    for (const aux of this.auxiliaryLights){
+      if (!aux) continue;
+      if (aux.light){
+        const maxIntensity = Number.isFinite(aux.maxIntensity) ? aux.maxIntensity : (aux.light.intensity ?? 1);
+        aux.light.intensity = maxIntensity * level;
+        aux.light.visible = enabled || (aux.minIntensity ?? 0) > 0;
+        if (Number.isFinite(aux.distance)) aux.light.distance = aux.distance;
+      }
+      if (aux.target && aux.light){
+        aux.light.target.position.copy(aux.target.position);
+      }
+      if (aux.material){
+        const minOpacity = aux.minOpacity ?? 0.04;
+        const maxOpacity = aux.maxOpacity ?? aux.material.opacity ?? 1;
+        const opacity = enabled ? THREE.MathUtils.lerp(minOpacity, maxOpacity, Math.min(1, level)) : minOpacity;
+        aux.material.opacity = opacity;
+        aux.material.needsUpdate = true;
       }
     }
   }
@@ -544,6 +587,9 @@ export function createPlaneMesh(){
       hotColor,
       coolLightColor,
       hotLightColor,
+      speedScale: isCenter ? 2.4 : 1.9,
+      speedScalePower: isCenter ? 1.25 : 1.18,
+      lengthPower: 1.22,
     });
   });
 
@@ -587,6 +633,47 @@ export function createPlaneMesh(){
     });
   });
 
+  const auxiliaryLights = [];
+  const spotlightMaterial = new THREE.MeshBasicMaterial({ color: 0xb9d8ff, transparent: true, opacity: 0.08, toneMapped: false });
+  const spotlightGeometry = new THREE.CylinderGeometry(0.28, 0.12, 0.8, 10, 1, true);
+  const noseSpot = new THREE.SpotLight(0xd6ecff, 0, 460, Math.PI / 6.2, 0.32, 1.18);
+  noseSpot.position.set(0, 7.6, -0.4);
+  const noseTarget = new THREE.Object3D();
+  noseTarget.position.set(0, 45, -6);
+  group.add(noseSpot);
+  group.add(noseTarget);
+  noseSpot.target = noseTarget;
+  const noseEmitter = new THREE.Mesh(spotlightGeometry, spotlightMaterial.clone());
+  noseEmitter.position.copy(noseSpot.position);
+  noseEmitter.rotation.x = Math.PI / 2;
+  group.add(noseEmitter);
+  auxiliaryLights.push({
+    light: noseSpot,
+    target: noseTarget,
+    material: noseEmitter.material,
+    maxIntensity: 2.6,
+    minOpacity: 0.04,
+  });
+
+  const bellySpot = new THREE.SpotLight(0xc8e7ff, 0, 360, Math.PI / 5.2, 0.4, 1.15);
+  bellySpot.position.set(0, -1.2, -1.6);
+  const bellyTarget = new THREE.Object3D();
+  bellyTarget.position.set(0, 16, -8);
+  group.add(bellySpot);
+  group.add(bellyTarget);
+  bellySpot.target = bellyTarget;
+  const bellyEmitter = new THREE.Mesh(spotlightGeometry.clone(), spotlightMaterial.clone());
+  bellyEmitter.position.copy(bellySpot.position);
+  bellyEmitter.rotation.x = Math.PI / 2;
+  group.add(bellyEmitter);
+  auxiliaryLights.push({
+    light: bellySpot,
+    target: bellyTarget,
+    material: bellyEmitter.material,
+    maxIntensity: 1.8,
+    minOpacity: 0.05,
+  });
+
   group.traverse((obj) => {
     if (obj.isMesh){
       if (obj.userData?.skipShadowAuto) return;
@@ -598,6 +685,7 @@ export function createPlaneMesh(){
   group.name = 'ArcadePlane';
   group.userData.propulsors = propulsors;
   group.userData.navigationLights = navigationLights;
+  group.userData.auxiliaryLights = auxiliaryLights;
 
   return group;
 }
