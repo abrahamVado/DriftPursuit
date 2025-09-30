@@ -1,19 +1,5 @@
 import { THREE } from './threeLoader.js';
-
-const GRAD3 = [
-  [1, 1, 0],
-  [-1, 1, 0],
-  [1, -1, 0],
-  [-1, -1, 0],
-  [1, 0, 1],
-  [-1, 0, 1],
-  [1, 0, -1],
-  [-1, 0, -1],
-  [0, 1, 1],
-  [0, -1, 1],
-  [0, 1, -1],
-  [0, -1, -1],
-];
+import { createNoiseContext } from './noiseContext.js';
 
 const FACE_DEFINITIONS = [
   {
@@ -77,86 +63,6 @@ const FACE_DEFINITIONS = [
     ],
   },
 ];
-
-function fade(t) {
-  return t * t * t * (t * (t * 6 - 15) + 10);
-}
-
-function lerp(a, b, t) {
-  return a + (b - a) * t;
-}
-
-function hash3(x, y, z, seed) {
-  let h = Math.imul(x, 374761393);
-  h = (h + Math.imul(y, 668265263)) | 0;
-  h = (h + Math.imul(z, 987643213)) | 0;
-  h = (h + Math.imul(seed, 362437)) | 0;
-  h = (h ^ (h >>> 13)) >>> 0;
-  h = Math.imul(h, 1274126177);
-  return h ^ (h >>> 16);
-}
-
-function grad3(hashValue, x, y, z) {
-  const g = GRAD3[hashValue % GRAD3.length];
-  return g[0] * x + g[1] * y + g[2] * z;
-}
-
-function perlin3(x, y, z, seed = 0) {
-  const xi0 = Math.floor(x);
-  const yi0 = Math.floor(y);
-  const zi0 = Math.floor(z);
-  const xf0 = x - xi0;
-  const yf0 = y - yi0;
-  const zf0 = z - zi0;
-  const xi1 = xi0 + 1;
-  const yi1 = yi0 + 1;
-  const zi1 = zi0 + 1;
-
-  const g000 = grad3(hash3(xi0, yi0, zi0, seed), xf0, yf0, zf0);
-  const g100 = grad3(hash3(xi1, yi0, zi0, seed), xf0 - 1, yf0, zf0);
-  const g010 = grad3(hash3(xi0, yi1, zi0, seed), xf0, yf0 - 1, zf0);
-  const g110 = grad3(hash3(xi1, yi1, zi0, seed), xf0 - 1, yf0 - 1, zf0);
-  const g001 = grad3(hash3(xi0, yi0, zi1, seed), xf0, yf0, zf0 - 1);
-  const g101 = grad3(hash3(xi1, yi0, zi1, seed), xf0 - 1, yf0, zf0 - 1);
-  const g011 = grad3(hash3(xi0, yi1, zi1, seed), xf0, yf0 - 1, zf0 - 1);
-  const g111 = grad3(hash3(xi1, yi1, zi1, seed), xf0 - 1, yf0 - 1, zf0 - 1);
-
-  const u = fade(xf0);
-  const v = fade(yf0);
-  const w = fade(zf0);
-
-  const x00 = lerp(g000, g100, u);
-  const x10 = lerp(g010, g110, u);
-  const x01 = lerp(g001, g101, u);
-  const x11 = lerp(g011, g111, u);
-
-  const y0 = lerp(x00, x10, v);
-  const y1 = lerp(x01, x11, v);
-
-  return lerp(y0, y1, w);
-}
-
-function fractalNoise3(x, y, z, {
-  seed = 0,
-  octaves = 4,
-  lacunarity = 2,
-  gain = 0.5,
-  frequency = 0.02,
-} = {}) {
-  let amp = 1;
-  let freq = frequency;
-  let total = 0;
-  let maxAmp = 0;
-
-  for (let i = 0; i < octaves; i += 1) {
-    total += perlin3(x * freq, y * freq, z * freq, seed + i * 97) * amp;
-    maxAmp += amp;
-    amp *= gain;
-    freq *= lacunarity;
-  }
-
-  return maxAmp === 0 ? 0 : total / maxAmp;
-}
 
 function generateChunkGeometry({ origin, chunkSize, resolution, threshold, densityFn }) {
   const step = chunkSize / resolution;
@@ -252,15 +158,17 @@ class MarsCaveChunk {
     this.mesh.receiveShadow = true;
     this.mesh.visible = false;
     this.coordKey = null;
+    this.metadata = null;
   }
 
-  configure({ coordKey, origin, densityFn, chunkSize, resolution, threshold }) {
+  configure({ coordKey, origin, densityFn, chunkSize, resolution, threshold, metadata }) {
     this.coordKey = coordKey;
     this.chunkSize = chunkSize;
     this.resolution = resolution;
     this.threshold = threshold;
     this.origin.copy(origin);
     this.mesh.position.copy(origin);
+    this.metadata = metadata ?? null;
     this.rebuild(densityFn);
   }
 
@@ -315,6 +223,8 @@ export class MarsCaveTerrainManager {
     this.activeChunks = new Map();
     this.chunkPool = [];
     this.dustField = null;
+    this.noise = createNoiseContext(this.seed);
+    this.chunkMetadata = new Map();
 
     this._densityFn = this._densityAt.bind(this);
     this._desiredOffsets = [
@@ -331,6 +241,11 @@ export class MarsCaveTerrainManager {
     return `${coord.x}:${coord.y}:${coord.z}`;
   }
 
+  _parseKey(key) {
+    const [x, y, z] = key.split(':').map((value) => parseInt(value, 10) || 0);
+    return { x, y, z };
+  }
+
   _originForCoord(coord) {
     return new THREE.Vector3(
       coord.x * this.chunkSize + this.horizontalOffset,
@@ -343,48 +258,128 @@ export class MarsCaveTerrainManager {
     return Math.floor((value - offset) / this.chunkSize);
   }
 
+  getChunkMetadata(coord) {
+    return this.chunkMetadata.get(this._key(coord));
+  }
+
   _surfaceElevation(x, y) {
-    const base = fractalNoise3(x, y, 0, {
-      seed: this.seed + 211,
+    const base = this.noise.fractalSimplex2(x, y, {
       frequency: 0.02,
-      octaves: 4,
-      gain: 0.55,
+      octaves: 3,
+      gain: 0.58,
+      lacunarity: 1.95,
+      salt: 0x211,
     });
-    const ridged = fractalNoise3(x + 400, y - 400, 0, {
-      seed: this.seed + 977,
-      frequency: 0.04,
+    const ridged = this.noise.fractalSimplex2(x + 400, y - 400, {
+      frequency: 0.038,
       octaves: 3,
       gain: 0.6,
+      lacunarity: 2.1,
+      salt: 0x977,
     });
     return 6 + base * 8 + ridged * 4;
+  }
+
+  _biomeMask(x, y) {
+    return this.noise.biomeMask2(x, y, {
+      frequency: 0.018,
+      octaves: 3,
+      gain: 0.6,
+      lacunarity: 2.25,
+      salt: 0x351,
+    });
+  }
+
+  _biomeDensityBias(maskValue) {
+    if (maskValue < 0.33) return -0.12;
+    if (maskValue < 0.66) return 0.04;
+    return 0.12;
+  }
+
+  _hazardField(x, y, z) {
+    const swirls = this.noise.fractalSimplex3(x, y, z, {
+      frequency: 0.11,
+      octaves: 2,
+      gain: 0.52,
+      lacunarity: 2.4,
+      salt: 0x611,
+    });
+    const pulses = this.noise.simplex3(x, y, z, {
+      frequency: 0.035,
+      amplitude: 0.18,
+      offset: [120, -260, 40],
+      salt: 0x7b9,
+    });
+    return Math.abs(swirls) * 0.18 + pulses;
+  }
+
+  _resourceNodesForChunk(coord, biome) {
+    const period = biome === 'lumenite' ? 3 : 5;
+    const chance = biome === 'lumenite' ? 0.68 : 0.36;
+    const landmark = this.noise.landmarkEveryNChunks({
+      chunkX: coord.x,
+      chunkY: coord.y,
+      chunkZ: coord.z,
+      salt: biome === 'lumenite' ? 0x9a1 : 0x5f3,
+      period,
+      chance,
+      jitter: 0.8,
+    });
+    if (!landmark.active) return [];
+    return [
+      {
+        type: biome === 'lumenite' ? 'crystalCluster' : 'mineralPocket',
+        offset: landmark.offset,
+      },
+    ];
+  }
+
+  _describeChunk(coord) {
+    const cx = coord.x * this.chunkSize + this.chunkSize * 0.5;
+    const cy = coord.y * this.chunkSize + this.chunkSize * 0.5;
+    const mask = this._biomeMask(cx, cy);
+    let biome = 'ember';
+    if (mask >= 0.66) {
+      biome = 'lumenite';
+    } else if (mask >= 0.33) {
+      biome = 'siltstone';
+    }
+    const hazards = this._hazardField(cx, cy, 0);
+    const resources = this._resourceNodesForChunk(coord, biome);
+    return { biome, mask, hazards, resources };
   }
 
   _densityAt(x, y, z) {
     const surface = this._surfaceElevation(x, y);
     const vertical = (surface - z) / 6;
 
-    const caverns = fractalNoise3(x, y, z, {
-      seed: this.seed + 101,
-      frequency: 0.085,
-      octaves: 4,
-      gain: 0.55,
-    });
-    const pockets = fractalNoise3(x + 200, y - 200, z * 0.7, {
-      seed: this.seed + 409,
-      frequency: 0.12,
+    const cavernLayer = this.noise.fractalSimplex3(x, y, z, {
+      frequency: 0.082,
       octaves: 3,
-      gain: 0.58,
+      gain: 0.57,
+      lacunarity: 2.05,
+      salt: 0x101,
     });
-    const shafts = fractalNoise3(x * 0.45, y * 0.45, z, {
-      seed: this.seed + 901,
-      frequency: 0.18,
+    const tunnelLayer = this.noise.fractalSimplex3(x + 200, y - 200, z * 0.8, {
+      frequency: 0.14,
       octaves: 2,
       gain: 0.6,
+      lacunarity: 2.35,
+      salt: 0x409,
     });
-    const tunnelBand = Math.sin((x + this.seed * 0.13) * 0.06) + Math.sin((y - this.seed * 0.07) * 0.06);
+    const pocketLayer = this.noise.fractalSimplex3(x * 0.45, y * 0.45, z, {
+      frequency: 0.19,
+      octaves: 3,
+      gain: 0.58,
+      lacunarity: 1.95,
+      salt: 0x901,
+    });
+    const tunnelBand = Math.sin((x + this.seed * 0.13) * 0.058) + Math.sin((y - this.seed * 0.07) * 0.058);
     const radial = Math.cos(Math.sqrt(x * x + y * y) * 0.04 + this.seed * 0.01) * 0.12;
+    const biomeBias = this._biomeDensityBias(this._biomeMask(x, y));
+    const hazards = this._hazardField(x, y, z) * -0.32;
 
-    return vertical + caverns * 0.75 + pockets * 0.45 - Math.abs(tunnelBand) * 0.35 + shafts * 0.28 + radial - 0.2;
+    return vertical + cavernLayer * 0.78 - Math.abs(tunnelLayer) * 0.36 + pocketLayer * 0.34 + biomeBias + radial + hazards - 0.18;
   }
 
   sampleHeight(x, y) {
@@ -429,6 +424,7 @@ export class MarsCaveTerrainManager {
         this.group.remove(chunk.mesh);
         chunk.mesh.visible = false;
         this.chunkPool.push(chunk);
+        this.chunkMetadata.delete(key);
       }
     }
 
@@ -438,6 +434,7 @@ export class MarsCaveTerrainManager {
       if (!chunk) {
         chunk = this._acquireChunk();
         const origin = this._originForCoord(coord);
+        const metadata = this._describeChunk(coord);
         chunk.configure({
           coordKey: key,
           origin,
@@ -445,9 +442,14 @@ export class MarsCaveTerrainManager {
           chunkSize: this.chunkSize,
           resolution: this.resolution,
           threshold: this.threshold,
+          metadata,
         });
         this.group.add(chunk.mesh);
         this.activeChunks.set(key, chunk);
+        this.chunkMetadata.set(key, metadata);
+      } else if (!this.chunkMetadata.has(key)) {
+        const metadata = chunk.metadata ?? this._describeChunk(coord);
+        this.chunkMetadata.set(key, metadata);
       }
     }
   }
@@ -466,7 +468,11 @@ export class MarsCaveTerrainManager {
 
   regenerate(seed) {
     this.seed = seed >>> 0;
+    this.noise = createNoiseContext(this.seed);
+    this.chunkMetadata.clear();
     for (const chunk of this.activeChunks.values()) {
+      const coord = this._parseKey(chunk.coordKey);
+      const metadata = this._describeChunk(coord);
       chunk.configure({
         coordKey: chunk.coordKey,
         origin: chunk.mesh.position.clone(),
@@ -474,10 +480,12 @@ export class MarsCaveTerrainManager {
         chunkSize: this.chunkSize,
         resolution: this.resolution,
         threshold: this.threshold,
+        metadata,
       });
       if (!this.group.children.includes(chunk.mesh)) {
         this.group.add(chunk.mesh);
       }
+      this.chunkMetadata.set(chunk.coordKey, metadata);
     }
   }
 
@@ -492,6 +500,7 @@ export class MarsCaveTerrainManager {
     }
     this.chunkPool.length = 0;
     this.group.clear();
+    this.chunkMetadata.clear();
     if (this.material && this.material.dispose) {
       this.material.dispose();
     }
