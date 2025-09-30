@@ -1,108 +1,170 @@
 const THREE = (typeof window !== 'undefined' ? window.THREE : globalThis?.THREE) ?? null;
-if (!THREE){
-  throw new Error('ChaseCamera requires THREE to be available globally');
-}
+if (!THREE) throw new Error('ChaseCamera requires THREE to be available globally');
 
-const FORWARD = new THREE.Vector3(0, 1, 0);
-const UP = new THREE.Vector3(0, 0, 1);
-const RIGHT = new THREE.Vector3(1, 0, 0);
+// Temps
+const TMP_FORWARD = new THREE.Vector3();
+const TMP_FLAT_FORWARD = new THREE.Vector3();
+const TMP_UP = new THREE.Vector3(0, 0, 1);
+const TMP_TARGET = new THREE.Vector3();
+const TMP_LOOK = new THREE.Vector3();
+const TMP_RIGHT = new THREE.Vector3();
+const TMP_QUAT = new THREE.Quaternion();
+const TMP_QUAT2 = new THREE.Quaternion();
 
-function clamp(value, min, max){
-  return Math.min(max, Math.max(min, value));
-}
+function clamp(v, a, b){ return Math.min(b, Math.max(a, v)); }
+function smoothFactor(rate, dt){ return dt > 0 ? 1 - Math.exp(-rate * dt) : 1; }
 
+/**
+ * Third-person chase camera with:
+ *  - Smooth follow (stiffness, lookStiffness)
+ *  - Forward direction smoothing (forwardResponsiveness)
+ *  - Orbit input (yaw/pitch) with decay & limits
+ *  - Pitch-based height influence (pitchInfluence)
+ *  - Snap/reset helpers
+ */
 export class ChaseCamera {
-  constructor(camera, config = {}){
+  constructor(camera, {
+    distance = 70,
+    height = 22,
+    stiffness = 4,
+    lookStiffness = 6,
+    forwardResponsiveness = 5,
+    pitchInfluence = 0.3,
+    // orbit
+    maxOrbitYaw = THREE.MathUtils.degToRad(160),
+    maxOrbitPitch = THREE.MathUtils.degToRad(70),
+    orbitReturnSpeed = 2.6, // decay back to 0 when not active
+  } = {}){
     this.camera = camera;
-    this.position = new THREE.Vector3();
-    this.lookTarget = new THREE.Vector3();
-    this.velocity = new THREE.Vector3();
-    this.orbit = { yaw: 0, pitch: 0, active: false };
-    this.config = {
-      distance: 80,
-      height: 20,
-      stiffness: 4,
-      lookStiffness: 6,
-      forwardResponsiveness: 5,
-      pitchInfluence: 0.25,
-      orbitYawSpeed: 1.2,
-      orbitPitchSpeed: 0.9,
-      minPitch: THREE.MathUtils.degToRad(-50),
-      maxPitch: THREE.MathUtils.degToRad(60),
-      ...config,
-    };
-    if (this.camera){
-      this.camera.position.copy(this.position);
-    }
+
+    // config
+    this.distance = distance;
+    this.height = height;
+    this.stiffness = stiffness;
+    this.lookStiffness = lookStiffness;
+    this.forwardResponsiveness = forwardResponsiveness;
+    this.pitchInfluence = pitchInfluence;
+
+    this.maxOrbitYaw = maxOrbitYaw;
+    this.maxOrbitPitch = maxOrbitPitch;
+    this.orbitReturnSpeed = orbitReturnSpeed;
+
+    // state
+    this.currentPosition = camera?.position.clone() ?? new THREE.Vector3();
+    this.currentForward = new THREE.Vector3(0, 1, 0);
+    this.currentLookTarget = new THREE.Vector3();
+    this.orbitYaw = 0;
+    this.orbitPitch = 0;
   }
 
-  setConfig(config = {}){
-    Object.assign(this.config, config);
+  setConfig(cfg = {}){
+    for (const k of [
+      'distance','height','stiffness','lookStiffness',
+      'forwardResponsiveness','pitchInfluence',
+      'maxOrbitYaw','maxOrbitPitch','orbitReturnSpeed'
+    ]) if (k in cfg && Number.isFinite(cfg[k])) this[k] = cfg[k];
   }
 
   resetOrbit(){
-    this.orbit.yaw = 0;
-    this.orbit.pitch = 0;
+    this.orbitYaw = 0;
+    this.orbitPitch = 0;
   }
 
   snapTo(state){
-    if (!state || !state.position) return;
-    this.position.copy(state.position);
-    if (this.camera){
-      this.camera.position.copy(this.position);
-      const forward = FORWARD.clone().applyQuaternion(state.orientation ?? new THREE.Quaternion());
-      this.camera.lookAt(state.position.clone().add(forward.multiplyScalar(10)));
+    if (!state?.position || !this.camera) return;
+
+    if (state.orientation){
+      const forward = TMP_FORWARD.set(0, 1, 0).applyQuaternion(state.orientation).normalize();
+      const flat = TMP_FLAT_FORWARD.copy(forward); flat.z = 0;
+
+      if (flat.lengthSq() > 1e-4){
+        flat.normalize();
+        this.currentForward.copy(flat);
+      } else {
+        this.currentForward.set(0, 1, 0);
+      }
+
+      const pitchFactor = clamp(forward.z, -0.75, 0.75);
+      const desired = TMP_TARGET.copy(state.position)
+        .addScaledVector(this.currentForward, -this.distance)
+        .addScaledVector(TMP_UP, this.height + pitchFactor * this.distance * this.pitchInfluence);
+
+      this.currentPosition.copy(desired);
+      this.currentLookTarget.copy(state.position);
+    } else {
+      this.currentPosition.copy(state.position).addScaledVector(TMP_UP, this.height);
+      this.currentLookTarget.copy(state.position);
     }
+
+    this.camera.up.copy(TMP_UP);
+    this.camera.position.copy(this.currentPosition);
+    this.camera.lookAt(this.currentLookTarget);
   }
 
   update(targetState, dt, orbitInput){
-    if (!targetState || !targetState.position || !this.camera) return;
-    const delta = Math.max(0, dt ?? 0);
+    if (!this.camera || !targetState?.position || !targetState.orientation) return;
+    const rawForward = TMP_FORWARD.set(0, 1, 0).applyQuaternion(targetState.orientation).normalize();
 
-    if (orbitInput){
-      if (orbitInput.active){
-        this.orbit.yaw += orbitInput.yawDelta ?? 0;
-        this.orbit.pitch += orbitInput.pitchDelta ?? 0;
-        this.orbit.pitch = clamp(this.orbit.pitch, this.config.minPitch, this.config.maxPitch);
-        this.orbit.active = true;
-      } else if (this.orbit.active){
-        this.orbit.yaw *= Math.pow(0.82, delta * 60);
-        this.orbit.pitch *= Math.pow(0.82, delta * 60);
+    // Smooth the flat forward (ignore Z to avoid roll/pitch noise in follow offset)
+    const flatForward = TMP_FLAT_FORWARD.copy(rawForward); flatForward.z = 0;
+    if (flatForward.lengthSq() < 1e-5) flatForward.copy(this.currentForward); else flatForward.normalize();
+
+    const fBlend = smoothFactor(this.forwardResponsiveness, dt);
+    this.currentForward.lerp(flatForward, fBlend).normalize();
+
+    // Orbit input handling
+    this._updateOrbit(orbitInput, dt);
+
+    // Apply orbit yaw/pitch around currentForward
+    const rotatedForward = TMP_FORWARD.copy(this.currentForward);
+    if (this.orbitYaw !== 0){
+      rotatedForward.applyQuaternion(TMP_QUAT.setFromAxisAngle(TMP_UP, this.orbitYaw));
+    }
+    rotatedForward.normalize();
+
+    if (this.orbitPitch !== 0){
+      const right = TMP_RIGHT.crossVectors(rotatedForward, TMP_UP);
+      if (right.lengthSq() > 1e-5){
+        right.normalize();
+        rotatedForward.applyQuaternion(TMP_QUAT2.setFromAxisAngle(right, this.orbitPitch));
+        rotatedForward.normalize();
       }
     }
 
-    const orientation = targetState.orientation ?? new THREE.Quaternion();
-    const forward = FORWARD.clone().applyQuaternion(orientation).normalize();
-    const up = UP.clone().applyQuaternion(orientation).normalize();
-    const right = RIGHT.clone().applyQuaternion(orientation).normalize();
+    // Height from pitch of the target's forward + extra from orbit pitch
+    const pitchFactor = clamp(rawForward.z, -0.75, 0.75);
+    const heightOffset = this.height
+      + pitchFactor * this.distance * this.pitchInfluence
+      + Math.sin(this.orbitPitch) * this.distance * 0.6;
 
-    const distance = this.config.distance;
-    const height = this.config.height;
+    const desired = TMP_TARGET.copy(targetState.position)
+      .addScaledVector(rotatedForward, -this.distance)
+      .addScaledVector(TMP_UP, heightOffset);
 
-    const orbitYawOffset = right.clone().multiplyScalar(this.orbit.yaw * distance * 0.4);
-    const orbitPitchOffset = up.clone().multiplyScalar(this.orbit.pitch * distance * 0.35);
+    const pBlend = smoothFactor(this.stiffness, dt);
+    this.currentPosition.lerp(desired, pBlend);
+    this.camera.position.copy(this.currentPosition);
 
-    const desiredPosition = targetState.position.clone()
-      .addScaledVector(forward, -distance)
-      .addScaledVector(up, height)
-      .add(orbitYawOffset)
-      .add(orbitPitchOffset);
+    // Look target (slightly ahead + orbit pitch lift)
+    const lookOffset = Math.sin(this.orbitPitch) * 10;
+    const lookTarget = TMP_LOOK.copy(targetState.position).addScaledVector(TMP_UP, lookOffset);
 
-    const stiffness = this.config.stiffness;
-    const lerpFactor = delta > 0 ? 1 - Math.exp(-stiffness * delta) : 1;
-    this.position.lerp(desiredPosition, lerpFactor);
+    const lBlend = smoothFactor(this.lookStiffness, dt);
+    this.currentLookTarget.lerp(lookTarget, lBlend);
 
-    const targetLook = targetState.position.clone();
-    const lookAhead = forward.clone().multiplyScalar(this.config.forwardResponsiveness * 6);
-    targetLook.add(lookAhead);
-    targetLook.addScaledVector(up, this.config.pitchInfluence * (targetState.velocity?.z ?? 0));
-    targetLook.add(orbitPitchOffset);
-    targetLook.add(orbitYawOffset);
+    this.camera.up.copy(TMP_UP);
+    this.camera.lookAt(this.currentLookTarget);
+  }
 
-    const lookLerp = delta > 0 ? 1 - Math.exp(-this.config.lookStiffness * delta) : 1;
-    this.lookTarget.lerp(targetLook, lookLerp);
-
-    this.camera.position.copy(this.position);
-    this.camera.lookAt(this.lookTarget);
+  _updateOrbit(orbitInput, dt){
+    if (!orbitInput || !orbitInput.active){
+      const decay = smoothFactor(this.orbitReturnSpeed, dt);
+      this.orbitYaw += (0 - this.orbitYaw) * decay;
+      this.orbitPitch += (0 - this.orbitPitch) * decay;
+      return;
+    }
+    // Active input
+    this.orbitYaw = clamp(this.orbitYaw + (orbitInput.yawDelta ?? 0), -this.maxOrbitYaw, this.maxOrbitYaw);
+    this.orbitPitch = clamp(this.orbitPitch + (orbitInput.pitchDelta ?? 0), -this.maxOrbitPitch, this.maxOrbitPitch);
   }
 }

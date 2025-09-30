@@ -1,101 +1,55 @@
-// PlaneController.js (merged & polished)
-
 const THREE = (typeof window !== 'undefined' ? window.THREE : globalThis?.THREE) ?? null;
-if (!THREE) throw new Error('PlaneController requires THREE to be loaded globally');
+if (!THREE) throw new Error('Sandbox PlaneController requires THREE to be loaded globally');
 
-// Axes & temps
 const FORWARD_AXIS = new THREE.Vector3(0, 1, 0);
-const TMP_VECTOR  = new THREE.Vector3();
+const TMP_VECTOR = new THREE.Vector3();
 const TMP_VECTOR2 = new THREE.Vector3();
 const TMP_VECTOR3 = new THREE.Vector3();
-const TMP_EULER   = new THREE.Euler(0, 0, 0, 'ZXY');
+const TMP_EULER = new THREE.Euler(0, 0, 0, 'ZXY');
 
 export class PlaneController {
-  constructor({
-    // Pose
-    position = new THREE.Vector3(),
-    yaw = 0, pitch = 0, roll = 0,
-
-    // Throttle / speed model
-    minSpeed = 30,
-    maxSpeed = 190,
-    maxBoostSpeed = 320,
-    acceleration = 55,
-    afterburnerAcceleration = 90,
-    throttleResponse = 1.8,
-
-    // Turning & stability
-    turnRates = {
-      yaw:   THREE.MathUtils.degToRad(85),
-      pitch: THREE.MathUtils.degToRad(110),
-      roll:  THREE.MathUtils.degToRad(160),
-    },
-    rollStability = 0.45,
-    bankTurnFactor = THREE.MathUtils.degToRad(40),
-
-    // Forces
-    drag = 0.12,
-    brakeDrag = 0.45,
-    gravity = 9.8 * 0.6,
-    propulsorLift = (9.8 * 0.6) * 1.05, // a bit more than gravity at full boost
-    propulsorThrust = 32,
-    propulsorResponse = 6.2,
-  } = {}){
-    // Kinematics
+  constructor({ position = new THREE.Vector3(), yaw = 0, pitch = 0, roll = 0 } = {}){
     this.position = position.clone();
-    this.velocity = new THREE.Vector3();
-    this.orientation = new THREE.Quaternion();
-
-    // Angles (kept for banked turn model)
     this.yaw = yaw;
     this.pitch = pitch;
     this.roll = roll;
-
-    // Throttle/speed
+    this.orientation = new THREE.Quaternion();
+    this.velocity = new THREE.Vector3();
+    this.speed = 0;
     this.throttle = 0.5;
     this.targetThrottle = 0.5;
-    this.speed = 0;
-
-    // Params
-    this.minSpeed = minSpeed;
-    this.maxSpeed = maxSpeed;
-    this.maxBoostSpeed = maxBoostSpeed;
-    this.acceleration = acceleration;
-    this.afterburnerAcceleration = afterburnerAcceleration;
-    this.throttleResponse = throttleResponse;
-    this.turnRates = turnRates;
-    this.rollStability = rollStability;
-    this.bankTurnFactor = bankTurnFactor;
-    this.drag = drag;
-    this.brakeDrag = brakeDrag;
-    this.gravity = gravity;
-    this.propulsorLift = propulsorLift;
-    this.propulsorThrust = propulsorThrust;
-    this.propulsorResponse = propulsorResponse;
-
-    // Visual propulsion hooks
+    this.minSpeed = 30;
+    this.maxSpeed = 190;
+    this.maxBoostSpeed = 320;
+    this.acceleration = 55;
+    this.afterburnerAcceleration = 90;
+    this.throttleResponse = 1.8;
+    this.turnRates = {
+      yaw: THREE.MathUtils.degToRad(85),
+      pitch: THREE.MathUtils.degToRad(110),
+      roll: THREE.MathUtils.degToRad(160),
+    };
+    this.rollStability = 0.45;
+    this.bankTurnFactor = THREE.MathUtils.degToRad(40);
+    this.drag = 0.12;
+    this.brakeDrag = 0.45;
+    this.gravity = 9.8 * 0.6;
+    this.propulsorLift = this.gravity * 1.05;
+    this.propulsorThrust = 32;
+    this.propulsorResponse = 6.2;
     this.propulsorHeat = 0;
     this.propulsorRefs = [];
-
-    // Extras
     this.altitude = 0;
-    this.aim = { x: 0, y: 0 }; // optional input channel
-
-    // Mesh
-    this.mesh = null;
-
     this._updateOrientation();
   }
 
   attachMesh(mesh){
-    this.mesh = mesh ?? null;
+    this.mesh = mesh;
     this.propulsorRefs = Array.isArray(mesh?.userData?.propulsors) ? mesh.userData.propulsors : [];
-    if (this.mesh){
-      this.mesh.position.copy(this.position);
-      this.mesh.quaternion.copy(this.orientation);
-
-      // Target gizmo (only once)
-      if (!this.mesh.getObjectByName?.('leadTarget')){
+    if (mesh){
+      mesh.position.copy(this.position);
+      mesh.quaternion.copy(this.orientation);
+      if (!mesh.getObjectByName?.('leadTarget')){
         const targetGeometry = new THREE.SphereGeometry(0.45, 12, 12);
         const targetMaterial = new THREE.MeshBasicMaterial({ color: 0xffe26f, toneMapped: false });
         targetMaterial.depthTest = false;
@@ -104,158 +58,126 @@ export class PlaneController {
         leadTarget.name = 'leadTarget';
         leadTarget.position.set(0, 10, 0);
         leadTarget.renderOrder = 2;
-        this.mesh.add(leadTarget);
+        mesh.add(leadTarget);
       }
       this._applyPropulsorIntensity(this.propulsorHeat);
     }
   }
 
-  setThrottle(value){
-    this.targetThrottle = THREE.MathUtils.clamp(value ?? 0, 0, 1);
-  }
-
-  reset({ position, velocity, yaw = 0, pitch = 0, roll = 0, throttle = 0.35 } = {}){
-    if (position) this.position.copy(position);
-    if (velocity) this.velocity.copy(velocity); else this.velocity.set(0, 0, 0);
-
+  reset({ position, yaw = 0, pitch = 0, roll = 0, throttle = 0.35 } = {}){
+    if (position){
+      this.position.copy(position);
+    }
+    this.velocity.set(0, 0, 0);
     this.speed = this.minSpeed * 0.7;
-    this.throttle = THREE.MathUtils.clamp(throttle ?? 0.35, 0, 1);
-    this.targetThrottle = this.throttle;
-
-    this.yaw = yaw; this.pitch = pitch; this.roll = roll;
+    this.throttle = throttle;
+    this.targetThrottle = throttle;
+    this.yaw = yaw;
+    this.pitch = pitch;
+    this.roll = roll;
     this._updateOrientation();
-
     this.propulsorHeat = this.throttle;
     this._applyPropulsorIntensity(this.propulsorHeat);
-
     if (this.mesh){
       this.mesh.position.copy(this.position);
       this.mesh.quaternion.copy(this.orientation);
       const leadTarget = this.mesh.getObjectByName?.('leadTarget');
-      if (leadTarget) leadTarget.position.set(0, 10, 0);
+      if (leadTarget){
+        leadTarget.position.set(0, 10, 0);
+      }
     }
   }
 
-  /**
-   * @param {number} dt
-   * @param {Object} input  { pitch, yaw, roll, throttleAdjust, brake, aim?:{x,y} }
-   * @param {Object} hooks  { clampAltitude?:fn(controller, groundZ), sampleGroundHeight?:fn(x,y):z }
-   */
-  update(dt, input = {}, hooks = {}){
-    const delta = Math.max(0, dt ?? 0);
-    if (delta <= 0) return;
+  update(dt, input, { clampAltitude, sampleGroundHeight }){
+    if (dt <= 0) return;
+    if (!input) input = { pitch: 0, yaw: 0, roll: 0, throttleAdjust: 0, brake: false };
 
-    // Optional aim input (not used in physics yet, but kept for HUD/camera)
-    if (input.aim){
-      this.aim.x = THREE.MathUtils.clamp(input.aim.x ?? 0, -1, 1);
-      this.aim.y = THREE.MathUtils.clamp(input.aim.y ?? 0, -1, 1);
+    this.targetThrottle = THREE.MathUtils.clamp(
+      this.targetThrottle + input.throttleAdjust * dt * 0.8,
+      0,
+      1,
+    );
+    if (input.brake){
+      this.targetThrottle = Math.min(this.targetThrottle, 0.2);
     }
-
-    // Throttle smoothing + braking cap
-    const throttleAdjust = THREE.MathUtils.clamp(input.throttleAdjust ?? 0, -1, 1);
-    this.targetThrottle = THREE.MathUtils.clamp(this.targetThrottle + throttleAdjust * delta * 0.8, 0, 1);
-    if (input.brake) this.targetThrottle = Math.min(this.targetThrottle, 0.2);
-    const throttleBlend = 1 - Math.exp(-this.throttleResponse * delta);
+    const throttleBlend = 1 - Math.exp(-this.throttleResponse * dt);
     this.throttle += (this.targetThrottle - this.throttle) * throttleBlend;
     this.throttle = THREE.MathUtils.clamp(this.throttle, 0, 1);
 
-    // Afterburner curve (boost only for high throttle)
+    const brakeApplied = input.brake ? this.brakeDrag : this.drag;
     const throttleBoost = THREE.MathUtils.clamp((this.throttle - 0.55) / 0.45, 0, 1);
-    const boostFactor = throttleBoost * throttleBoost; // ease-in
+    const boostFactor = throttleBoost * throttleBoost;
     const baseSpeed = this.minSpeed + (this.maxSpeed - this.minSpeed) * this.throttle;
     const speedTarget = THREE.MathUtils.lerp(baseSpeed, this.maxBoostSpeed, boostFactor);
     const accelRate = this.acceleration + this.afterburnerAcceleration * boostFactor;
-    const speedBlend = 1 - Math.exp(-accelRate * delta / Math.max(1, speedTarget));
+    const speedBlend = 1 - Math.exp(-accelRate * dt / Math.max(1, speedTarget));
     this.speed += (speedTarget - this.speed) * speedBlend;
 
-    // Never fully stall
     this.speed = Math.max(this.minSpeed * 0.3, this.speed);
 
-    // Inputs
-    const yawInput   = THREE.MathUtils.clamp(input.yaw ?? 0,   -1, 1);
-    const pitchInput = THREE.MathUtils.clamp(input.pitch ?? 0, -1, 1);
-    const rollInput  = THREE.MathUtils.clamp(input.roll ?? 0,  -1, 1);
+    const yawInput = THREE.MathUtils.clamp(input.yaw, -1, 1);
+    const pitchInput = THREE.MathUtils.clamp(input.pitch, -1, 1);
+    const rollInput = THREE.MathUtils.clamp(input.roll, -1, 1);
 
-    // Turn integration + stability
-    this.yaw   += yawInput   * this.turnRates.yaw   * delta;
-    this.pitch += pitchInput * this.turnRates.pitch * delta;
-    this.pitch  = THREE.MathUtils.clamp(this.pitch, THREE.MathUtils.degToRad(-70), THREE.MathUtils.degToRad(70));
+    this.yaw += yawInput * this.turnRates.yaw * dt;
+    this.pitch += pitchInput * this.turnRates.pitch * dt;
+    this.pitch = THREE.MathUtils.clamp(this.pitch, THREE.MathUtils.degToRad(-70), THREE.MathUtils.degToRad(70));
 
-    this.roll  += rollInput  * this.turnRates.roll  * delta;
-    this.roll  -= this.roll * this.rollStability * delta;
-    this.roll   = THREE.MathUtils.clamp(this.roll, THREE.MathUtils.degToRad(-110), THREE.MathUtils.degToRad(110));
+    this.roll += rollInput * this.turnRates.roll * dt;
+    this.roll -= this.roll * this.rollStability * dt;
+    this.roll = THREE.MathUtils.clamp(this.roll, THREE.MathUtils.degToRad(-110), THREE.MathUtils.degToRad(110));
 
-    // Banked turning adds yaw with roll
     const bankTurn = this.roll * this.bankTurnFactor * Math.min(1, this.speed / this.maxSpeed);
-    this.yaw += bankTurn * delta;
+    this.yaw += bankTurn * dt;
 
-    // Pose
     this._updateOrientation();
 
-    // Forward desired velocity & smoothing
     const forward = TMP_VECTOR.copy(FORWARD_AXIS).applyQuaternion(this.orientation).normalize();
     const desiredVelocity = TMP_VECTOR2.copy(forward).multiplyScalar(this.speed);
-    this.velocity.lerp(desiredVelocity, 1 - Math.exp(-3.5 * delta));
+    this.velocity.lerp(desiredVelocity, 1 - Math.exp(-3.5 * dt));
 
-    // Afterburner thrust bias along forward when boosting and pitching up
     if (boostFactor > 0){
-      const climbFactor = Math.max(0.12, forward.z + 0.12); // adds vertical assist when nose-up
+      const climbFactor = Math.max(0.12, forward.z + 0.12);
       const thrust = this.propulsorThrust * boostFactor * climbFactor;
-      this.velocity.addScaledVector(forward, thrust * delta);
+      this.velocity.addScaledVector(forward, thrust * dt);
     }
 
-    // Gravity minus some lift at high throttle
     const lift = this.propulsorLift * boostFactor;
     const effectiveGravity = Math.max(0, this.gravity - lift);
-    const gravityVector = TMP_VECTOR3.set(0, 0, -effectiveGravity * delta);
+    const gravityVector = TMP_VECTOR3.set(0, 0, -effectiveGravity * dt);
     this.velocity.add(gravityVector);
+    this.velocity.multiplyScalar(Math.max(0, 1 - brakeApplied * dt));
 
-    // Drag (heavier with brake)
-    const brakeApplied = input.brake ? this.brakeDrag : this.drag;
-    this.velocity.multiplyScalar(Math.max(0, 1 - brakeApplied * delta));
+    this.position.addScaledVector(this.velocity, dt);
 
-    // Integrate position
-    this.position.addScaledVector(this.velocity, delta);
-
-    // Altitude + optional ground clamp
-    const sampleGroundHeight = hooks.sampleGroundHeight;
     if (typeof sampleGroundHeight === 'function'){
       const ground = sampleGroundHeight(this.position.x, this.position.y);
-      if (Number.isFinite(ground)){
-        this.altitude = this.position.z - ground;
-        if (typeof hooks.clampAltitude === 'function'){
-          hooks.clampAltitude(this, ground);
-        }
+      this.altitude = this.position.z - ground;
+      if (typeof clampAltitude === 'function'){
+        clampAltitude(this, ground);
       }
     }
 
-    // Sync mesh
     if (this.mesh){
       this.mesh.position.copy(this.position);
       this.mesh.quaternion.copy(this.orientation);
     }
 
-    // VFX heat follows throttle/boost
-    this._updatePropulsors(delta, Math.max(this.throttle, boostFactor));
+    this._updatePropulsors(dt, Math.max(this.throttle, boostFactor));
   }
 
   getState(){
     return {
-      position: this.position.clone(),
-      velocity: this.velocity.clone(),
-      orientation: this.orientation.clone(),
+      position: this.position,
+      velocity: this.velocity,
+      orientation: this.orientation,
       speed: this.velocity.length(),
       throttle: this.throttle,
-      targetThrottle: this.targetThrottle,
       altitude: this.altitude,
-      aim: { x: this.aim.x, y: this.aim.y },
     };
   }
 
-  // --- internals ---
-
   _updateOrientation(){
-    // Using ZXY so roll (X) feels natural with banked turn coupling
     TMP_EULER.set(this.pitch, this.roll, this.yaw, 'ZXY');
     this.orientation.setFromEuler(TMP_EULER);
   }
@@ -273,7 +195,6 @@ export class PlaneController {
     const intensity = THREE.MathUtils.clamp(level ?? 0, 0, 1);
     for (const propulsor of this.propulsorRefs){
       if (!propulsor) continue;
-
       if (propulsor.light){
         const min = propulsor.minIntensity ?? 0.25;
         const max = propulsor.maxIntensity ?? 2.8;
@@ -282,7 +203,6 @@ export class PlaneController {
           propulsor.light.shadow.needsUpdate = true;
         }
       }
-
       if (propulsor.glowMaterial){
         const minOpacity = propulsor.minOpacity ?? 0.08;
         const maxOpacity = propulsor.maxOpacity ?? 0.9;
@@ -290,7 +210,6 @@ export class PlaneController {
           ? 0
           : THREE.MathUtils.lerp(minOpacity, maxOpacity, intensity);
       }
-
       if (propulsor.glowMesh){
         const minScale = propulsor.minScale ?? 0.7;
         const maxScale = propulsor.maxScale ?? 1.65;
@@ -298,7 +217,6 @@ export class PlaneController {
         const scaleZ = propulsor.scaleZ ?? 1.6;
         propulsor.glowMesh.scale.set(scale, scale, scale * scaleZ);
       }
-
       if (propulsor.housingMaterial && typeof propulsor.housingMaterial.emissiveIntensity === 'number'){
         const minEmissive = propulsor.minEmissive ?? 0.05;
         const maxEmissive = propulsor.maxEmissive ?? 0.45;
@@ -308,63 +226,75 @@ export class PlaneController {
   }
 }
 
-// --- simple stylized arcade plane with triple propulsor VFX ---
 export function createPlaneMesh(){
   const group = new THREE.Group();
 
   const fuselageMaterial = new THREE.MeshStandardMaterial({ color: 0xf0f3ff, metalness: 0.35, roughness: 0.45 });
-  const noseMaterial     = new THREE.MeshStandardMaterial({ color: 0xd13b4a, metalness: 0.4,  roughness: 0.3  });
-  const accentMaterial   = new THREE.MeshStandardMaterial({ color: 0x2a4f9b, metalness: 0.45, roughness: 0.32 });
+  const noseMaterial = new THREE.MeshStandardMaterial({ color: 0xd13b4a, metalness: 0.4, roughness: 0.3 });
+  const accentMaterial = new THREE.MeshStandardMaterial({ color: 0x2a4f9b, metalness: 0.45, roughness: 0.32 });
 
-  const fuselage = new THREE.Mesh(new THREE.CapsuleGeometry(2.2, 12, 8, 16), fuselageMaterial);
+  const fuselageGeometry = new THREE.CapsuleGeometry(2.2, 12, 8, 16);
+  const fuselage = new THREE.Mesh(fuselageGeometry, fuselageMaterial);
   fuselage.rotation.z = Math.PI / 2;
   fuselage.castShadow = true;
   fuselage.receiveShadow = true;
   group.add(fuselage);
 
-  const nose = new THREE.Mesh(new THREE.ConeGeometry(2.2, 4.5, 14), noseMaterial);
+  const noseGeometry = new THREE.ConeGeometry(2.2, 4.5, 14);
+  const nose = new THREE.Mesh(noseGeometry, noseMaterial);
   nose.position.set(0, 9.3, 0);
   nose.rotation.x = Math.PI;
   nose.castShadow = true;
   group.add(nose);
 
-  const tail = new THREE.Mesh(new THREE.ConeGeometry(1.4, 3.5, 10), accentMaterial);
+  const tailGeometry = new THREE.ConeGeometry(1.4, 3.5, 10);
+  const tail = new THREE.Mesh(tailGeometry, accentMaterial);
   tail.position.set(0, -7.8, 0);
   tail.castShadow = true;
   group.add(tail);
 
-  const wing = new THREE.Mesh(new THREE.BoxGeometry(18, 3, 0.6), accentMaterial);
+  const wingGeometry = new THREE.BoxGeometry(18, 3, 0.6);
+  const wing = new THREE.Mesh(wingGeometry, accentMaterial);
   wing.position.set(0, 0.8, 0);
   wing.castShadow = true;
   wing.receiveShadow = true;
   group.add(wing);
 
-  const tailWing = new THREE.Mesh(new THREE.BoxGeometry(8, 2.2, 0.45), accentMaterial);
+  const tailWingGeometry = new THREE.BoxGeometry(8, 2.2, 0.45);
+  const tailWing = new THREE.Mesh(tailWingGeometry, accentMaterial);
   tailWing.position.set(0, -6.5, 0.2);
   tailWing.castShadow = true;
   tailWing.receiveShadow = true;
   group.add(tailWing);
 
-  const rudder = new THREE.Mesh(new THREE.BoxGeometry(0.6, 2.4, 4.2), accentMaterial);
+  const rudderGeometry = new THREE.BoxGeometry(0.6, 2.4, 4.2);
+  const rudder = new THREE.Mesh(rudderGeometry, accentMaterial);
   rudder.position.set(0, -7.2, 2.1);
   rudder.castShadow = true;
   group.add(rudder);
 
-  // Propulsor VFX setup
   const propulsorHousingMaterial = new THREE.MeshStandardMaterial({
-    color: 0x314166, metalness: 0.78, roughness: 0.28,
-    emissive: 0x121c33, emissiveIntensity: 0.08,
+    color: 0x314166,
+    metalness: 0.78,
+    roughness: 0.28,
+    emissive: 0x121c33,
+    emissiveIntensity: 0.08,
   });
   const baseGlowMaterial = new THREE.MeshBasicMaterial({
-    color: 0xffa86a, transparent: true, opacity: 0,
-    blending: THREE.AdditiveBlending, depthWrite: false, depthTest: false,
-    toneMapped: false, side: THREE.DoubleSide,
+    color: 0xffa86a,
+    transparent: true,
+    opacity: 0,
+    blending: THREE.AdditiveBlending,
+    depthWrite: false,
+    depthTest: false,
+    toneMapped: false,
+    side: THREE.DoubleSide,
   });
 
   const propulsorOffsets = [
     new THREE.Vector3(-4.4, -5.1, -0.5),
-    new THREE.Vector3( 4.4, -5.1, -0.5),
-    new THREE.Vector3( 0.0, -8.4, -0.2),
+    new THREE.Vector3(4.4, -5.1, -0.5),
+    new THREE.Vector3(0, -8.4, -0.2),
   ];
   const propulsors = [];
 

@@ -23,9 +23,10 @@ export const merge = (base, extra = {}) => {
 /**
  * SUPER CONFIG – TerraGen v2++
  * - Backward compatible keys (noise, plateau, features, colors, mountains, rocks, towns, rivers)
- * - Adds: domain warp, climate masks, lakes, dunes, mega volcanoes, impact crater,
- *         biomes with ramps, perf switches, materials, and themed space-y presets.
+ * - Adds: domain warp, climate masks, lakes, dunes (desert ripples), mega volcanoes, big crater,
+ *         biomes with ramps, perf switches, materials, and a few fun space-y presets.
  */
+
 export const DEFAULT_GENERATOR_CONFIG = {
   // ───────────────────────────── GLOBAL ─────────────────────────────
   meta: {
@@ -53,7 +54,7 @@ export const DEFAULT_GENERATOR_CONFIG = {
     warp:      { frequency: 0.00085, amplitude: 120, octaves: 2, persistence: 0.6, lacunarity: 2.2, offset: [3000, -2000] },
   },
 
-  // (future hook; your streamer can ignore unless you add a pass)
+  // (future hook; your streamer ignores it unless you add a pass)
   erosion: { enabled: true, iterations: 40, talusAngle: 0.58, carryCapacity: 0.9, evaporation: 0.12, sedimentDissolve: 0.6, carveBias: 0.7 },
 
   // ───────────────────────── CLIMATE / MASKS ────────────────────────
@@ -67,7 +68,7 @@ export const DEFAULT_GENERATOR_CONFIG = {
   plateau: { flatRadius: 180, blendRadius: 360, height: 10 },
 
   // ─────────────────────── MEGA VOLCANO(S) & CRATER ─────────────────
-  // Single volcano (back-compat)
+  // Back-compat single volcano block (your WorldStreamer checks volcanoes[] first)
   volcano: {
     enabled: true,
     center: [0, 0],
@@ -81,8 +82,9 @@ export const DEFAULT_GENERATOR_CONFIG = {
     lava:  { color: '#ff5a1f', emissive: '#ff8a00', emissiveIntensity: 1.6, levelOffset: -12 }
   },
 
-  // Multiple volcanoes (optional)
+  // Optional: multiple volcanoes
   volcanoes: [
+    // Primary (matches `volcano`)
     {
       enabled: true,
       center: [0, 0],
@@ -95,6 +97,7 @@ export const DEFAULT_GENERATOR_CONFIG = {
       noise: { frequency: 0.0028, amplitude: 65 },
       lava:  { color: '#ff5a1f', emissive: '#ff8a00', emissiveIntensity: 1.6, levelOffset: -12 }
     },
+    // A secondary, smaller cone
     {
       enabled: true,
       center: [1600, -900],
@@ -109,7 +112,7 @@ export const DEFAULT_GENERATOR_CONFIG = {
     }
   ],
 
-  // One big impact crater (height carve + raised rim)
+  // Big impact crater (height carve + raised rim)
   crater: {
     enabled: true,
     center: [2500, -1200],
@@ -119,15 +122,6 @@ export const DEFAULT_GENERATOR_CONFIG = {
     rimWidth: 180,
     noise: { frequency: 0.0032, amplitude: 24 },
     floorLift: 20
-  },
-
-  // NEW: procedural craters field (from the right-side config). Streamer may ignore unless implemented.
-  craters: {
-    enabled: true,
-    spacing: 1400,
-    chance: 0.18,
-    radius: [160, 320],
-    depth: [30, 120],
   },
 
   // ─────────────────────────── EXTRA SURFACE FX ─────────────────────
@@ -147,9 +141,7 @@ export const DEFAULT_GENERATOR_CONFIG = {
   // ───────────────────────────── FEATURES ───────────────────────────
   features: {
     mountains: true, rocks: true, towns: true, rivers: true,
-    forests: true, lakes: true, ruins: true, roads: true, ocean: true,
-    // from right-side config:
-    stars: true,
+    forests: true, lakes: true, ruins: true, roads: true, ocean: true
   },
 
   // ─────────────────────── COLOR RAMPS / BIOMES ─────────────────────
@@ -165,7 +157,7 @@ export const DEFAULT_GENERATOR_CONFIG = {
       snow:    ['#e6eff6', '#ffffff'],
       desert:  ['#b58b49', '#d5b46b', '#edd28f'],
       tundra:  ['#6f8f60', '#8aa37a'],
-      crater:  ['#5a5450', '#6d6762', '#8c8680']
+      crater:  ['#5a5450', '#6d6762', '#8c8680'] // optional look on crater rim/floor
     },
   },
 
@@ -231,7 +223,6 @@ export const DEFAULT_GENERATOR_CONFIG = {
 
   // ─────────────────────────── Rivers & Lakes ──────────────────────
   rivers: {
-    // base
     noise: { frequency: 0.00036, offset: [-510, 740] },
     threshold: 0.082,
     lengthMultiplier: 1.6,
@@ -242,9 +233,6 @@ export const DEFAULT_GENERATOR_CONFIG = {
     segments: 20,
     springsPerTile: 2,
     lakes: { enabled: true, threshold: 0.67, minRadius: 18, maxRadius: 80 },
-
-    // extra tunables from right-side config (compatible)
-    tFrequency: 0.002, // optional temporal factor for meander anim/synthesis
   },
 
   // ─────────────────────── Ruins / Points of Interest ──────────────
@@ -394,7 +382,6 @@ export const PRESET_LUNAR = merge(DEFAULT_GENERATOR_CONFIG, {
     ramps: { rock: ['#4b4b4b','#6a6a6a','#9a9a9a'] }
   },
   crater: { enabled: true, center: [0,0], baseRadius: 900, depth: 260, rimHeight: 120, rimWidth: 260, noise: { frequency: 0.004, amplitude: 18 } },
-  craters: { enabled: true, spacing: 1100, chance: 0.28, radius: [120, 560], depth: [40, 260] },
   volcanoes: [],
   dunes: { enabled: false },
 });
@@ -417,12 +404,11 @@ export const PRESET_MARTIAN = merge(DEFAULT_GENERATOR_CONFIG, {
     lava: { color: '#ff4d1a', emissive: '#ff7a3a', emissiveIntensity: 1.2, levelOffset: -22 }
   }],
   crater: { enabled: true, center: [-1800, 900], baseRadius: 1200, depth: 340, rimHeight: 160, rimWidth: 320 },
-  craters: { enabled: true, spacing: 1500, chance: 0.22, radius: [200, 900], depth: [50, 420] },
   rivers: { enabled: false },
   features: { forests: false, lakes: false, towns: false, roads: false, ocean: false }
 });
 
-// Tiny Planet: small bounded world (good for walkable mini planet vibes)
+// Tiny Planet: small bounded world (good for “walkable” mini planet vibes)
 export const PRESET_TINY_PLANET = merge(DEFAULT_GENERATOR_CONFIG, {
   meta: { name: 'TerraGen v2++ – tiny planet' },
   world: { bounds: { minX: -8000, maxX: 8000, minY: -8000, maxY: 8000 }, tileSize: 600, visibleRadius: 4, waterLevel: 14, beachBand: 10 },
@@ -433,7 +419,7 @@ export const PRESET_TINY_PLANET = merge(DEFAULT_GENERATOR_CONFIG, {
 
 // ─────────────────────────── EXPORT PRESETS ─────────────────────────
 export const TERRAIN_PRESETS = {
-  default: DEFAULT_GENERATOR_CONFIG, // rich v2++ default
+  default: DEFAULT_GENERATOR_CONFIG,
   ultra: PRESET_ULTRA,
   fast: PRESET_FAST,
   stylized: PRESET_STYLIZED,
@@ -443,57 +429,4 @@ export const TERRAIN_PRESETS = {
   lunar: PRESET_LUNAR,
   martian: PRESET_MARTIAN,
   tiny_planet: PRESET_TINY_PLANET,
-
-  // Also export a “right-side-default-like” preset in case you want that feel exactly
-  // without touching the main default:
-  classic_default: merge(DEFAULT_GENERATOR_CONFIG, {
-    seed: 982451653,
-    world: { tileSize: 640, visibleRadius: 3, waterLevel: 6, snowline: 280, beachBand: 14 },
-    noise: {
-      warp: { frequency: 0.0004, amplitude: 260, offset: [1.1, -2.3] },
-      hills: { frequency: 0.0008, amplitude: 60, octaves: 4, persistence: 0.55, lacunarity: 2.1 },
-      mountains: { frequency: 0.00045, amplitude: 260, octaves: 5, persistence: 0.5, lacunarity: 2.05, exponent: 2.2 },
-      ridges: { frequency: 0.001, amplitude: 48, exponent: 2.4 },
-      detail: { frequency: 0.006, amplitude: 18, octaves: 3, persistence: 0.5, lacunarity: 2.3 },
-    },
-    mountains: {
-      noise: { frequency: 0.00038, octaves: 4, persistence: 0.58, lacunarity: 2.2 },
-      threshold: 0.6, clusterThreshold: 0.78, clusterCount: 2,
-      minHeight: 140, maxSlope: 0.55,
-      heightGain: { min: 160, max: 360 },
-      radius: { min: 60, max: 160 },
-      segments: { min: 8, max: 12 },
-      locationAttempts: 12,
-    },
-    rocks: { noise: { frequency: 0.0012 }, baseCount: 2, densityScale: 5, size: { min: 4, max: 18 }, detailThreshold: 0.4, attempts: 6, maxSlope: 0.48 },
-    towns: {
-      noise: { frequency: 0.00028, octaves: 4, persistence: 0.62, lacunarity: 2.4 },
-      threshold: 0.7, anchor: { attempts: 10, maxSlope: 0.2, maxHeight: 200 },
-      plazaRadius: { min: 16, max: 26 }, buildingCount: { min: 4, max: 9 },
-      buildingWidth: { min: 12, max: 22 }, buildingDepth: { min: 10, max: 24 },
-      wallHeight: { min: 12, max: 22 }, roofHeightScale: 0.6,
-      buildingDistance: { offset: 8, range: 24 }, buildingPlacementMaxSlope: 0.22,
-    },
-    climate: { temperature: { frequency: 0.00018, offset: [0.2, 1.1] }, moisture: { frequency: 0.00025, offset: [-1.3, 0.6] } },
-    colors: {
-      low: '#466e3c', mid: '#6fa360', high: '#d8dbe2', lowThreshold: 22, highThreshold: 140, highCap: 360,
-      ramps: {
-        grass: [ '#35553b', '#5f9a5f', '#98c788' ],
-        beach: [ '#bca876', '#e8d39d' ],
-        ocean: [ '#13273f', '#1c3b62', '#2f5c86' ],
-        snow: [ '#dfe8f0', '#f9fbff' ],
-        rock: [ '#5b5c63', '#7a7c84', '#b9bbc6' ],
-      },
-    },
-    features: { stars: true },
-    rivers: {
-      noise: { frequency: 0.0004 },
-      angleNoise: { frequency: 0.00054 },
-      meander: { frequency: 0.0008 },
-      tFrequency: 0.002,
-      threshold: 0.1, lengthMultiplier: 1.5, width: { min: 24, max: 56 }, depth: 3.2,
-      lakes: { enabled: true, perChunk: 1, noiseFrequency: 0.0009, threshold: 0.55, radius: [26, 60], levelOffset: -1.6 },
-    },
-    volcano: { enabled: false },
-  }),
 };
