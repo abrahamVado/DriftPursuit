@@ -122,6 +122,44 @@
         transform: translateY(1px);
       }
 
+      .nav-tools {
+        margin-top: 1.5rem;
+        padding-top: 1rem;
+        border-top: 1px solid rgba(216, 122, 90, 0.18);
+      }
+
+      .nav-tools h2 {
+        margin: 0 0 0.75rem;
+        font-size: 1rem;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+        color: rgba(255, 210, 190, 0.75);
+      }
+
+      .nav-tools canvas {
+        display: block;
+        width: 100%;
+        max-width: 240px;
+        aspect-ratio: 1 / 1;
+        border-radius: 10px;
+        border: 1px solid rgba(255, 180, 150, 0.28);
+        background: rgba(10, 7, 12, 0.85);
+        box-shadow: 0 0 18px rgba(255, 140, 90, 0.12);
+      }
+
+      .beacon-list {
+        list-style: none;
+        margin: 0.75rem 0 0;
+        padding: 0;
+        font-size: 0.85rem;
+        line-height: 1.4;
+        color: rgba(255, 210, 200, 0.82);
+      }
+
+      .beacon-list li + li {
+        margin-top: 0.25rem;
+      }
+
       .scene {
         grid-area: scene;
         position: relative;
@@ -187,10 +225,17 @@
         <button type="button" data-action="reset">Recenter Craft</button>
         <button type="button" data-action="shuffle">Regenerate Terrain</button>
       </div>
+      <section class="nav-tools" aria-label="Navigation aids">
+        <h2>Survey Minimap</h2>
+        <canvas id="mars-minimap" width="220" height="220" aria-label="Exploration minimap"></canvas>
+        <ul id="mars-beacons" class="beacon-list">
+          <li style="opacity:0.6;">No active beacons</li>
+        </ul>
+      </section>
       <section class="readout" aria-label="Control guide">
         <label>Flight Controls</label>
         <p style="margin:0;font-size:0.85rem;color:rgba(255,200,182,0.75);line-height:1.4;">
-          W/S throttle · A/D yaw · Q/E roll · Arrow keys pitch · Shift boost · Space brake · Left click fire · N navigation lights · L landing lights
+          W/S throttle · A/D yaw · Q/E roll · Arrow keys pitch · Shift boost · Space brake · Left click fire · N navigation lights · L landing lights · B deploy beacon · X clear beacons
         </p>
       </section>
     </aside>

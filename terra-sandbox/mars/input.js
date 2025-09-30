@@ -155,6 +155,8 @@ export class MarsInputManager {
       firing: this.primaryFire,
       toggleNavigationLights: this._consumePressed(['KeyN', 'KeyV']),
       toggleAuxiliaryLights: this._consumePressed('KeyL'),
+      dropBeacon: this._consumePressed('KeyB'),
+      clearBeacons: this._consumePressed('KeyX'),
     };
   }
 }
