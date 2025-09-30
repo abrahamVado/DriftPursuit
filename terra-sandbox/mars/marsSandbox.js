@@ -8,7 +8,7 @@ import { MarsChaseCamera } from './chaseCamera.js';
 import { MarsInputManager } from './input.js';
 import { MarsProjectileSystem } from './projectiles.js';
 import { MarsHUD } from './hud.js';
-import { createMarsTerrain, disposeMarsTerrain } from './terrain.js';
+import { MarsCaveTerrainManager } from './caveTerrain.js';
 
 function createMulberry32(seed) {
   let a = seed >>> 0;
@@ -152,7 +152,7 @@ export class MarsSandbox {
     this.scene.add(shipMesh);
     this.vehicleMesh = shipMesh;
 
-    const sampleHeight = this.terrain?.sampleHeight ?? null;
+    const sampleHeight = this.terrain ? (x, y) => this.terrain.sampleHeight(x, y) : null;
     const anchorY = 48;
     const startHeight = sampleHeight ? sampleHeight(0, anchorY) + 72 : 120;
     this.vehicle.reset({
@@ -161,6 +161,7 @@ export class MarsSandbox {
       pitch: THREE.MathUtils.degToRad(4),
       throttle: 0.46,
     });
+    this.terrain?.updateChunks?.(this.vehicle.position);
 
     this.chaseCamera = new MarsChaseCamera({ camera: this.camera, distance: 68, height: 28, lookAhead: 36, responsiveness: 5.6 });
     this.chaseCamera.follow(this.vehicle);
@@ -200,7 +201,7 @@ export class MarsSandbox {
       this.renderer.dispose();
       this.renderer = null;
     }
-    disposeMarsTerrain(this.terrain);
+    this.terrain?.dispose?.();
     this.terrain = null;
     this.scene = null;
   }
@@ -212,7 +213,7 @@ export class MarsSandbox {
 
   resetVehicle() {
     if (!this.vehicle) return;
-    const sampleHeight = this.terrain?.sampleHeight ?? null;
+    const sampleHeight = this.terrain ? (x, y) => this.terrain.sampleHeight(x, y) : null;
     const anchorY = 48;
     const ground = sampleHeight ? sampleHeight(0, anchorY) : 0;
     this.vehicle.reset({
@@ -222,6 +223,7 @@ export class MarsSandbox {
       throttle: 0.46,
     });
     this.chaseCamera?.snap?.();
+    this.terrain?.updateChunks?.(this.vehicle.position);
     this.hud.setStatus('Surveyor plane repositioned at orbit anchor.');
   }
 
@@ -242,6 +244,7 @@ export class MarsSandbox {
       });
       this.chaseCamera?.snap?.();
     }
+    this.terrain?.updateChunks?.(this.vehicle?.position ?? new THREE.Vector3());
     this._updateWeather();
     this.hud.setStatus('Terrain regenerated. Navigation recalibrated.');
   }
@@ -253,13 +256,11 @@ export class MarsSandbox {
       }
     }
     if (this.terrain) {
-      disposeMarsTerrain(this.terrain);
+      this.terrain.dispose?.();
       this.terrain = null;
     }
-    this.terrain = createMarsTerrain({ seed: this.seed, size: 2000, segments: 256 });
-    this.surfaceGroup.add(this.terrain.mesh);
-    this.surfaceGroup.add(this.terrain.rockField);
-    this.surfaceGroup.add(this.terrain.dustField);
+    this.terrain = new MarsCaveTerrainManager({ seed: this.seed, chunkSize: 16, resolution: 16 });
+    this.surfaceGroup.add(this.terrain.group);
   }
 
   _updateWeather() {
@@ -315,6 +316,8 @@ export class MarsSandbox {
       sampleGroundHeight: sampleHeight,
       clampAltitude,
     });
+
+    this.terrain?.updateChunks?.(this.vehicle.position);
 
     if (inputState.firing) {
       const shot = this.vehicle.firePrimary();
