@@ -69,6 +69,60 @@
         "sun": { "position": [-380, 420, 520], "intensity": 0.95, "color": "#cbe1ff" },
         "hemisphere": { "skyColor": "#4f6b9a", "groundColor": "#0b1724", "intensity": 0.72 }
       }
+    },
+    {
+      "id": "solar-system",
+      "name": "Orbital Reach",
+      "description": "Expansive solar system with a radiant star and orbiting planets.",
+      "type": "solar-system",
+      "environment": {
+        "background": "#050912",
+        "bodyBackground": "linear-gradient(180deg, #02030a 0%, #050b1a 45%, #0a1328 100%)",
+        "fog": { "color": "#060912", "near": 16000, "far": 48000 },
+        "sun": { "position": [0, 0, 0], "intensity": 1.25, "color": "#ffe4a6" },
+        "hemisphere": { "skyColor": "#0f1630", "groundColor": "#03050a", "intensity": 0.35 }
+      },
+      "star": {
+        "radius": 880,
+        "emissiveIntensity": 2.9,
+        "lightIntensity": 3.4,
+        "lightRange": 240000
+      },
+      "planets": [
+        {
+          "name": "Aurelia",
+          "radius": 560,
+          "orbitRadius": 6600,
+          "orbitSpeed": 0.028,
+          "color": "#5f8dff",
+          "emissive": "#2b4fb6",
+          "orbitHeight": 240,
+          "rotationSpeed": 0.14
+        },
+        {
+          "name": "Verdantia",
+          "radius": 380,
+          "orbitRadius": 9600,
+          "orbitSpeed": 0.021,
+          "color": "#78d394",
+          "emissive": "#236043",
+          "orbitHeight": -320,
+          "rotationSpeed": 0.11,
+          "atmosphereColor": "#91f1b2",
+          "atmosphereOpacity": 0.22
+        },
+        {
+          "name": "Crimoria",
+          "radius": 720,
+          "orbitRadius": 13800,
+          "orbitSpeed": 0.017,
+          "color": "#ff7366",
+          "emissive": "#8b1c19",
+          "orbitHeight": 480,
+          "rotationSpeed": 0.15,
+          "ring": { "innerRadius": 900, "outerRadius": 1280, "color": "#ffc9a4", "opacity": 0.28, "tilt": 16 }
+        }
+      ]
     }
   ]
 }

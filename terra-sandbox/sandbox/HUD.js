@@ -208,11 +208,26 @@ function formatTime(seconds){
 }
 
 function formatDistance(meters){
-  if (!Number.isFinite(meters) || meters <= 0) return '0 m';
-  if (meters >= 1000){
-    return `${(meters / 1000).toFixed(meters >= 10000 ? 0 : 1)} km`;
+  if (!Number.isFinite(meters) || Math.abs(meters) <= 0) return '0 m';
+  const magnitude = Math.abs(meters);
+  const sign = meters < 0 ? '-' : '';
+  if (magnitude >= 1000){
+    return `${sign}${(magnitude / 1000).toFixed(magnitude >= 10000 ? 0 : 1)} km`;
   }
-  return `${meters.toFixed(0)} m`;
+  return `${sign}${magnitude.toFixed(0)} m`;
+}
+
+function formatAltitude(meters){
+  if (!Number.isFinite(meters)) return '--';
+  return formatDistance(meters);
+}
+
+function formatLatitude(degrees){
+  if (!Number.isFinite(degrees)) return '--';
+  const magnitude = Math.abs(degrees);
+  const direction = degrees >= 0 ? 'N' : 'S';
+  const precision = magnitude >= 100 ? 0 : magnitude >= 10 ? 1 : 2;
+  return `${magnitude.toFixed(precision)}° ${direction}`;
 }
 
 export class HUD {
@@ -265,25 +280,35 @@ export class HUD {
     // Metrics around center
     this.metrics = {
       speed: createMetric('Speed'),
+      altitude: createMetric('Altitude'),
+      latitude: createMetric('Latitude'),
       crashes: createMetric('Crashes'),
       time: createMetric('Flight Time'),
       distance: createMetric('Distance'),
     };
 
-    this.metrics.speed.wrapper.style.top = '-110px';
+    this.metrics.speed.wrapper.style.top = '-140px';
     this.metrics.speed.wrapper.style.left = '50%';
     this.metrics.speed.wrapper.style.transform = 'translate(-50%, 0)';
 
-    this.metrics.time.wrapper.style.bottom = '-110px';
+    this.metrics.altitude.wrapper.style.top = '-140px';
+    this.metrics.altitude.wrapper.style.left = '-200px';
+    this.metrics.altitude.wrapper.style.transform = 'translate(-100%, 0)';
+
+    this.metrics.latitude.wrapper.style.top = '-140px';
+    this.metrics.latitude.wrapper.style.right = '-200px';
+    this.metrics.latitude.wrapper.style.transform = 'translate(100%, 0)';
+
+    this.metrics.time.wrapper.style.bottom = '-140px';
     this.metrics.time.wrapper.style.left = '50%';
     this.metrics.time.wrapper.style.transform = 'translate(-50%, 0)';
 
     this.metrics.distance.wrapper.style.top = '50%';
-    this.metrics.distance.wrapper.style.left = '-120px';
+    this.metrics.distance.wrapper.style.left = '-150px';
     this.metrics.distance.wrapper.style.transform = 'translate(-100%, -50%)';
 
     this.metrics.crashes.wrapper.style.top = '50%';
-    this.metrics.crashes.wrapper.style.right = '-120px';
+    this.metrics.crashes.wrapper.style.right = '-150px';
     this.metrics.crashes.wrapper.style.transform = 'translate(100%, -50%)';
 
     Object.values(this.metrics).forEach(({ wrapper }) => {
@@ -336,12 +361,13 @@ export class HUD {
 
   // --- Public API ---
 
-  update({ throttle = 0, speed = 0, crashCount = 0, elapsedTime = 0, distance = 0 } = {}){
-    const throttlePct = Math.round(clamp01(throttle) * 100);
+  update({ throttle = 0, speed = 0, crashCount = 0, elapsedTime = 0, distance = 0, altitude = 0, latitude = 0 } = {}){
+    const throttleNormalized = clamp01(throttle);
+    const throttlePct = Math.round(Math.max(0, throttle) * 100);
     this.throttleText.textContent = `${this.throttleLabel} ${throttlePct}%`;
 
     // Conic gradient sweep for throttle ring
-    const sweep = Math.max(0, Math.min(360, throttlePct * 3.6));
+    const sweep = Math.max(0, Math.min(360, throttleNormalized * 360));
     const arcGradient = `conic-gradient(rgba(80, 255, 200, 0.8) ${sweep}deg, rgba(90, 120, 180, 0.18) ${sweep}deg 360deg)`;
     this.throttleRing.style.background = arcGradient;
 
@@ -350,6 +376,8 @@ export class HUD {
     this.metrics.crashes.value.textContent = `${Math.max(0, crashCount|0)}`;
     this.metrics.time.value.textContent = formatTime(elapsedTime);
     this.metrics.distance.value.textContent = formatDistance(distance);
+    this.metrics.altitude.value.textContent = formatAltitude(altitude);
+    this.metrics.latitude.value.textContent = formatLatitude(latitude);
   }
 
   showMessage(text, durationMs = 1200){
@@ -390,6 +418,12 @@ export class HUD {
   setMetricLabels(labels = {}){
     if (labels.speed && this.metrics.speed?.title){
       this.metrics.speed.title.textContent = labels.speed;
+    }
+    if (labels.altitude && this.metrics.altitude?.title){
+      this.metrics.altitude.title.textContent = labels.altitude;
+    }
+    if (labels.latitude && this.metrics.latitude?.title){
+      this.metrics.latitude.title.textContent = labels.latitude;
     }
     if (labels.crashes && this.metrics.crashes?.title){
       this.metrics.crashes.title.textContent = labels.crashes;
