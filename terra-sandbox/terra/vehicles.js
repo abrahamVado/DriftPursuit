@@ -62,6 +62,14 @@ export function createVehicleSystem({
   const trackedVehicles = [];
   let activeVehicleId = null;
 
+  const METERS_PER_LATITUDE_DEGREE = 111320;
+
+  function sampleLatitude(position){
+    if (!position) return 0;
+    const value = position.y / METERS_PER_LATITUDE_DEGREE;
+    return Number.isFinite(value) ? THREE.MathUtils.clamp(value, -90, 90) : 0;
+  }
+
   function getWorldInstance(){
     return typeof getWorld === 'function' ? getWorld() : null;
   }
@@ -226,6 +234,8 @@ export function createVehicleSystem({
         distance: 0,
         throttle: 0,
         speed: 0,
+        altitude: 0,
+        latitude: sampleLatitude(transform.plane.position),
         lastPosition: transform.plane.position.clone(),
       },
       behaviorSeed: Math.random() * Math.PI * 2,
@@ -251,6 +261,12 @@ export function createVehicleSystem({
       }
       if (Number.isFinite(initialState.speed)){
         entry.stats.speed = initialState.speed;
+      }
+      if (Number.isFinite(initialState.altitude)){
+        entry.stats.altitude = initialState.altitude;
+      }
+      if (initialState.position){
+        entry.stats.latitude = sampleLatitude(initialState.position);
       }
     }
 
@@ -335,6 +351,8 @@ export function createVehicleSystem({
     if (!state) return;
     vehicle.stats.elapsed = 0;
     vehicle.stats.distance = 0;
+    vehicle.stats.altitude = Number.isFinite(state.altitude) ? state.altitude : 0;
+    vehicle.stats.latitude = sampleLatitude(state.position);
     vehicle.stats.lastPosition.copy(state.position);
     vehicle.stats.crashCount = 0;
   }
@@ -420,6 +438,12 @@ export function createVehicleSystem({
     stats.elapsed += dt;
     stats.throttle = state.throttle ?? stats.throttle;
     stats.speed = state.speed ?? stats.speed;
+    if (Number.isFinite(state.altitude)){
+      stats.altitude = state.altitude;
+    }
+    if (state.position){
+      stats.latitude = sampleLatitude(state.position);
+    }
     if (stats.lastPosition){
       stats.distance += state.position.distanceTo(stats.lastPosition);
       stats.lastPosition.copy(state.position);
@@ -508,16 +532,18 @@ export function createVehicleSystem({
     }
   }
 
-  function updateVehicleController(vehicle, dt, elapsedTime, inputSample){
+  function updateVehicleController(vehicle, dt, elapsedTime, inputSample, movementScale){
+    const clampedScale = Number.isFinite(movementScale) ? Math.max(0, movementScale) : 1;
+    const movementDt = dt * clampedScale;
     if (!vehicle) return;
     if (vehicle.isBot){
       if (vehicle.mode === 'plane'){
-        updatePlaneBot(vehicle, dt, elapsedTime);
+        updatePlaneBot(vehicle, movementDt, elapsedTime);
       } else {
-        updateCarBot(vehicle, dt, elapsedTime);
+        updateCarBot(vehicle, movementDt, elapsedTime);
       }
     } else if (vehicle.id === localPlayerId){
-      updateLocalVehicle(vehicle, dt, inputSample);
+      updateLocalVehicle(vehicle, movementDt, inputSample);
     }
   }
 
@@ -558,6 +584,8 @@ export function createVehicleSystem({
       crashCount: vehicle.stats.crashCount,
       elapsedTime: vehicle.stats.elapsed,
       distance: vehicle.stats.distance,
+      altitude: vehicle.stats.altitude,
+      latitude: vehicle.stats.latitude,
     };
   }
 
@@ -670,10 +698,11 @@ export function createVehicleSystem({
     focusCameraOnVehicle(vehicle);
   }
 
-  function update({ dt, elapsedTime, inputSample }){
+  function update({ dt, elapsedTime, inputSample, movementScale = 1 }){
+    const clampedScale = Number.isFinite(movementScale) ? Math.max(0, movementScale) : 1;
     for (const vehicle of vehicles.values()){
-      updateVehicleController(vehicle, dt, elapsedTime, inputSample);
-      stepVehicleAttachments(vehicle, dt);
+      updateVehicleController(vehicle, dt, elapsedTime, inputSample, clampedScale);
+      stepVehicleAttachments(vehicle, dt * clampedScale);
       updateVehicleStats(vehicle, dt);
     }
 
@@ -721,5 +750,47 @@ export function createVehicleSystem({
     getVehicleState,
     registerVehicleCrash,
     handleProjectileHit,
+    teleportActiveVehicle,
   };
 }
+  function teleportActiveVehicle({ position = null, velocity = null } = {}){
+    if (!activeVehicleId) return false;
+    const vehicle = vehicles.get(activeVehicleId);
+    if (!vehicle) return false;
+    const mode = vehicle.modes?.[vehicle.mode];
+    if (!mode?.controller) return false;
+
+    if (position){
+      mode.controller.position.copy(position);
+    }
+    if (velocity){
+      mode.controller.velocity.copy(velocity);
+    } else {
+      mode.controller.velocity.set(0, 0, 0);
+    }
+
+    syncControllerVisual(mode.controller);
+
+    if (vehicle.stats){
+      const state = mode.controller.getState ? mode.controller.getState() : null;
+      if (state){
+        vehicle.stats.throttle = state.throttle ?? vehicle.stats.throttle;
+        vehicle.stats.speed = state.speed ?? vehicle.stats.speed;
+        vehicle.stats.altitude = Number.isFinite(state.altitude) ? state.altitude : vehicle.stats.altitude;
+        vehicle.stats.latitude = state.position ? sampleLatitude(state.position) : vehicle.stats.latitude;
+        if (vehicle.stats.lastPosition){
+          vehicle.stats.lastPosition.copy(state.position);
+        } else {
+          vehicle.stats.lastPosition = state.position.clone();
+        }
+      } else if (position){
+        if (vehicle.stats.lastPosition){
+          vehicle.stats.lastPosition.copy(position);
+        } else {
+          vehicle.stats.lastPosition = position.clone ? position.clone() : new THREE.Vector3(position.x ?? 0, position.y ?? 0, position.z ?? 0);
+        }
+      }
+    }
+
+    return true;
+  }

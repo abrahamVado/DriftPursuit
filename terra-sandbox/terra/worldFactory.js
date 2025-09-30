@@ -1,5 +1,6 @@
 import { TerraWorldStreamer } from './TerraWorldStreamer.js';
 import { TileMapWorld } from './TileMapWorld.js';
+import { SolarSystemWorld } from './SolarSystemWorld.js';
 import {
   cloneMapDefinition,
   cloneMapDescriptor,
@@ -113,6 +114,11 @@ function createWorldFromDescriptor({ scene, mapDefinition }){
   const descriptorType = typeof descriptor?.type === 'string'
     ? descriptor.type.toLowerCase()
     : descriptor?.type;
+
+  if (descriptorType === 'solar-system'){
+    const config = descriptor ?? mapDefinition ?? {};
+    return new SolarSystemWorld({ scene, descriptor: config });
+  }
 
   if (descriptorType === 'tilemap'){
     descriptor.type = 'tilemap';

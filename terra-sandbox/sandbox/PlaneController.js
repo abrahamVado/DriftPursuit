@@ -40,6 +40,9 @@ export class PlaneController {
     propulsorLift = (9.8 * 0.6) * 1.05, // a bit more than gravity at full boost
     propulsorThrust = 32,
     propulsorResponse = 6.2,
+    maxThrottle = 1,
+    unlimitedPropulsion = false,
+    unlimitedPropulsionGain = undefined,
   } = {}){
     // Kinematics
     this.position = position.clone();
@@ -52,6 +55,14 @@ export class PlaneController {
     this.roll = roll;
 
     // Throttle/speed
+    this.maxThrottle = Number.isFinite(maxThrottle) && maxThrottle > 0 ? maxThrottle : Infinity;
+    if (!Number.isFinite(this.maxThrottle) || this.maxThrottle <= 0){
+      this.maxThrottle = Infinity;
+    }
+    this.unlimitedPropulsion = unlimitedPropulsion || !Number.isFinite(maxThrottle);
+    this.additionalPropulsionGain = Number.isFinite(unlimitedPropulsionGain)
+      ? Math.max(0, unlimitedPropulsionGain)
+      : (this.maxBoostSpeed ?? 0);
     this.throttle = 0.5;
     this.targetThrottle = 0.5;
     this.speed = 0;
@@ -111,7 +122,12 @@ export class PlaneController {
   }
 
   setThrottle(value){
-    this.targetThrottle = THREE.MathUtils.clamp(value ?? 0, 0, 1);
+    const limit = this.maxThrottle;
+    if (Number.isFinite(limit)){
+      this.targetThrottle = THREE.MathUtils.clamp(value ?? 0, 0, limit);
+    } else {
+      this.targetThrottle = Math.max(0, value ?? 0);
+    }
   }
 
   reset({ position, velocity, yaw = 0, pitch = 0, roll = 0, throttle = 0.35 } = {}){
@@ -119,8 +135,13 @@ export class PlaneController {
     if (velocity) this.velocity.copy(velocity); else this.velocity.set(0, 0, 0);
 
     this.speed = this.minSpeed * 0.7;
-    this.throttle = THREE.MathUtils.clamp(throttle ?? 0.35, 0, 1);
-    this.targetThrottle = this.throttle;
+    if (Number.isFinite(this.maxThrottle)){
+      this.throttle = THREE.MathUtils.clamp(throttle ?? 0.35, 0, this.maxThrottle);
+      this.targetThrottle = this.throttle;
+    } else {
+      this.throttle = Math.max(0, throttle ?? 0.35);
+      this.targetThrottle = this.throttle;
+    }
 
     this.yaw = yaw; this.pitch = pitch; this.roll = roll;
     this._updateOrientation();
@@ -153,17 +174,38 @@ export class PlaneController {
 
     // Throttle smoothing + braking cap
     const throttleAdjust = THREE.MathUtils.clamp(input.throttleAdjust ?? 0, -1, 1);
-    this.targetThrottle = THREE.MathUtils.clamp(this.targetThrottle + throttleAdjust * delta * 0.8, 0, 1);
-    if (input.brake) this.targetThrottle = Math.min(this.targetThrottle, 0.2);
+    const limit = this.maxThrottle;
+    this.targetThrottle += throttleAdjust * delta * 0.8;
+    if (Number.isFinite(limit)){
+      this.targetThrottle = THREE.MathUtils.clamp(this.targetThrottle, 0, limit);
+      if (input.brake) this.targetThrottle = Math.min(this.targetThrottle, limit * 0.2);
+    } else {
+      this.targetThrottle = Math.max(0, this.targetThrottle);
+      if (input.brake){
+        this.targetThrottle = Math.min(this.targetThrottle, this.throttle * 0.5);
+      }
+    }
     const throttleBlend = 1 - Math.exp(-this.throttleResponse * delta);
     this.throttle += (this.targetThrottle - this.throttle) * throttleBlend;
-    this.throttle = THREE.MathUtils.clamp(this.throttle, 0, 1);
+    if (Number.isFinite(limit)){
+      this.throttle = THREE.MathUtils.clamp(this.throttle, 0, limit);
+    } else {
+      this.throttle = Math.max(0, this.throttle);
+    }
 
     // Afterburner curve (boost only for high throttle)
-    const throttleBoost = THREE.MathUtils.clamp((this.throttle - 0.55) / 0.45, 0, 1);
+    const normalizedThrottle = Number.isFinite(limit) && limit > 0
+      ? THREE.MathUtils.clamp(this.throttle / limit, 0, 1)
+      : Math.min(1, this.throttle);
+    const throttleBoost = THREE.MathUtils.clamp((normalizedThrottle - 0.55) / 0.45, 0, 1);
     const boostFactor = throttleBoost * throttleBoost; // ease-in
-    const baseSpeed = this.minSpeed + (this.maxSpeed - this.minSpeed) * this.throttle;
-    const speedTarget = THREE.MathUtils.lerp(baseSpeed, this.maxBoostSpeed, boostFactor);
+    const baseSpeed = this.minSpeed + (this.maxSpeed - this.minSpeed) * normalizedThrottle;
+    let speedTarget = THREE.MathUtils.lerp(baseSpeed, this.maxBoostSpeed, boostFactor);
+    if (this.unlimitedPropulsion && this.throttle > 1){
+      const extraThrottle = this.throttle - 1;
+      const gain = this.additionalPropulsionGain > 0 ? this.additionalPropulsionGain : this.maxBoostSpeed;
+      speedTarget += Math.max(0, gain) * extraThrottle;
+    }
     const accelRate = this.acceleration + this.afterburnerAcceleration * boostFactor;
     const speedBlend = 1 - Math.exp(-accelRate * delta / Math.max(1, speedTarget));
     this.speed += (speedTarget - this.speed) * speedBlend;

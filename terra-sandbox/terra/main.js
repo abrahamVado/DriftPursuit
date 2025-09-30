@@ -30,6 +30,13 @@ const THREE = requireTHREE();
 
 const MAPS_ENDPOINT = './maps.json';
 const DEFAULT_BODY_BACKGROUND = DEFAULT_WORLD_ENVIRONMENT.bodyBackground;
+const SOLAR_SYSTEM_MAP_ID = 'solar-system';
+const SPACE_TRANSITION_ALTITUDE = 10000;
+const PLANET_APPROACH_DISTANCE = 500;
+const SOLAR_MOVEMENT_SCALE = 0.1;
+
+const SOLAR_ENTRY_POSITION = new THREE.Vector3(0, -8000, 12000);
+const SOLAR_ENTRY_VELOCITY = new THREE.Vector3(0, 0, 0);
 
 const FALLBACK_MAPS = [
   {
@@ -54,6 +61,19 @@ const FALLBACK_MAPS = [
         groundColor: '#2b4a2e',
         intensity: DEFAULT_WORLD_ENVIRONMENT.hemisphere.intensity,
       },
+    },
+  },
+  {
+    id: SOLAR_SYSTEM_MAP_ID,
+    name: 'Orbital Reach',
+    description: 'Expansive solar system with a luminous star and roaming planets.',
+    type: 'solar-system',
+    environment: {
+      background: '#050912',
+      bodyBackground: 'linear-gradient(180deg, #02030a 0%, #050b1a 45%, #0a1328 100%)',
+      fog: { color: '#060912', near: 16000, far: 48000 },
+      sun: { position: [0, 0, 0], intensity: 1.25, color: '#ffe4a6' },
+      hemisphere: { skyColor: '#0f1630', groundColor: '#03050a', intensity: 0.35 },
     },
   },
 ];
@@ -144,7 +164,7 @@ const chaseCamera = new ChaseCamera(camera, {
   pitchInfluence: 0.36,
 });
 
-const SKY_CEILING = 1800;
+const SKY_CEILING = 36000;
 const MAX_DEFAULT_VEHICLES = 5;
 
 const planeCameraConfig = {
@@ -171,6 +191,11 @@ const ORIGIN_FALLBACK = new THREE.Vector3(0, 0, 0);
 
 const worldRef = { current: null };
 
+let isInSolarSystem = false;
+let lastTerraMapId = null;
+let lastTerraMapDefinition = null;
+let terraReturnPoint = null;
+
 const vehicleSystem = createVehicleSystem({
   THREE,
   scene,
@@ -190,6 +215,142 @@ const vehicleSystem = createVehicleSystem({
   createCarRig,
   createCarController: () => new CarController(),
 });
+
+function isSolarDefinition(definition){
+  if (!definition) return false;
+  if (definition.id === SOLAR_SYSTEM_MAP_ID) return true;
+  const type = typeof definition.type === 'string' ? definition.type.toLowerCase() : null;
+  if (type === 'solar-system') return true;
+  const descriptorType = typeof definition.descriptor?.type === 'string'
+    ? definition.descriptor.type.toLowerCase()
+    : null;
+  return descriptorType === 'solar-system';
+}
+
+function getDefinitionById(mapId){
+  if (!mapId) return null;
+  return availableMaps.find((entry) => entry.id === mapId)
+    ?? FALLBACK_MAPS.find((entry) => entry.id === mapId)
+    ?? null;
+}
+
+function rememberTerraDefinition(definition){
+  if (!definition || isSolarDefinition(definition)) return;
+  lastTerraMapId = definition.id ?? lastTerraMapId ?? defaultMapId;
+  lastTerraMapDefinition = definition;
+}
+
+function applyWorldDefinition(mapDefinition){
+  if (!mapDefinition) return null;
+  const worldResult = initializeWorldForMap({
+    scene,
+    mapDefinition,
+    currentWorld: worldRef.current,
+    collisionSystem,
+    projectileManager,
+    environment: { document, hemisphere, sun },
+  });
+  worldRef.current = worldResult.world;
+  currentMapDefinition = worldResult.mapDefinition ?? mapDefinition;
+  hud.setActiveMap(currentMapDefinition?.id ?? '');
+  isInSolarSystem = isSolarDefinition(currentMapDefinition);
+  if (!isInSolarSystem){
+    rememberTerraDefinition(currentMapDefinition);
+  }
+  return worldResult;
+}
+
+function enterSolarSystem(activeState){
+  if (isInSolarSystem) return;
+  const solarDefinition = getDefinitionById(SOLAR_SYSTEM_MAP_ID);
+  if (!solarDefinition) return;
+  if (!isSolarDefinition(currentMapDefinition)){
+    rememberTerraDefinition(currentMapDefinition);
+  }
+  terraReturnPoint = activeState?.position ? activeState.position.clone() : null;
+
+  const result = applyWorldDefinition(solarDefinition);
+  if (!result){
+    return;
+  }
+
+  const entryPosition = SOLAR_ENTRY_POSITION.clone();
+  vehicleSystem.teleportActiveVehicle({ position: entryPosition, velocity: SOLAR_ENTRY_VELOCITY });
+  const activeVehicle = vehicleSystem.getActiveVehicle();
+  const state = activeVehicle ? vehicleSystem.getVehicleState(activeVehicle) : null;
+  if (state){
+    chaseCamera.snapTo(state);
+    worldRef.current?.update?.(state.position);
+  } else {
+    worldRef.current?.update?.(entryPosition);
+  }
+}
+
+function exitSolarSystem(activeState){
+  if (!isInSolarSystem) return;
+  const fallbackId = lastTerraMapId ?? defaultMapId;
+  const targetDefinition = lastTerraMapDefinition
+    ?? getDefinitionById(fallbackId)
+    ?? availableMaps.find((entry) => !isSolarDefinition(entry))
+    ?? FALLBACK_MAPS[0];
+  if (!targetDefinition) return;
+
+  applyWorldDefinition(targetDefinition);
+
+  const world = worldRef.current;
+  const basePoint = terraReturnPoint
+    ? terraReturnPoint.clone()
+    : activeState?.position
+      ? activeState.position.clone()
+      : ORIGIN_FALLBACK.clone();
+  terraReturnPoint = null;
+
+  if (!world || !basePoint){
+    return;
+  }
+
+  world.update?.(basePoint);
+  const ground = world.getHeightAt?.(basePoint.x, basePoint.y);
+  const groundHeight = Number.isFinite(ground) ? ground : 0;
+  const landingAltitude = groundHeight + 620;
+  const returnPosition = new THREE.Vector3(basePoint.x, basePoint.y, landingAltitude);
+
+  vehicleSystem.teleportActiveVehicle({ position: returnPosition, velocity: SOLAR_ENTRY_VELOCITY });
+  const activeVehicle = vehicleSystem.getActiveVehicle();
+  const state = activeVehicle ? vehicleSystem.getVehicleState(activeVehicle) : null;
+  if (state){
+    chaseCamera.snapTo(state);
+    world.update?.(state.position);
+  } else {
+    world.update?.(returnPosition);
+  }
+}
+
+function handleEnvironmentTransitions(activeVehicle, activeState){
+  if (!activeState) return { activeVehicle, activeState };
+
+  if (!isInSolarSystem){
+    if (Number.isFinite(activeState.altitude) && activeState.altitude >= SPACE_TRANSITION_ALTITUDE){
+      enterSolarSystem(activeState);
+      const refreshedVehicle = vehicleSystem.getActiveVehicle() ?? activeVehicle;
+      const refreshedState = refreshedVehicle ? vehicleSystem.getVehicleState(refreshedVehicle) : null;
+      return { activeVehicle: refreshedVehicle, activeState: refreshedState ?? activeState };
+    }
+  } else {
+    const world = worldRef.current;
+    if (world?.getApproachInfo && activeState.position){
+      const approach = world.getApproachInfo(activeState.position, PLANET_APPROACH_DISTANCE);
+      if (approach && (approach.withinThreshold || (Number.isFinite(approach.distanceToSurface) && approach.distanceToSurface <= PLANET_APPROACH_DISTANCE))){
+        exitSolarSystem(activeState);
+        const refreshedVehicle = vehicleSystem.getActiveVehicle() ?? activeVehicle;
+        const refreshedState = refreshedVehicle ? vehicleSystem.getVehicleState(refreshedVehicle) : null;
+        return { activeVehicle: refreshedVehicle, activeState: refreshedState ?? activeState };
+      }
+    }
+  }
+
+  return { activeVehicle, activeState };
+}
 
 const FIRE_COOLDOWN = 0.35;
 const MIN_FAILED_FIRE_DELAY = 0.12;
@@ -230,11 +391,17 @@ function animate(now){
   animate.elapsedTime = (animate.elapsedTime ?? 0) + dt;
 
   const inputSample = input.readState(dt);
-  const { activeVehicle, activeState, hudData } = vehicleSystem.update({
+  const preTransitionScale = isInSolarSystem ? SOLAR_MOVEMENT_SCALE : 1;
+  let { activeVehicle, activeState, hudData } = vehicleSystem.update({
     dt,
     elapsedTime: animate.elapsedTime,
     inputSample,
+    movementScale: preTransitionScale,
   });
+
+  const transitionResult = handleEnvironmentTransitions(activeVehicle, activeState);
+  activeVehicle = transitionResult.activeVehicle ?? activeVehicle;
+  activeState = transitionResult.activeState ?? activeState;
 
   fireCooldownTimer = Math.max(0, fireCooldownTimer - dt);
   if (fireInputHeld && fireCooldownTimer <= 0){
@@ -242,7 +409,8 @@ function animate(now){
     fireCooldownTimer = fired ? FIRE_COOLDOWN : MIN_FAILED_FIRE_DELAY;
   }
 
-  projectileManager.update(dt, {
+  const projectileDt = dt * (isInSolarSystem ? SOLAR_MOVEMENT_SCALE : 1);
+  projectileManager.update(projectileDt, {
     vehicles: vehicleSystem.getVehicles(),
     onVehicleHit: (vehicle, projectile) => {
       vehicleSystem.handleProjectileHit(vehicle, projectile);
@@ -301,18 +469,7 @@ async function bootstrap(){
   currentMapDefinition = selection.selected ?? availableMaps[0] ?? FALLBACK_MAPS[0];
 
   hud.setMapOptions(availableMaps);
-  hud.setActiveMap(currentMapDefinition?.id ?? '');
-
-  const worldResult = initializeWorldForMap({
-    scene,
-    mapDefinition: currentMapDefinition,
-    currentWorld: worldRef.current,
-    collisionSystem,
-    projectileManager,
-    environment: { document, hemisphere, sun },
-  });
-  worldRef.current = worldResult.world;
-  currentMapDefinition = worldResult.mapDefinition ?? currentMapDefinition;
+  applyWorldDefinition(currentMapDefinition);
 
   vehicleSystem.spawnDefaultVehicles();
   vehicleSystem.handlePlayerJoin(LOCAL_PLAYER_ID, { initialMode: 'plane' });

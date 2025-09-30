@@ -5,7 +5,13 @@ if (!THREE) throw new Error('Terra PlaneController requires THREE to be loaded g
 
 export class TerraPlaneController extends BasePlaneController {
   constructor(options = {}){
-    super(options);
+    const { unlimitedPropulsionGain, ...rest } = options ?? {};
+    super({
+      ...rest,
+      maxThrottle: Infinity,
+      unlimitedPropulsion: true,
+      unlimitedPropulsionGain: unlimitedPropulsionGain ?? undefined,
+    });
     this.turretYaw = 0;
     this.turretPitch = 0;
     this.turretAimTarget = { x: 0, y: 0 };

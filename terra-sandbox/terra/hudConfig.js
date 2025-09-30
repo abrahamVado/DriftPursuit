@@ -5,9 +5,11 @@ export function createHudPresets(){
       throttleLabel: 'THR',
       metricLabels: {
         speed: 'Airspeed',
+        altitude: 'Altitude',
+        latitude: 'Latitude',
         crashes: 'Incidents',
         time: 'Uptime',
-        distance: 'Distance',
+        distance: 'Distance Traveled',
       },
       items: [
         { label: 'Cycle', detail: '[ / ] — change player' },
@@ -20,9 +22,11 @@ export function createHudPresets(){
       throttleLabel: 'PWR',
       metricLabels: {
         speed: 'Speed',
+        altitude: 'Altitude',
+        latitude: 'Latitude',
         crashes: 'Incidents',
         time: 'Uptime',
-        distance: 'Distance',
+        distance: 'Distance Traveled',
       },
       items: [
         { label: 'Cycle', detail: '[ / ] — change player' },

@@ -505,12 +505,13 @@ export class TerraHUD extends BaseHUD {
   }
 
   _updateThrottleIndicator(throttle){
-    const pct = Math.round(Math.max(0, Math.min(1, throttle ?? 0)) * 100);
+    const normalized = Math.max(0, Math.min(1, throttle ?? 0));
+    const pct = Math.round(Math.max(0, throttle ?? 0) * 100);
     if (this.throttleBadgeValue){
       this.throttleBadgeValue.textContent = `${pct}%`;
     }
     if (this.throttleBarFill){
-      this.throttleBarFill.style.width = `${pct}%`;
+      this.throttleBarFill.style.width = `${Math.min(100, normalized * 100)}%`;
     }
   }
 
