@@ -73,7 +73,7 @@
     {
       "id": "solar-system",
       "name": "Orbital Reach",
-      "description": "Expansive solar system with a radiant star and orbiting planets.",
+      "description": "Expansive solar system with a radiant star and twin orbiting planets.",
       "type": "solar-system",
       "environment": {
         "background": "#050912",
@@ -110,17 +110,6 @@
           "rotationSpeed": 0.11,
           "atmosphereColor": "#91f1b2",
           "atmosphereOpacity": 0.22
-        },
-        {
-          "name": "Crimoria",
-          "radius": 720,
-          "orbitRadius": 13800,
-          "orbitSpeed": 0.017,
-          "color": "#ff7366",
-          "emissive": "#8b1c19",
-          "orbitHeight": 480,
-          "rotationSpeed": 0.15,
-          "ring": { "innerRadius": 900, "outerRadius": 1280, "color": "#ffc9a4", "opacity": 0.28, "tilt": 16 }
         }
       ]
     }

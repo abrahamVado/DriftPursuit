@@ -33,12 +33,25 @@ const DEFAULT_BODY_BACKGROUND = DEFAULT_WORLD_ENVIRONMENT.bodyBackground;
 const SOLAR_SYSTEM_MAP_ID = 'solar-system';
 const SPACE_TRANSITION_ALTITUDE = 10000;
 const PLANET_APPROACH_DISTANCE = 500;
-const SOLAR_MOVEMENT_SCALE = 0.1;
+const SOLAR_MOVEMENT_SCALE = 1;
 
 const SOLAR_ENTRY_POSITION = new THREE.Vector3(0, -8000, 12000);
 const SOLAR_ENTRY_VELOCITY = new THREE.Vector3(0, 0, 0);
 
 const FALLBACK_MAPS = [
+  {
+    id: SOLAR_SYSTEM_MAP_ID,
+    name: 'Orbital Reach',
+    description: 'Twin worlds orbit a radiant star amid deep-space vistas.',
+    type: 'solar-system',
+    environment: {
+      background: '#050912',
+      bodyBackground: 'linear-gradient(180deg, #02030a 0%, #050b1a 45%, #0a1328 100%)',
+      fog: { color: '#060912', near: 16000, far: 48000 },
+      sun: { position: [0, 0, 0], intensity: 1.25, color: '#ffe4a6' },
+      hemisphere: { skyColor: '#0f1630', groundColor: '#03050a', intensity: 0.35 },
+    },
+  },
   {
     id: 'aurora-basin',
     name: 'Aurora Basin',
@@ -61,19 +74,6 @@ const FALLBACK_MAPS = [
         groundColor: '#2b4a2e',
         intensity: DEFAULT_WORLD_ENVIRONMENT.hemisphere.intensity,
       },
-    },
-  },
-  {
-    id: SOLAR_SYSTEM_MAP_ID,
-    name: 'Orbital Reach',
-    description: 'Expansive solar system with a luminous star and roaming planets.',
-    type: 'solar-system',
-    environment: {
-      background: '#050912',
-      bodyBackground: 'linear-gradient(180deg, #02030a 0%, #050b1a 45%, #0a1328 100%)',
-      fog: { color: '#060912', near: 16000, far: 48000 },
-      sun: { position: [0, 0, 0], intensity: 1.25, color: '#ffe4a6' },
-      hemisphere: { skyColor: '#0f1630', groundColor: '#03050a', intensity: 0.35 },
     },
   },
 ];
@@ -151,6 +151,8 @@ const { hud } = createHud({
     }
   },
   onMapSelect: mapSelectionHandler,
+  onToggleLights: handleNavigationLightsToggle,
+  initialLightsActive: navigationLightsEnabled,
   presets: hudPresets,
 });
 hud.setActiveAmmo(projectileManager.getCurrentAmmoId());
@@ -195,6 +197,7 @@ let isInSolarSystem = false;
 let lastTerraMapId = null;
 let lastTerraMapDefinition = null;
 let terraReturnPoint = null;
+let navigationLightsEnabled = true;
 
 const vehicleSystem = createVehicleSystem({
   THREE,
@@ -275,6 +278,12 @@ function enterSolarSystem(activeState){
   }
 
   const entryPosition = SOLAR_ENTRY_POSITION.clone();
+  if (worldRef.current?.getPrimaryPlanetSpawnPoint){
+    const spawnPoint = worldRef.current.getPrimaryPlanetSpawnPoint(640);
+    if (spawnPoint){
+      entryPosition.copy(spawnPoint);
+    }
+  }
   vehicleSystem.teleportActiveVehicle({ position: entryPosition, velocity: SOLAR_ENTRY_VELOCITY });
   const activeVehicle = vehicleSystem.getActiveVehicle();
   const state = activeVehicle ? vehicleSystem.getVehicleState(activeVehicle) : null;
@@ -371,6 +380,14 @@ function setFireSourceActive(source, active){
 function resetFireInput(){
   activeFireSources.clear();
   fireInputHeld = false;
+}
+
+function handleNavigationLightsToggle(active){
+  navigationLightsEnabled = !!active;
+  vehicleSystem.setNavigationLightsEnabled?.(navigationLightsEnabled);
+  if (hud?.lightsActive !== navigationLightsEnabled){
+    hud?.setLightsActive?.(navigationLightsEnabled, { silent: true });
+  }
 }
 
 function getRequestedMapId(){
@@ -473,6 +490,8 @@ async function bootstrap(){
 
   vehicleSystem.spawnDefaultVehicles();
   vehicleSystem.handlePlayerJoin(LOCAL_PLAYER_ID, { initialMode: 'plane' });
+  vehicleSystem.setNavigationLightsEnabled?.(navigationLightsEnabled);
+  hud.setLightsActive?.(navigationLightsEnabled, { silent: true });
 
   const initialVehicle = vehicleSystem.getActiveVehicle()
     ?? vehicleSystem.getVehicles().get(LOCAL_PLAYER_ID)

@@ -20,6 +20,7 @@ export class SolarSystemWorld {
     this.originOffset = new THREE.Vector3();
     this.disposables = [];
     this.planets = [];
+    this.primaryPlanet = null;
     this._tmpVector = new THREE.Vector3();
     this._elapsed = 0;
     this._lastTime = typeof performance !== 'undefined' ? performance.now() / 1000 : null;
@@ -37,7 +38,9 @@ export class SolarSystemWorld {
       .filter(Boolean);
     this.planets.forEach((planet) => {
       if (planet.group) this.group.add(planet.group);
+      this._positionPlanet(planet);
     });
+    this.primaryPlanet = this.planets[0] ?? null;
 
     if (this.scene){
       this.scene.add(this.group);
@@ -103,15 +106,6 @@ export class SolarSystemWorld {
         color: 0x7ed38c,
         emissive: 0x2a5c34,
         orbitHeight: -320,
-      },
-      {
-        name: 'Crimoria',
-        radius: 680,
-        orbitRadius: 13200,
-        orbitSpeed: 0.016,
-        color: 0xff6f61,
-        emissive: 0x7a1d1b,
-        orbitHeight: 480,
       },
     ];
   }
@@ -189,6 +183,20 @@ export class SolarSystemWorld {
     };
   }
 
+  _positionPlanet(planet){
+    if (!planet?.group) return;
+    const orbitAngle = Number.isFinite(planet.orbitAngle) ? planet.orbitAngle : 0;
+    const orbitRadius = Number.isFinite(planet.orbitRadius) ? planet.orbitRadius : 0;
+    const orbitHeight = Number.isFinite(planet.orbitHeight) ? planet.orbitHeight : 0;
+    const anchor = this.star?.mesh?.position ?? this.group?.position ?? null;
+    const offsetX = Math.cos(orbitAngle) * orbitRadius;
+    const offsetY = Math.sin(orbitAngle) * orbitRadius;
+    const anchorX = anchor?.x ?? 0;
+    const anchorY = anchor?.y ?? 0;
+    const anchorZ = anchor?.z ?? 0;
+    planet.group.position.set(anchorX + offsetX, anchorY + offsetY, anchorZ + orbitHeight);
+  }
+
   update(){
     const now = typeof performance !== 'undefined' ? performance.now() / 1000 : null;
     let dt = 0;
@@ -208,10 +216,7 @@ export class SolarSystemWorld {
 
     this.planets.forEach((planet) => {
       planet.orbitAngle += planet.orbitSpeed * dt;
-      const x = Math.cos(planet.orbitAngle) * planet.orbitRadius;
-      const y = Math.sin(planet.orbitAngle) * planet.orbitRadius;
-      const z = planet.orbitHeight;
-      planet.group.position.set(x, y, z);
+      this._positionPlanet(planet);
       planet.group.rotation.y += planet.rotationSpeed * dt;
       if (planet.tilt){
         planet.group.rotation.x = planet.tilt;
@@ -220,6 +225,23 @@ export class SolarSystemWorld {
   }
 
   handleOriginShift(){}
+
+  getPrimaryPlanetSpawnPoint(offset = 420){
+    const planet = this.primaryPlanet;
+    if (!planet?.group) return null;
+    const anchorPosition = this.star?.mesh?.position ?? this.group?.position ?? null;
+    const direction = planet.group.position.clone();
+    if (anchorPosition){
+      direction.sub(anchorPosition);
+    }
+    if (direction.lengthSq() < 1e-6){
+      direction.set(0, 1, 0);
+    }
+    direction.normalize();
+    const clearance = Number.isFinite(offset) ? Math.max(0, offset) : 0;
+    const distance = (planet.radius ?? 0) + clearance;
+    return planet.group.position.clone().addScaledVector(direction, distance);
+  }
 
   getHeightAt(){
     return Number.NaN;
@@ -299,6 +321,7 @@ export class SolarSystemWorld {
     });
     this.disposables = [];
     this.planets = [];
+    this.primaryPlanet = null;
     this.star = null;
   }
 }
