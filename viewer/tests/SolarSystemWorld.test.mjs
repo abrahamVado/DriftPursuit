@@ -18,6 +18,8 @@ test('solar system view toggles root visibility', async (t) => {
   class StubShip {
     constructor(){
       this.hasLaunched = false;
+      this.throttle = 0;
+      this.speed = 0;
       this.state = {
         position: new THREE.Vector3(),
         orientation: new THREE.Quaternion(),
@@ -25,6 +27,7 @@ test('solar system view toggles root visibility', async (t) => {
         forward: new THREE.Vector3(0, 1, 0),
         up: new THREE.Vector3(0, 0, 1),
       };
+      this.velocity = this.state.velocity;
     }
 
     dispose(){}
@@ -39,8 +42,20 @@ test('solar system view toggles root visibility', async (t) => {
     getForwardVector(target = new THREE.Vector3()){
       return target.copy(this.state.forward);
     }
-    setPosition(position){
+    getUpVector(target = new THREE.Vector3()){
+      return target.copy(this.state.up);
+    }
+    getPosition(target = new THREE.Vector3()){
+      return target.copy(this.state.position);
+    }
+    setPosition(position, { keepVelocity = false } = {}){
       this.state.position.copy(position);
+      if (!keepVelocity){
+        this.state.velocity.set(0, 0, 0);
+      }
+    }
+    setOrientation(quaternion){
+      this.state.orientation.copy(quaternion);
     }
     lookTowards(){ }
   }

@@ -141,7 +141,11 @@ export function createVehicleSystem({
     const x = Math.cos(angle) * radius;
     const y = Math.sin(angle) * radius;
     const ground = getGroundHeight(x, y);
-    const planePos = new THREE.Vector3(x, y, ground + 60 + (index % 2) * 12);
+    const highestAllowed = skyCeiling - 40;
+    const desiredAltitude = ground + Math.max(skyCeiling * 0.72, 420);
+    const minimumAltitude = ground + 120;
+    const planeAltitude = Math.max(minimumAltitude, Math.min(highestAllowed, desiredAltitude));
+    const planePos = new THREE.Vector3(x, y, planeAltitude);
     const carPos = new THREE.Vector3(x + 28, y - 28, ground + 2.6);
     const yaw = angle + Math.PI / 2;
     return {
@@ -164,12 +168,23 @@ export function createVehicleSystem({
       stickYaw: planeMesh?.userData?.turretStickYaw,
       stickPitch: planeMesh?.userData?.turretStickPitch,
     });
+    const divePitch = THREE.MathUtils.degToRad(-62);
     planeController?.reset?.({
       position: transform.plane.position,
       yaw: transform.plane.yaw,
-      pitch: THREE.MathUtils.degToRad(4),
-      throttle: 0.46,
+      pitch: divePitch,
+      throttle: 1,
     });
+    if (planeController){
+      planeController.throttle = 1;
+      planeController.targetThrottle = 1;
+      const diveDirection = new THREE.Vector3(0, 1, 0).applyQuaternion(planeController.orientation).normalize();
+      const targetSpeed = planeController.maxBoostSpeed ?? planeController.maxSpeed ?? 0;
+      planeController.speed = targetSpeed;
+      planeController.velocity.copy(diveDirection).multiplyScalar(targetSpeed);
+      planeController.propulsorHeat = 1;
+      planeController._applyPropulsorIntensity?.(1);
+    }
 
     const carRig = createCarRig?.();
     if (carRig?.carMesh) scene?.add?.(carRig.carMesh);
