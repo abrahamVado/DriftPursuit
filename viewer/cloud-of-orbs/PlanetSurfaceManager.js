@@ -10,6 +10,71 @@ import { TerraProjectileManager } from '../terra/Projectiles.js';
 const THREE = requireTHREE();
 const ORIGIN_FALLBACK = new THREE.Vector3(0, 0, 0);
 
+class AltitudeTracker {
+  constructor({ threshold = 10000, response = 1.6, holdDuration = 1.2 } = {}){
+    this.threshold = Math.max(0, threshold ?? 0);
+    this.response = Math.max(0.01, response ?? 0.01);
+    this.holdDuration = Math.max(0.1, holdDuration ?? 0.1);
+    this.raw = 0;
+    this.filtered = 0;
+    this.sampleAge = Number.POSITIVE_INFINITY;
+    this.aboveTimer = 0;
+  }
+
+  update(sample, dt = 0){
+    const deltaTime = Math.max(0, dt ?? 0);
+    const valid = Number.isFinite(sample);
+    if (valid){
+      this.raw = Math.max(0, sample);
+      this.sampleAge = 0;
+    } else {
+      this.sampleAge += deltaTime;
+    }
+
+    const target = valid ? this.raw : this.filtered;
+    const blend = deltaTime > 0 ? 1 - Math.exp(-this.response * deltaTime) : 1;
+    this.filtered += (target - this.filtered) * blend;
+    this.filtered = Math.max(0, this.filtered);
+
+    if (this.filtered >= this.threshold && this.hasRecentSample(this.holdDuration * 2)){
+      this.aboveTimer = Math.min(this.holdDuration, this.aboveTimer + deltaTime);
+    } else {
+      this.aboveTimer = Math.max(0, this.aboveTimer - deltaTime);
+    }
+
+    return {
+      raw: this.raw,
+      smoothed: this.filtered,
+      aboveThreshold: this.aboveTimer >= this.holdDuration,
+    };
+  }
+
+  reset(value = 0){
+    const base = Number.isFinite(value) ? Math.max(0, value) : 0;
+    this.raw = base;
+    this.filtered = base;
+    this.sampleAge = Number.POSITIVE_INFINITY;
+    this.aboveTimer = 0;
+  }
+
+  hasRecentSample(maxAge = 1.5){
+    return this.sampleAge <= Math.max(0, maxAge ?? 0);
+  }
+
+  getAltitude(){
+    return {
+      raw: this.raw,
+      smoothed: this.filtered,
+      aboveThreshold: this.aboveTimer >= this.holdDuration,
+    };
+  }
+
+  setThreshold(threshold){
+    if (!Number.isFinite(threshold)) return;
+    this.threshold = Math.max(0, threshold);
+  }
+}
+
 export const PlanetSurfaceState = Object.freeze({
   SYSTEM_VIEW: 'SYSTEM_VIEW',
   APPROACH: 'APPROACH',
@@ -107,6 +172,9 @@ export class PlanetSurfaceManager {
     worldInitializer = initializeWorldForMap,
     maxDefaultVehicles = 5,
     skyCeiling = 1800,
+    escapeAltitude = 10000,
+    escapeHoldDuration = 1.1,
+    altitudeResponse = 1.8,
     localPlayerId = 'pilot-local',
     planeCameraConfig = {},
     carCameraConfig = {},
@@ -147,6 +215,7 @@ export class PlanetSurfaceManager {
 
     this.maxDefaultVehicles = clampNumber(maxDefaultVehicles, 5);
     this.skyCeiling = clampNumber(skyCeiling, 1800);
+    this.escapeAltitude = Math.max(0, Number.isFinite(escapeAltitude) ? escapeAltitude : 0);
     this.localPlayerId = localPlayerId;
 
     this.planeCameraConfig = mergeConfig(DEFAULT_PLANE_CAMERA_CONFIG, planeCameraConfig);
@@ -174,6 +243,13 @@ export class PlanetSurfaceManager {
       createCarRig: createCarRigFn,
       createCarController,
     };
+
+    this.altitudeTracker = new AltitudeTracker({
+      threshold: this.escapeAltitude,
+      response: altitudeResponse,
+      holdDuration: escapeHoldDuration,
+    });
+    this.lastAltitudeEstimate = { raw: 0, smoothed: 0, aboveThreshold: false };
 
     this.state = PlanetSurfaceState.SYSTEM_VIEW;
     this.activeCameraRig = this.orbitalCameraRig;
@@ -205,6 +281,13 @@ export class PlanetSurfaceManager {
 
   getActivePlanetId(){
     return this.currentPlanetId;
+  }
+
+  getAltitudeEstimate(){
+    if (this.lastAltitudeEstimate){
+      return this.lastAltitudeEstimate;
+    }
+    return this.altitudeTracker?.getAltitude?.() ?? { raw: 0, smoothed: 0, aboveThreshold: false };
   }
 
   getActiveCamera(){
@@ -306,8 +389,20 @@ export class PlanetSurfaceManager {
     if (this.orbitalCameraRig?.update){
       this.orbitalCameraRig.update(dt, metrics ?? {}, orbitInput);
     }
+    const altitudeSample = Number.isFinite(metrics?.altitude)
+      ? metrics.altitude
+      : Number.isFinite(metrics?.distanceToSurface)
+        ? metrics.distanceToSurface
+        : null;
+    const altitudeEstimate = this.altitudeTracker
+      ? this.altitudeTracker.update(altitudeSample, dt)
+      : { raw: altitudeSample ?? 0, smoothed: altitudeSample ?? 0 };
+    this.lastAltitudeEstimate = altitudeEstimate;
     if (this.hud && typeof this.hud.update === 'function'){
-      this.hud.update({ throttle: 0, speed: 0, crashCount: 0, elapsedTime: 0, distance: 0 });
+      const distance = Number.isFinite(altitudeEstimate?.smoothed)
+        ? altitudeEstimate.smoothed
+        : 0;
+      this.hud.update({ throttle: 0, speed: 0, crashCount: 0, elapsedTime: 0, distance });
     }
   }
 
@@ -344,15 +439,49 @@ export class PlanetSurfaceManager {
       this.worldRef.current.update?.(ORIGIN_FALLBACK);
     }
 
+    const altitudeSample = this._getAltitudeSampleFromState(activeState);
+    const altitudeEstimate = this.altitudeTracker
+      ? this.altitudeTracker.update(altitudeSample, dt)
+      : { raw: altitudeSample ?? 0, smoothed: altitudeSample ?? 0, aboveThreshold: false };
+    this.lastAltitudeEstimate = altitudeEstimate;
+
+    if (
+      this.escapeAltitude > 0
+      && this.state !== PlanetSurfaceState.SYSTEM_VIEW
+      && altitudeEstimate?.aboveThreshold
+    ){
+      const planetId = this.currentPlanetId ?? this.selectedPlanetId ?? null;
+      this.requestSystemView({ immediate: true, reason: 'escape-altitude', planetId });
+      return;
+    }
+
     if (this.hud && typeof this.hud.update === 'function'){
-      this.hud.update(hudData ?? {});
+      const hudPayload = { ...(hudData ?? {}) };
+      if (Number.isFinite(altitudeEstimate?.smoothed)){
+        hudPayload.distance = altitudeEstimate.smoothed;
+      }
+      this.hud.update(hudPayload);
     }
   }
 
   _stepStateMachine(metrics){
-    const distance = clampNumber(metrics?.distanceToSurface ?? metrics?.distance ?? Number.POSITIVE_INFINITY, Number.POSITIVE_INFINITY);
-    const planetId = metrics?.planetId ?? this.selectedPlanetId ?? this.currentPlanetId;
-    const thresholds = resolveThresholds(metrics ?? {}, this.thresholdDefaults);
+    const fallbackDistance = clampNumber(
+      metrics?.distanceToSurface ?? metrics?.distance ?? Number.POSITIVE_INFINITY,
+      Number.POSITIVE_INFINITY,
+    );
+    const hasRecentAltitude = this.altitudeTracker?.hasRecentSample?.(2.5) ?? false;
+    const trackedAltitude = this.altitudeTracker?.getAltitude?.();
+    const canUseTrackedAltitude = hasRecentAltitude && this.state !== PlanetSurfaceState.SYSTEM_VIEW;
+    const distance = canUseTrackedAltitude && Number.isFinite(trackedAltitude?.smoothed)
+      ? trackedAltitude.smoothed
+      : fallbackDistance;
+    const effectiveMetrics = metrics ? { ...metrics } : {};
+    if (Number.isFinite(distance)){
+      effectiveMetrics.distanceToSurface = distance;
+      effectiveMetrics.altitude = distance;
+    }
+    const planetId = effectiveMetrics.planetId ?? this.selectedPlanetId ?? this.currentPlanetId;
+    const thresholds = resolveThresholds(effectiveMetrics, this.thresholdDefaults);
     const previousState = this.state;
 
     if (this.pendingExitToSystemView){
@@ -411,6 +540,7 @@ export class PlanetSurfaceManager {
         this.lastExitReason = null;
       }
     }
+    this.lastProximityMetrics = effectiveMetrics;
   }
 
   _transitionTo(nextState, { planetId } = {}){
@@ -454,6 +584,20 @@ export class PlanetSurfaceManager {
       this._applyHudPreset('departing');
       return;
     }
+  }
+
+  _getAltitudeSampleFromState(state){
+    if (!state) return null;
+    if (Number.isFinite(state.altitude)){
+      return Math.max(0, state.altitude);
+    }
+    if (state.position && this.worldRef.current?.getHeightAt){
+      const ground = this.worldRef.current.getHeightAt(state.position.x, state.position.y);
+      if (Number.isFinite(ground)){
+        return Math.max(0, state.position.z - ground);
+      }
+    }
+    return null;
   }
 
   _applyHudPreset(name){
@@ -571,6 +715,8 @@ export class PlanetSurfaceManager {
     this._resetVehiclePopulation();
 
     this.surfaceReady = true;
+    this.altitudeTracker?.reset?.(0);
+    this.lastAltitudeEstimate = this.altitudeTracker?.getAltitude?.() ?? { raw: 0, smoothed: 0, aboveThreshold: false };
     this._setHudMapLabel(this.surfaceContext.mapDefinition?.name ?? this._getPlanetLabel(planetId));
     if (this.callbacks.surfaceReady){
       this.callbacks.surfaceReady({ planetId, context: this.surfaceContext });
@@ -620,6 +766,8 @@ export class PlanetSurfaceManager {
 
   _teardownSurface(){
     this.surfaceReady = false;
+    this.altitudeTracker?.reset?.(0);
+    this.lastAltitudeEstimate = this.altitudeTracker?.getAltitude?.() ?? { raw: 0, smoothed: 0, aboveThreshold: false };
     if (this.vehicleSystem){
       const vehicles = this.vehicleSystem.getVehicles?.();
       if (vehicles && typeof vehicles.clear === 'function'){
