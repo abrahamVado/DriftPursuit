@@ -9,6 +9,7 @@ export class MarsInputManager {
     this.canvas = canvas;
     this.sensitivity = sensitivity;
     this.keys = new Set();
+    this._pressed = new Set();
     this.pointerLocked = false;
     this.primaryFire = false;
     this.aimX = 0;
@@ -53,10 +54,14 @@ export class MarsInputManager {
 
   _handleKeyDown(event) {
     this.keys.add(event.code);
+    if (!event.repeat) {
+      this._pressed.add(event.code);
+    }
   }
 
   _handleKeyUp(event) {
     this.keys.delete(event.code);
+    this._pressed.delete(event.code);
   }
 
   _handlePointerDown(event) {
@@ -94,6 +99,7 @@ export class MarsInputManager {
   _handleVisibilityChange() {
     if (document.hidden) {
       this.keys.clear();
+      this._pressed.clear();
       this.primaryFire = false;
     }
   }
@@ -121,18 +127,34 @@ export class MarsInputManager {
     return 0;
   }
 
+  _consumePressed(codes) {
+    if (!Array.isArray(codes)) {
+      codes = [codes];
+    }
+    let triggered = false;
+    for (const code of codes) {
+      if (this._pressed.has(code)) {
+        this._pressed.delete(code);
+        triggered = true;
+      }
+    }
+    return triggered;
+  }
+
   getState() {
+    const throttleAdjust = this._axis(['KeyW', 'ArrowUp'], ['KeyS', 'ArrowDown']);
     return {
-      throttle: this._axis(['KeyW', 'ArrowUp'], ['KeyS', 'ArrowDown']),
+      throttleAdjust,
+      throttle: throttleAdjust,
       yaw: this._axis('KeyD', 'KeyA'),
       roll: this._axis('KeyE', 'KeyQ'),
       pitch: this._axis('ArrowDown', 'ArrowUp'),
-      strafe: this._axis('KeyL', 'KeyJ'),
-      elevate: this._axis('KeyI', 'KeyK'),
       boost: this.keys.has('ShiftLeft') || this.keys.has('ShiftRight'),
       brake: this.keys.has('Space'),
       aim: { x: this.aimX, y: this.aimY },
       firing: this.primaryFire,
+      toggleNavigationLights: this._consumePressed(['KeyN', 'KeyV']),
+      toggleAuxiliaryLights: this._consumePressed('KeyL'),
     };
   }
 }

@@ -1,5 +1,5 @@
-import * as THREE from 'three';
-import { MarsVehicle, createMarsSkiff } from './vehicle.js';
+import { THREE } from './threeLoader.js';
+import { MarsPlaneController, createPlaneMesh } from './PlaneController.js';
 import { MarsChaseCamera } from './chaseCamera.js';
 import { MarsInputManager } from './input.js';
 import { MarsProjectileSystem } from './projectiles.js';
@@ -141,17 +141,22 @@ export class MarsSandbox {
 
     this._buildTerrain();
 
-    this.vehicle = new MarsVehicle();
-    if (this.terrain?.sampleHeight) {
-      this.vehicle.setTerrainSampler(this.terrain.sampleHeight);
-    }
-    const { group: vehicleMesh, attachments } = createMarsSkiff();
-    this.vehicle.attachMesh(vehicleMesh, attachments);
-    this.scene.add(vehicleMesh);
-    this.vehicleMesh = vehicleMesh;
+    this.vehicle = new MarsPlaneController();
+    const planeMesh = createPlaneMesh();
+    this.vehicle.attachMesh(planeMesh);
+    this.vehicle.setAuxiliaryLightsActive(false);
+    this.scene.add(planeMesh);
+    this.vehicleMesh = planeMesh;
 
-    const startHeight = this.terrain?.sampleHeight ? this.terrain.sampleHeight(0, 0) + 58 : 90;
-    this.vehicle.reset({ position: new THREE.Vector3(0, startHeight, 120) });
+    const sampleHeight = this.terrain?.sampleHeight ?? null;
+    const anchorY = 48;
+    const startHeight = sampleHeight ? sampleHeight(0, anchorY) + 72 : 120;
+    this.vehicle.reset({
+      position: new THREE.Vector3(0, anchorY, startHeight),
+      yaw: THREE.MathUtils.degToRad(180),
+      pitch: THREE.MathUtils.degToRad(4),
+      throttle: 0.46,
+    });
 
     this.chaseCamera = new MarsChaseCamera({ camera: this.camera, distance: 68, height: 28, lookAhead: 36, responsiveness: 5.6 });
     this.chaseCamera.follow(this.vehicle);
@@ -159,7 +164,7 @@ export class MarsSandbox {
     this.projectiles = new MarsProjectileSystem({ scene: this.scene });
     this.inputManager = new MarsInputManager({ canvas: this.canvas });
 
-    this.hud.setStatus('Atmospheric skiff systems nominal. Weapons hot.');
+    this.hud.setStatus('Atmospheric surveyor plane systems nominal. Weapons hot.');
     this._updateWeather();
     this._handleResize();
     window.addEventListener('resize', this._handleResize);
@@ -203,10 +208,17 @@ export class MarsSandbox {
 
   resetVehicle() {
     if (!this.vehicle) return;
-    const ground = this.terrain?.sampleHeight ? this.terrain.sampleHeight(0, 0) : 0;
-    this.vehicle.reset({ position: new THREE.Vector3(0, ground + 58, 120) });
+    const sampleHeight = this.terrain?.sampleHeight ?? null;
+    const anchorY = 48;
+    const ground = sampleHeight ? sampleHeight(0, anchorY) : 0;
+    this.vehicle.reset({
+      position: new THREE.Vector3(0, anchorY, ground + 72),
+      yaw: THREE.MathUtils.degToRad(180),
+      pitch: THREE.MathUtils.degToRad(4),
+      throttle: 0.46,
+    });
     this.chaseCamera?.snap?.();
-    this.hud.setStatus('Aeroskiff repositioned at survey anchor.');
+    this.hud.setStatus('Surveyor plane repositioned at orbit anchor.');
   }
 
   regenerate(seed) {
@@ -216,9 +228,14 @@ export class MarsSandbox {
     this.hud.setSeed(this.seed.toString(16).toUpperCase());
     this._buildTerrain();
     if (this.terrain?.sampleHeight) {
-      this.vehicle?.setTerrainSampler(this.terrain.sampleHeight);
-      const ground = this.terrain.sampleHeight(0, 0);
-      this.vehicle?.reset({ position: new THREE.Vector3(0, ground + 58, 120) });
+      const anchorY = 48;
+      const ground = this.terrain.sampleHeight(0, anchorY);
+      this.vehicle?.reset({
+        position: new THREE.Vector3(0, anchorY, ground + 72),
+        yaw: THREE.MathUtils.degToRad(180),
+        pitch: THREE.MathUtils.degToRad(4),
+        throttle: 0.46,
+      });
       this.chaseCamera?.snap?.();
     }
     this._updateWeather();
@@ -265,7 +282,35 @@ export class MarsSandbox {
 
     this.inputManager?.update?.(dt);
     const inputState = this.inputManager ? this.inputManager.getState() : {};
-    this.vehicle.update(dt, inputState, { gravity: 3.72 });
+
+    if (inputState.toggleNavigationLights) {
+      const next = !this.vehicle.areNavigationLightsEnabled();
+      this.vehicle.setNavigationLightsEnabled(next);
+      this.hud.setStatus(next ? 'Navigation beacons illuminated.' : 'Navigation beacons darkened.');
+    }
+    if (inputState.toggleAuxiliaryLights) {
+      const next = !this.vehicle.auxiliaryLightsEnabled;
+      this.vehicle.setAuxiliaryLightsActive(next);
+      this.hud.setStatus(next ? 'Auxiliary landing lights engaged.' : 'Auxiliary landing lights offline.');
+    }
+
+    const sampleHeight = this.terrain?.sampleHeight
+      ? (x, y) => this.terrain.sampleHeight(x, y)
+      : null;
+    const clampAltitude = (controller, ground) => {
+      const minimum = ground + 28;
+      if (controller.position.z < minimum) {
+        controller.position.z = minimum;
+        if (controller.velocity.z < 0) {
+          controller.velocity.z = 0;
+        }
+      }
+    };
+
+    this.vehicle.update(dt, inputState, {
+      sampleGroundHeight: sampleHeight,
+      clampAltitude,
+    });
 
     if (inputState.firing) {
       const shot = this.vehicle.firePrimary();
@@ -277,7 +322,7 @@ export class MarsSandbox {
     this.projectiles?.update?.(dt);
     this.chaseCamera?.update?.(dt);
 
-    const vehicleState = this.vehicle.getState(this.terrain?.sampleHeight);
+    const vehicleState = this.vehicle.getState(sampleHeight);
     const speedKmh = vehicleState.speed * 3.6;
     this.hud.updateVehicle({
       altitude: vehicleState.altitude,

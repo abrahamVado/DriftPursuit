@@ -1,4 +1,4 @@
-import * as THREE from 'three';
+import { THREE } from './threeLoader.js';
 import { fractalNoise2D, ridgedNoise2D, warpCoordinate } from './noise.js';
 
 function createMulberry32(seed) {
