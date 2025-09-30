@@ -43,6 +43,24 @@ const SOLAR_MOVEMENT_SCALE = 1;
 const SOLAR_ENTRY_POSITION = new THREE.Vector3(0, -8000, 12000);
 const SOLAR_ENTRY_VELOCITY = new THREE.Vector3(0, 0, 0);
 
+function createTransitionLayer({ THREE, altitude }){
+  const geometry = new THREE.CircleGeometry(20000, 64);
+  const material = new THREE.MeshBasicMaterial({
+    color: 0x8fc4ff,
+    transparent: true,
+    opacity: 0.18,
+    side: THREE.DoubleSide,
+    depthWrite: false,
+  });
+  const mesh = new THREE.Mesh(geometry, material);
+  mesh.name = 'spaceTransitionLayer';
+  mesh.rotation.x = Math.PI / 2;
+  mesh.position.set(0, 0, altitude);
+  mesh.visible = false;
+  mesh.renderOrder = -5;
+  return mesh;
+}
+
 const FALLBACK_MAPS = [
   {
     id: SOLAR_SYSTEM_MAP_ID,
@@ -124,6 +142,9 @@ sun.shadow.camera.bottom = -800;
 sun.shadow.camera.far = 2400;
 scene.add(sun);
 
+const transitionLayer = createTransitionLayer({ THREE, altitude: SPACE_TRANSITION_ALTITUDE });
+scene.add(transitionLayer);
+
 const collisionSystem = new CollisionSystem({ world: null, crashMargin: 2.4, obstaclePadding: 3.2 });
 const projectileManager = new TerraProjectileManager({ scene, world: null });
 const ammoPresets = projectileManager.getAmmoTypes();
@@ -156,6 +177,8 @@ const { hud } = createHud({
     const accepted = projectileManager.setAmmoType(ammoId);
     if (!accepted){
       hud.setActiveAmmo(projectileManager.getCurrentAmmoId());
+    } else {
+      syncLampWithActiveVehicle();
     }
   },
   onMapSelect: mapSelectionHandler,
@@ -226,6 +249,32 @@ const vehicleSystem = createVehicleSystem({
   createCarController: () => new CarController(),
 });
 
+function getVehicleTurretMuzzle(vehicle){
+  if (!vehicle) return null;
+  const modeName = vehicle.mode;
+  const mode = vehicle.modes?.[modeName];
+  if (!mode) return null;
+  if (modeName === 'plane'){
+    return mode.mesh?.userData?.turretMuzzle ?? mode.muzzle ?? null;
+  }
+  if (modeName === 'car'){
+    const carMesh = mode.rig?.carMesh ?? null;
+    return carMesh?.userData?.turretMuzzle ?? mode.muzzle ?? null;
+  }
+  return mode.muzzle ?? null;
+}
+
+function syncLampWithActiveVehicle(activeVehicle = null){
+  if (!projectileManager) return;
+  const vehicle = activeVehicle ?? vehicleSystem.getActiveVehicle();
+  if (projectileManager.isLampAmmoActive()){
+    const muzzle = getVehicleTurretMuzzle(vehicle);
+    projectileManager.syncLampTarget(muzzle, { ownerId: vehicle?.id ?? null });
+  } else {
+    projectileManager.clearLampTarget();
+  }
+}
+
 function isSolarDefinition(definition){
   if (!definition) return false;
   if (definition.id === SOLAR_SYSTEM_MAP_ID) return true;
@@ -264,6 +313,8 @@ function applyWorldDefinition(mapDefinition){
   currentMapDefinition = worldResult.mapDefinition ?? mapDefinition;
   hud.setActiveMap(currentMapDefinition?.id ?? '');
   isInSolarSystem = isSolarDefinition(currentMapDefinition);
+  transitionLayer.visible = !isInSolarSystem;
+  syncLampWithActiveVehicle();
   if (!isInSolarSystem){
     rememberTerraDefinition(currentMapDefinition);
   }
@@ -427,6 +478,8 @@ function animate(now){
   activeVehicle = transitionResult.activeVehicle ?? activeVehicle;
   activeState = transitionResult.activeState ?? activeState;
 
+  syncLampWithActiveVehicle(activeVehicle);
+
   fireCooldownTimer = Math.max(0, fireCooldownTimer - dt);
   if (fireInputHeld && fireCooldownTimer <= 0){
     const fired = vehicleSystem.fireActiveVehicleProjectile();
@@ -454,6 +507,18 @@ function animate(now){
     worldRef.current?.update?.(activeState.position);
   } else if (worldRef.current){
     worldRef.current.update(ORIGIN_FALLBACK);
+  }
+
+  if (!isInSolarSystem){
+    transitionLayer.visible = true;
+    const layerPosition = activeState?.position ?? ORIGIN_FALLBACK;
+    transitionLayer.position.set(
+      layerPosition?.x ?? 0,
+      layerPosition?.y ?? 0,
+      SPACE_TRANSITION_ALTITUDE,
+    );
+  } else {
+    transitionLayer.visible = false;
   }
 
   hud.update(hudData);
@@ -499,6 +564,7 @@ async function bootstrap(){
   vehicleSystem.handlePlayerJoin(LOCAL_PLAYER_ID, { initialMode: 'plane' });
   vehicleSystem.setNavigationLightsEnabled?.(navigationLightsEnabled);
   hud.setLightsActive?.(navigationLightsEnabled, { silent: true });
+  syncLampWithActiveVehicle();
 
   const initialVehicle = vehicleSystem.getActiveVehicle()
     ?? vehicleSystem.getVehicles().get(LOCAL_PLAYER_ID)
@@ -584,6 +650,7 @@ window.DriftPursuitTerra = {
     const accepted = projectileManager.setAmmoType(ammoId);
     if (accepted){
       hud.setActiveAmmo(projectileManager.getCurrentAmmoId());
+      syncLampWithActiveVehicle();
     }
     return accepted;
   },
