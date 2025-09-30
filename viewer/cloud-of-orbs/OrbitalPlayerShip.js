@@ -1,4 +1,5 @@
 import { requireTHREE } from '../shared/threeSetup.js';
+import { createPlaneMesh as createSurfacePlaneMesh } from '../terra/PlaneController.js';
 
 const THREE = requireTHREE();
 
@@ -23,58 +24,46 @@ const TMP_UP = new THREE.Vector3(0, 0, 1);
 const TMP_TARGET = new THREE.Vector3();
 
 function createShipMesh(){
-  const group = new THREE.Group();
-  group.name = 'OrbitalPlayerShip';
+  const plane = createSurfacePlaneMesh();
+  plane.name = 'OrbitalPlayerShip';
+  plane.scale.setScalar(2.6);
 
-  const hullMaterial = new THREE.MeshStandardMaterial({ color: 0xdde3ff, metalness: 0.38, roughness: 0.35 });
-  const accentMaterial = new THREE.MeshStandardMaterial({ color: 0x4c5ea6, metalness: 0.32, roughness: 0.28 });
-  const glowMaterial = new THREE.MeshStandardMaterial({ color: 0xffa04a, emissive: 0xff7a1f, emissiveIntensity: 0.85, metalness: 0.08, roughness: 0.6 });
+  const turretBase = plane.getObjectByName?.('turretBase');
+  if (turretBase?.parent){
+    turretBase.parent.remove(turretBase);
+  }
 
-  const fuselage = new THREE.Mesh(new THREE.CapsuleGeometry(6, 36, 12, 24), hullMaterial);
-  fuselage.rotation.z = Math.PI / 2;
-  fuselage.castShadow = true;
-  fuselage.receiveShadow = true;
-  group.add(fuselage);
+  const propulsors = Array.isArray(plane.userData?.propulsors) ? plane.userData.propulsors : [];
+  propulsors.forEach((propulsor) => {
+    if (!propulsor) return;
+    propulsor.minIntensity = propulsor.minIntensity ?? 0.45;
+    propulsor.maxIntensity = (propulsor.maxIntensity ?? 3.2) * 1.35;
+    propulsor.minOpacity = Math.min(propulsor.minOpacity ?? 0.16, 0.2);
+    propulsor.maxOpacity = Math.max(propulsor.maxOpacity ?? 0.95, 0.98);
+    propulsor.minScale = (propulsor.minScale ?? 0.85) * 1.1;
+    propulsor.maxScale = (propulsor.maxScale ?? 1.8) * 1.4;
+    propulsor.scaleZ = (propulsor.scaleZ ?? 1.6) * 1.45;
+    propulsor.minEmissive = propulsor.minEmissive ?? 0.12;
+    propulsor.maxEmissive = (propulsor.maxEmissive ?? 0.7) * 1.25;
+    if (propulsor.light){
+      propulsor.light.distance = Math.max(propulsor.light.distance ?? 0, 520);
+      propulsor.light.decay = 2.4;
+      propulsor.light.intensity = 0;
+      propulsor.light.color.set(0xffc27a);
+    }
+    if (propulsor.glowMaterial){
+      propulsor.glowMaterial.color.set(0xffc68a);
+    }
+  });
 
-  const nose = new THREE.Mesh(new THREE.ConeGeometry(6, 16, 20), accentMaterial);
-  nose.position.set(0, 28, 0);
-  nose.rotation.x = Math.PI;
-  nose.castShadow = true;
-  group.add(nose);
+  plane.traverse((obj) => {
+    if (obj.isMesh){
+      obj.castShadow = true;
+      obj.receiveShadow = true;
+    }
+  });
 
-  const tail = new THREE.Mesh(new THREE.ConeGeometry(4.2, 18, 16), accentMaterial);
-  tail.position.set(0, -28, 0);
-  tail.castShadow = true;
-  group.add(tail);
-
-  const wingGeometry = new THREE.BoxGeometry(42, 4.2, 2.2);
-  const wing = new THREE.Mesh(wingGeometry, accentMaterial);
-  wing.position.set(0, 0, 0);
-  wing.castShadow = true;
-  wing.receiveShadow = true;
-  group.add(wing);
-
-  const tailWingGeometry = new THREE.BoxGeometry(16, 3.2, 1.4);
-  const tailWing = new THREE.Mesh(tailWingGeometry, accentMaterial);
-  tailWing.position.set(0, -18, 0);
-  tailWing.castShadow = true;
-  tailWing.receiveShadow = true;
-  group.add(tailWing);
-
-  const thruster = new THREE.Mesh(new THREE.CylinderGeometry(3.2, 5.4, 6, 16, 1, true), glowMaterial);
-  thruster.position.set(0, -32, 0);
-  thruster.rotation.x = Math.PI / 2;
-  group.add(thruster);
-
-  const glow = new THREE.PointLight(0xff8d3a, 1.6, 420, 2.2);
-  glow.position.set(0, -34, 0);
-  group.add(glow);
-
-  group.scale.setScalar(2.4);
-  group.castShadow = true;
-  group.receiveShadow = true;
-
-  return group;
+  return plane;
 }
 
 export class OrbitalPlayerShip {
@@ -95,6 +84,11 @@ export class OrbitalPlayerShip {
     this.velocity = new THREE.Vector3();
     this.forward = new THREE.Vector3(0, 1, 0);
     this.up = new THREE.Vector3(0, 0, 1);
+
+    this.propulsorRefs = Array.isArray(this.mesh.userData?.propulsors) ? this.mesh.userData.propulsors : [];
+    this.propulsorHeat = 0;
+    this.propulsorResponse = 4.5;
+    this._applyPropulsorIntensity(0);
 
     this.state = {
       position: this.mesh.position,
@@ -138,6 +132,8 @@ export class OrbitalPlayerShip {
     this.speed = 0;
     this.throttle = 0;
     this.hasLaunched = false;
+    this.propulsorHeat = 0;
+    this._applyPropulsorIntensity(0);
   }
 
   setPosition(position, { keepVelocity = false } = {}){
@@ -266,6 +262,9 @@ export class OrbitalPlayerShip {
       this.hasLaunched = true;
     }
 
+    const throttleLevel = Math.max(this.throttle, THREE.MathUtils.clamp(this.speed / Math.max(1, this.config.maxSpeed), 0, 1));
+    this._updatePropulsors(dt, throttleLevel);
+
     if (this._needsMatrixUpdate){
       this.mesh.updateMatrixWorld?.();
       this._needsMatrixUpdate = false;
@@ -274,6 +273,47 @@ export class OrbitalPlayerShip {
     this.up.copy(this.getUpVector(this.up));
 
     return this.state;
+  }
+
+  _updatePropulsors(dt, target = 0){
+    if (!this.propulsorRefs || this.propulsorRefs.length === 0) return;
+    const blend = dt > 0 ? 1 - Math.exp(-this.propulsorResponse * dt) : 1;
+    const clampedTarget = THREE.MathUtils.clamp(target, 0, 1);
+    this.propulsorHeat += (clampedTarget - this.propulsorHeat) * blend;
+    this.propulsorHeat = THREE.MathUtils.clamp(this.propulsorHeat, 0, 1);
+    this._applyPropulsorIntensity(this.propulsorHeat);
+  }
+
+  _applyPropulsorIntensity(level){
+    if (!this.propulsorRefs || this.propulsorRefs.length === 0) return;
+    const intensity = THREE.MathUtils.clamp(level ?? 0, 0, 1);
+    for (const propulsor of this.propulsorRefs){
+      if (!propulsor) continue;
+      if (propulsor.light){
+        const min = propulsor.minIntensity ?? 0.4;
+        const max = propulsor.maxIntensity ?? 4.6;
+        propulsor.light.intensity = THREE.MathUtils.lerp(min, max, intensity);
+      }
+      if (propulsor.glowMaterial){
+        const minOpacity = propulsor.minOpacity ?? 0.18;
+        const maxOpacity = propulsor.maxOpacity ?? 1.0;
+        propulsor.glowMaterial.opacity = intensity <= 0.001
+          ? 0
+          : THREE.MathUtils.lerp(minOpacity, maxOpacity, intensity);
+      }
+      if (propulsor.glowMesh){
+        const minScale = propulsor.minScale ?? 0.9;
+        const maxScale = propulsor.maxScale ?? 2.3;
+        const scale = THREE.MathUtils.lerp(minScale, maxScale, intensity);
+        const scaleZ = propulsor.scaleZ ?? 2.2;
+        propulsor.glowMesh.scale.set(scale, scale, scale * scaleZ);
+      }
+      if (propulsor.housingMaterial && typeof propulsor.housingMaterial.emissiveIntensity === 'number'){
+        const minEmissive = propulsor.minEmissive ?? 0.12;
+        const maxEmissive = propulsor.maxEmissive ?? 0.9;
+        propulsor.housingMaterial.emissiveIntensity = THREE.MathUtils.lerp(minEmissive, maxEmissive, intensity);
+      }
+    }
   }
 }
 

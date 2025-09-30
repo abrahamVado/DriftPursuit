@@ -3,6 +3,8 @@ if (!THREE) throw new Error('Sandbox PlaneController requires THREE to be loaded
 
 const FORWARD_AXIS = new THREE.Vector3(0, 1, 0);
 const TMP_VECTOR = new THREE.Vector3();
+const TMP_VECTOR2 = new THREE.Vector3();
+const TMP_VECTOR3 = new THREE.Vector3();
 const TMP_EULER = new THREE.Euler(0, 0, 0, 'ZXY');
 
 export class PlaneController {
@@ -17,9 +19,10 @@ export class PlaneController {
     this.throttle = 0.5;
     this.targetThrottle = 0.5;
     this.minSpeed = 30;
-    this.maxSpeed = 150;
-    this.maxBoostSpeed = 220;
-    this.acceleration = 45;
+    this.maxSpeed = 190;
+    this.maxBoostSpeed = 320;
+    this.acceleration = 55;
+    this.afterburnerAcceleration = 90;
     this.throttleResponse = 1.8;
     this.turnRates = {
       yaw: THREE.MathUtils.degToRad(85),
@@ -31,12 +34,18 @@ export class PlaneController {
     this.drag = 0.12;
     this.brakeDrag = 0.45;
     this.gravity = 9.8 * 0.6;
+    this.propulsorLift = this.gravity * 1.05;
+    this.propulsorThrust = 32;
+    this.propulsorResponse = 6.2;
+    this.propulsorHeat = 0;
+    this.propulsorRefs = [];
     this.altitude = 0;
     this._updateOrientation();
   }
 
   attachMesh(mesh){
     this.mesh = mesh;
+    this.propulsorRefs = Array.isArray(mesh?.userData?.propulsors) ? mesh.userData.propulsors : [];
     if (mesh){
       mesh.position.copy(this.position);
       mesh.quaternion.copy(this.orientation);
@@ -51,6 +60,7 @@ export class PlaneController {
         leadTarget.renderOrder = 2;
         mesh.add(leadTarget);
       }
+      this._applyPropulsorIntensity(this.propulsorHeat);
     }
   }
 
@@ -66,6 +76,8 @@ export class PlaneController {
     this.pitch = pitch;
     this.roll = roll;
     this._updateOrientation();
+    this.propulsorHeat = this.throttle;
+    this._applyPropulsorIntensity(this.propulsorHeat);
     if (this.mesh){
       this.mesh.position.copy(this.position);
       this.mesh.quaternion.copy(this.orientation);
@@ -93,11 +105,12 @@ export class PlaneController {
     this.throttle = THREE.MathUtils.clamp(this.throttle, 0, 1);
 
     const brakeApplied = input.brake ? this.brakeDrag : this.drag;
-    const maxSpeed = this.minSpeed + (this.maxSpeed - this.minSpeed) * this.throttle;
-    const boostSpeed = this.minSpeed + (this.maxBoostSpeed - this.minSpeed) * this.throttle;
-
-    const speedTarget = THREE.MathUtils.lerp(maxSpeed, boostSpeed, Math.max(0, this.throttle - 0.85) * 4);
-    const speedBlend = 1 - Math.exp(-this.acceleration * dt / Math.max(1, speedTarget));
+    const throttleBoost = THREE.MathUtils.clamp((this.throttle - 0.55) / 0.45, 0, 1);
+    const boostFactor = throttleBoost * throttleBoost;
+    const baseSpeed = this.minSpeed + (this.maxSpeed - this.minSpeed) * this.throttle;
+    const speedTarget = THREE.MathUtils.lerp(baseSpeed, this.maxBoostSpeed, boostFactor);
+    const accelRate = this.acceleration + this.afterburnerAcceleration * boostFactor;
+    const speedBlend = 1 - Math.exp(-accelRate * dt / Math.max(1, speedTarget));
     this.speed += (speedTarget - this.speed) * speedBlend;
 
     this.speed = Math.max(this.minSpeed * 0.3, this.speed);
@@ -120,10 +133,18 @@ export class PlaneController {
     this._updateOrientation();
 
     const forward = TMP_VECTOR.copy(FORWARD_AXIS).applyQuaternion(this.orientation).normalize();
-    const desiredVelocity = forward.multiplyScalar(this.speed);
+    const desiredVelocity = TMP_VECTOR2.copy(forward).multiplyScalar(this.speed);
     this.velocity.lerp(desiredVelocity, 1 - Math.exp(-3.5 * dt));
 
-    const gravityVector = TMP_VECTOR.set(0, 0, -this.gravity * dt);
+    if (boostFactor > 0){
+      const climbFactor = Math.max(0.12, forward.z + 0.12);
+      const thrust = this.propulsorThrust * boostFactor * climbFactor;
+      this.velocity.addScaledVector(forward, thrust * dt);
+    }
+
+    const lift = this.propulsorLift * boostFactor;
+    const effectiveGravity = Math.max(0, this.gravity - lift);
+    const gravityVector = TMP_VECTOR3.set(0, 0, -effectiveGravity * dt);
     this.velocity.add(gravityVector);
     this.velocity.multiplyScalar(Math.max(0, 1 - brakeApplied * dt));
 
@@ -141,6 +162,8 @@ export class PlaneController {
       this.mesh.position.copy(this.position);
       this.mesh.quaternion.copy(this.orientation);
     }
+
+    this._updatePropulsors(dt, Math.max(this.throttle, boostFactor));
   }
 
   getState(){
@@ -157,6 +180,49 @@ export class PlaneController {
   _updateOrientation(){
     TMP_EULER.set(this.pitch, this.roll, this.yaw, 'ZXY');
     this.orientation.setFromEuler(TMP_EULER);
+  }
+
+  _updatePropulsors(dt, targetIntensity = this.throttle){
+    const blend = dt > 0 ? 1 - Math.exp(-this.propulsorResponse * dt) : 1;
+    const clampedTarget = THREE.MathUtils.clamp(targetIntensity, 0, 1);
+    this.propulsorHeat += (clampedTarget - this.propulsorHeat) * blend;
+    this.propulsorHeat = THREE.MathUtils.clamp(this.propulsorHeat, 0, 1);
+    this._applyPropulsorIntensity(this.propulsorHeat);
+  }
+
+  _applyPropulsorIntensity(level){
+    if (!this.propulsorRefs || this.propulsorRefs.length === 0) return;
+    const intensity = THREE.MathUtils.clamp(level ?? 0, 0, 1);
+    for (const propulsor of this.propulsorRefs){
+      if (!propulsor) continue;
+      if (propulsor.light){
+        const min = propulsor.minIntensity ?? 0.25;
+        const max = propulsor.maxIntensity ?? 2.8;
+        propulsor.light.intensity = THREE.MathUtils.lerp(min, max, intensity);
+        if (propulsor.light.shadow){
+          propulsor.light.shadow.needsUpdate = true;
+        }
+      }
+      if (propulsor.glowMaterial){
+        const minOpacity = propulsor.minOpacity ?? 0.08;
+        const maxOpacity = propulsor.maxOpacity ?? 0.9;
+        propulsor.glowMaterial.opacity = intensity <= 0.001
+          ? 0
+          : THREE.MathUtils.lerp(minOpacity, maxOpacity, intensity);
+      }
+      if (propulsor.glowMesh){
+        const minScale = propulsor.minScale ?? 0.7;
+        const maxScale = propulsor.maxScale ?? 1.65;
+        const scale = THREE.MathUtils.lerp(minScale, maxScale, intensity);
+        const scaleZ = propulsor.scaleZ ?? 1.6;
+        propulsor.glowMesh.scale.set(scale, scale, scale * scaleZ);
+      }
+      if (propulsor.housingMaterial && typeof propulsor.housingMaterial.emissiveIntensity === 'number'){
+        const minEmissive = propulsor.minEmissive ?? 0.05;
+        const maxEmissive = propulsor.maxEmissive ?? 0.45;
+        propulsor.housingMaterial.emissiveIntensity = THREE.MathUtils.lerp(minEmissive, maxEmissive, intensity);
+      }
+    }
   }
 }
 
@@ -207,6 +273,76 @@ export function createPlaneMesh(){
   rudder.castShadow = true;
   group.add(rudder);
 
+  const propulsorHousingMaterial = new THREE.MeshStandardMaterial({
+    color: 0x314166,
+    metalness: 0.78,
+    roughness: 0.28,
+    emissive: 0x121c33,
+    emissiveIntensity: 0.08,
+  });
+  const baseGlowMaterial = new THREE.MeshBasicMaterial({
+    color: 0xffa86a,
+    transparent: true,
+    opacity: 0,
+    blending: THREE.AdditiveBlending,
+    depthWrite: false,
+    depthTest: false,
+    toneMapped: false,
+    side: THREE.DoubleSide,
+  });
+
+  const propulsorOffsets = [
+    new THREE.Vector3(-4.4, -5.1, -0.5),
+    new THREE.Vector3(4.4, -5.1, -0.5),
+    new THREE.Vector3(0, -8.4, -0.2),
+  ];
+  const propulsors = [];
+
+  propulsorOffsets.forEach((offset, index) => {
+    const housing = new THREE.Mesh(new THREE.CylinderGeometry(0.7, 1.2, 3, 18, 1, true), propulsorHousingMaterial.clone());
+    housing.rotation.x = Math.PI / 2;
+    housing.position.copy(offset);
+    housing.castShadow = true;
+    housing.receiveShadow = true;
+    group.add(housing);
+
+    const rim = new THREE.Mesh(new THREE.TorusGeometry(0.72, 0.12, 12, 20), accentMaterial);
+    rim.position.copy(offset);
+    rim.rotation.y = Math.PI / 2;
+    rim.castShadow = true;
+    group.add(rim);
+
+    const glowMaterial = baseGlowMaterial.clone();
+    const glow = new THREE.Mesh(new THREE.ConeGeometry(0.95, 4.2, 20, 1, true), glowMaterial);
+    glow.position.copy(offset);
+    glow.position.y -= index === 2 ? 2.6 : 2.2;
+    glow.rotation.x = Math.PI;
+    glow.renderOrder = 3;
+    glow.scale.set(0.8, 0.8, index === 2 ? 1.8 : 1.5);
+    group.add(glow);
+
+    const light = new THREE.PointLight(0xffb978, 0, index === 2 ? 120 : 80, 2.8);
+    light.position.copy(offset);
+    light.position.y -= index === 2 ? 1.2 : 0.8;
+    group.add(light);
+
+    propulsors.push({
+      light,
+      glowMesh: glow,
+      glowMaterial,
+      housingMaterial: housing.material,
+      minIntensity: 0.35,
+      maxIntensity: index === 2 ? 3.8 : 2.9,
+      minOpacity: 0.12,
+      maxOpacity: 0.95,
+      minScale: 0.75,
+      maxScale: index === 2 ? 1.8 : 1.55,
+      scaleZ: index === 2 ? 2.2 : 1.6,
+      minEmissive: 0.08,
+      maxEmissive: index === 2 ? 0.7 : 0.5,
+    });
+  });
+
   group.traverse((obj) => {
     if (obj.isMesh){
       obj.castShadow = true;
@@ -215,6 +351,7 @@ export function createPlaneMesh(){
   });
 
   group.name = 'ArcadePlane';
+  group.userData.propulsors = propulsors;
 
   return group;
 }
