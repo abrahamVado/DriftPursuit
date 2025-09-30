@@ -1,3 +1,4 @@
+// spaceship/parts.js
 import THREE from '../../shared/threeProxy.js';
 import {
   createHardpoint,
@@ -24,7 +25,15 @@ function applyShadowSettings(object){
   return object;
 }
 
-function createNavigationLight({ position, color, intensity = 1.2, range = 200, radius = 0.32, minOpacity = 0.08, keepVisibleWhenOff = false }) {
+function createNavigationLight({
+  position,
+  color,
+  intensity = 1.2,
+  range = 200,
+  radius = 0.32,
+  minOpacity = 0.08,
+  keepVisibleWhenOff = false
+}) {
   const light = new THREE.PointLight(color, intensity, range, 2.6);
   light.position.copy(position);
 
@@ -85,6 +94,7 @@ export function createHull(options = {}) {
     envMapIntensity: 1.05,
   });
 
+  // Primary fuselage
   const fuselage = new THREE.Mesh(new THREE.CapsuleGeometry(2.6, 13, 16, 24), primaryMaterial);
   fuselage.rotation.z = Math.PI / 2;
   fuselage.castShadow = true;
@@ -128,11 +138,12 @@ export function createHull(options = {}) {
   bellyKeel.position.set(0, -4.6, -1.6);
   group.add(bellyKeel);
 
+  // Navigation lights
   const navLights = [];
   const navConfigs = [
     { position: new THREE.Vector3(-8.6, -1.6, 0.4), color: 0xff6b7a },
-    { position: new THREE.Vector3(8.6, -1.6, 0.4), color: 0x7cffd1 },
-    { position: new THREE.Vector3(0.6, 7.4, -0.2), color: 0xa8dfff, intensity: 1.4, range: 320, radius: 0.36, minOpacity: 0.12, keepVisibleWhenOff: true },
+    { position: new THREE.Vector3( 8.6, -1.6, 0.4), color: 0x7cffd1 },
+    { position: new THREE.Vector3( 0.6,  7.4,-0.2), color: 0xa8dfff, intensity: 1.4, range: 320, radius: 0.36, minOpacity: 0.12, keepVisibleWhenOff: true },
   ];
   navConfigs.forEach((config) => {
     const entry = createNavigationLight(config);
@@ -141,16 +152,25 @@ export function createHull(options = {}) {
     navLights.push(entry);
   });
 
+  // Hardpoints (kinds and tags align with modules below)
   const hardpoints = [
-    createHardpoint({ name: 'leftWing', kind: 'propulsor', size: 1, tags: ['wing', 'port'], position: new THREE.Vector3(-5.9, -2.8, -0.4) }),
-    createHardpoint({ name: 'rightWing', kind: 'propulsor', size: 1, tags: ['wing', 'starboard'], position: new THREE.Vector3(5.9, -2.8, -0.4) }),
-    createHardpoint({ name: 'tailMount', kind: 'propulsor', size: 1.2, tags: ['tail'], position: new THREE.Vector3(0, -9.2, -0.4) }),
-    createHardpoint({ name: 'dorsal', kind: 'turret', size: 1, tags: ['dorsal'], position: new THREE.Vector3(0, -1.6, 2.5) }),
-    createHardpoint({ name: 'belly', kind: 'payload', size: 1.4, tags: ['belly'], position: new THREE.Vector3(0, -2.8, -2.6) }),
-    createHardpoint({ name: 'nose', kind: 'utility', size: 1, tags: ['nose'], position: new THREE.Vector3(0, 7.2, -0.2) }),
+    // Engines on wings + tail
+    createHardpoint({ name: 'leftWing',  kind: 'propulsor', size: 1,   tags: ['wing','port'],      position: new THREE.Vector3(-5.9, -2.8, -0.4) }),
+    createHardpoint({ name: 'rightWing', kind: 'propulsor', size: 1,   tags: ['wing','starboard'], position: new THREE.Vector3( 5.9, -2.8, -0.4) }),
+    createHardpoint({ name: 'tailMount', kind: 'propulsor', size: 1.2, tags: ['tail'],             position: new THREE.Vector3( 0.0, -9.2, -0.4) }),
+
+    // Weapons / utility
+    createHardpoint({ name: 'dorsal',    kind: 'turret',    size: 1,   tags: ['dorsal'],           position: new THREE.Vector3( 0.0, -1.6,  2.5) }),
+    createHardpoint({ name: 'belly',     kind: 'payload',   size: 1.4, tags: ['belly'],            position: new THREE.Vector3( 0.0, -2.8, -2.6) }),
+    createHardpoint({ name: 'nose',      kind: 'utility',   size: 1,   tags: ['nose'],             position: new THREE.Vector3( 0.0,  7.2, -0.2) }),
+
+    // NEW: wing payload pylons for missile racks
+    createHardpoint({ name: 'pylonL',    kind: 'payload',   size: 1,   tags: ['wing','port'],      position: new THREE.Vector3(-7.2, -2.2, -0.2) }),
+    createHardpoint({ name: 'pylonR',    kind: 'payload',   size: 1,   tags: ['wing','starboard'], position: new THREE.Vector3( 7.2, -2.2, -0.2) }),
   ];
   registerHardpoints(group, hardpoints);
 
+  // Controller hooks
   group.userData.propulsors = [];
   group.userData.navigationLights = navLights;
   group.userData.auxiliaryLights = [];
@@ -164,24 +184,24 @@ function createPropulsorMaterials(variant) {
   switch (variant) {
     case 'heavy':
       return {
-        housing: new THREE.MeshStandardMaterial({ color: 0x2a3356, metalness: 0.78, roughness: 0.22, emissive: 0x161a33, emissiveIntensity: 0.08 }),
-        ring: new THREE.MeshStandardMaterial({ color: 0x6f86ff, metalness: 0.62, roughness: 0.32 }),
-        glowCold: new THREE.Color(0x75c7ff),
-        glowHot: new THREE.Color(0xffecb2),
+        housing:   new THREE.MeshStandardMaterial({ color: 0x2a3356, metalness: 0.78, roughness: 0.22, emissive: 0x161a33, emissiveIntensity: 0.08 }),
+        ring:      new THREE.MeshStandardMaterial({ color: 0x6f86ff, metalness: 0.62, roughness: 0.32 }),
+        glowCold:  new THREE.Color(0x75c7ff),
+        glowHot:   new THREE.Color(0xffecb2),
       };
     case 'vector':
       return {
-        housing: new THREE.MeshStandardMaterial({ color: 0x334a4a, metalness: 0.74, roughness: 0.24, emissive: 0x13201d, emissiveIntensity: 0.07 }),
-        ring: new THREE.MeshStandardMaterial({ color: 0x91f1d8, metalness: 0.55, roughness: 0.28 }),
-        glowCold: new THREE.Color(0x82ffe0),
-        glowHot: new THREE.Color(0xf6ffcc),
+        housing:   new THREE.MeshStandardMaterial({ color: 0x334a4a, metalness: 0.74, roughness: 0.24, emissive: 0x13201d, emissiveIntensity: 0.07 }),
+        ring:      new THREE.MeshStandardMaterial({ color: 0x91f1d8, metalness: 0.55, roughness: 0.28 }),
+        glowCold:  new THREE.Color(0x82ffe0),
+        glowHot:   new THREE.Color(0xf6ffcc),
       };
     default:
       return {
-        housing: new THREE.MeshStandardMaterial({ color: 0x2f3a5c, metalness: 0.75, roughness: 0.25, emissive: 0x171d2f, emissiveIntensity: 0.08 }),
-        ring: new THREE.MeshStandardMaterial({ color: 0x7aa7ff, metalness: 0.58, roughness: 0.3 }),
-        glowCold: new THREE.Color(0x68d3ff),
-        glowHot: new THREE.Color(0xffdc98),
+        housing:   new THREE.MeshStandardMaterial({ color: 0x2f3a5c, metalness: 0.75, roughness: 0.25, emissive: 0x171d2f, emissiveIntensity: 0.08 }),
+        ring:      new THREE.MeshStandardMaterial({ color: 0x7aa7ff, metalness: 0.58, roughness: 0.3 }),
+        glowCold:  new THREE.Color(0x68d3ff),
+        glowHot:   new THREE.Color(0xffdc98),
       };
   }
 }
@@ -191,7 +211,10 @@ export function createPropulsorModule(variant = 'standard', options = {}) {
   group.name = `Propulsor_${variant}`;
   const { housing, ring, glowCold, glowHot } = createPropulsorMaterials(variant);
 
-  const housingMesh = new THREE.Mesh(new THREE.CylinderGeometry(0.65, 1.05, 2.6, 18, 1, true), housing);
+  const housingMesh = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.65, 1.05, 2.6, 18, 1, true),
+    housing
+  );
   housingMesh.position.set(0, -1.1, 0);
   group.add(housingMesh);
 
@@ -220,14 +243,18 @@ export function createPropulsorModule(variant = 'standard', options = {}) {
   light.position.set(0, -1.8, 0);
   group.add(light);
 
+  // Plug anchor (child's +Y forward, +Z up basis)
   const plugAnchor = new THREE.Object3D();
+  plugAnchor.name = 'mount';
   plugAnchor.position.set(0, 0.6, 0);
   group.add(plugAnchor);
+
+  // IMPORTANT: Propulsor can mount to wing or tail. Do not force side tags here.
   const plug = createPlugDescriptor({
     name: 'mount',
     kind: 'propulsor',
     size: variant === 'heavy' ? 1.2 : 1,
-    tags: ['wing', 'port', 'starboard', 'tail'],
+    tags: ['wing', 'tail'], // compatible with either; socket determines side via 'port'/'starboard'
     node: plugAnchor,
   });
 
@@ -285,9 +312,17 @@ export function createTurretModule(options = {}) {
   group.add(barrel);
 
   const plugAnchor = new THREE.Object3D();
+  plugAnchor.name = 'mount';
   plugAnchor.position.set(0, -0.4, 0);
   group.add(plugAnchor);
-  const plug = createPlugDescriptor({ name: 'mount', kind: 'turret', size: 1, tags: ['dorsal'], node: plugAnchor });
+
+  const plug = createPlugDescriptor({
+    name: 'mount',
+    kind: 'turret',
+    size: 1,
+    tags: ['dorsal'],
+    node: plugAnchor
+  });
   group.userData.plugs = [plug];
 
   group.userData.boundingRadius = 1.6;
@@ -302,9 +337,9 @@ export function createMissileRackModule(options = {}) {
   const group = new THREE.Group();
   group.name = 'MissileRack';
 
-  const bodyMaterial = new THREE.MeshStandardMaterial({ color: 0x424a55, metalness: 0.55, roughness: 0.38 });
-  const missileMaterial = new THREE.MeshStandardMaterial({ color: 0xc9d4e6, metalness: 0.4, roughness: 0.3 });
-  const tipMaterial = new THREE.MeshStandardMaterial({ color: 0xd95d39, metalness: 0.52, roughness: 0.32 });
+  const bodyMaterial    = new THREE.MeshStandardMaterial({ color: 0x424a55, metalness: 0.55, roughness: 0.38 });
+  const missileMaterial = new THREE.MeshStandardMaterial({ color: 0xc9d4e6, metalness: 0.4,  roughness: 0.3  });
+  const tipMaterial     = new THREE.MeshStandardMaterial({ color: 0xd95d39, metalness: 0.52, roughness: 0.32 });
 
   const body = new THREE.Mesh(new THREE.BoxGeometry(2.6, 3.2, 1.4), bodyMaterial);
   body.position.set(0, -0.4, 0);
@@ -313,10 +348,12 @@ export function createMissileRackModule(options = {}) {
   for (let i = 0; i < 4; i += 1) {
     const offsetX = (i % 2 === 0 ? -0.6 : 0.6);
     const offsetY = -1.1 + Math.floor(i / 2) * 1.4;
+
     const missile = new THREE.Mesh(new THREE.CylinderGeometry(0.24, 0.3, 2.6, 10), missileMaterial);
     missile.rotation.x = Math.PI / 2;
     missile.position.set(offsetX, offsetY, -0.1);
     group.add(missile);
+
     const tip = new THREE.Mesh(new THREE.ConeGeometry(0.3, 0.7, 10), tipMaterial);
     tip.rotation.x = Math.PI / 2;
     tip.position.set(offsetX, offsetY + 1.3, -0.1);
@@ -324,9 +361,18 @@ export function createMissileRackModule(options = {}) {
   }
 
   const plugAnchor = new THREE.Object3D();
+  plugAnchor.name = 'mount';
   plugAnchor.position.set(0, 1.4, 0);
   group.add(plugAnchor);
-  const plug = createPlugDescriptor({ name: 'mount', kind: 'payload', size: 1, tags: ['dorsal', 'belly'], node: plugAnchor });
+
+  // Wing-only payload (fits pylonL/pylonR). You can also add 'belly' if you want centerline carriage.
+  const plug = createPlugDescriptor({
+    name: 'mount',
+    kind: 'payload',
+    size: 1,
+    tags: ['wing'],
+    node: plugAnchor
+  });
   group.userData.plugs = [plug];
 
   group.userData.boundingRadius = 2.1;
@@ -342,7 +388,7 @@ export function createBombBayModule(options = {}) {
   group.name = 'BombBay';
 
   const frameMaterial = new THREE.MeshStandardMaterial({ color: 0x363d49, metalness: 0.6, roughness: 0.28 });
-  const bombMaterial = new THREE.MeshStandardMaterial({ color: 0xe4e0ce, metalness: 0.35, roughness: 0.42 });
+  const bombMaterial  = new THREE.MeshStandardMaterial({ color: 0xe4e0ce, metalness: 0.35, roughness: 0.42 });
 
   const frame = new THREE.Mesh(new THREE.BoxGeometry(3.2, 3.4, 0.6), frameMaterial);
   frame.position.set(0, 0, -0.6);
@@ -352,6 +398,7 @@ export function createBombBayModule(options = {}) {
     const bomb = new THREE.Mesh(new THREE.SphereGeometry(0.6, 12, 12), bombMaterial);
     bomb.position.set(-0.8 + i * 0.8, 0, -1.4);
     group.add(bomb);
+
     const casing = new THREE.Mesh(new THREE.CylinderGeometry(0.3, 0.3, 1.6, 10), bombMaterial);
     casing.rotation.x = Math.PI / 2;
     casing.position.set(-0.8 + i * 0.8, 0, -2.2);
@@ -359,9 +406,17 @@ export function createBombBayModule(options = {}) {
   }
 
   const plugAnchor = new THREE.Object3D();
+  plugAnchor.name = 'mount';
   plugAnchor.position.set(0, 0.8, 0.2);
   group.add(plugAnchor);
-  const plug = createPlugDescriptor({ name: 'mount', kind: 'payload', size: 1.2, tags: ['belly'], node: plugAnchor });
+
+  const plug = createPlugDescriptor({
+    name: 'mount',
+    kind: 'payload',
+    size: 1.2,
+    tags: ['belly'],
+    node: plugAnchor
+  });
   group.userData.plugs = [plug];
 
   group.userData.boundingRadius = 1.9;
@@ -377,7 +432,7 @@ export function createLampTurretModule(options = {}) {
   group.name = 'LampTurret';
 
   const housingMaterial = new THREE.MeshStandardMaterial({ color: 0x35415c, metalness: 0.6, roughness: 0.34 });
-  const lensMaterial = new THREE.MeshStandardMaterial({ color: 0xbcdcff, metalness: 0.24, roughness: 0.18, transparent: true, opacity: 0.9, toneMapped: false });
+  const lensMaterial    = new THREE.MeshStandardMaterial({ color: 0xbcdcff, metalness: 0.24, roughness: 0.18, transparent: true, opacity: 0.9, toneMapped: false });
 
   const base = new THREE.Mesh(new THREE.CylinderGeometry(0.9, 1.1, 0.7, 14), housingMaterial);
   group.add(base);
@@ -409,11 +464,20 @@ export function createLampTurretModule(options = {}) {
   group.add(beam);
 
   const plugAnchor = new THREE.Object3D();
+  plugAnchor.name = 'mount';
   plugAnchor.position.set(0, -0.3, 0);
   group.add(plugAnchor);
-  const plug = createPlugDescriptor({ name: 'mount', kind: 'utility', size: 1, tags: ['nose'], node: plugAnchor });
+
+  const plug = createPlugDescriptor({
+    name: 'mount',
+    kind: 'utility',
+    size: 1,
+    tags: ['nose'],
+    node: plugAnchor
+  });
   group.userData.plugs = [plug];
 
+  // Controller auxiliary-light hook (for PlaneController.setAuxiliaryLightsActive)
   group.userData.auxRef = {
     light: spotlight,
     target,
@@ -433,12 +497,12 @@ export function createLampTurretModule(options = {}) {
 export const PART_BUILDERS = {
   hull: createHull,
   propulsorStandard: (options) => createPropulsorModule('standard', options),
-  propulsorHeavy: (options) => createPropulsorModule('heavy', options),
-  propulsorVector: (options) => createPropulsorModule('vector', options),
-  turret: createTurretModule,
-  missileRack: createMissileRackModule,
-  bombBay: createBombBayModule,
-  lampTurret: createLampTurretModule,
+  propulsorHeavy:    (options) => createPropulsorModule('heavy', options),
+  propulsorVector:   (options) => createPropulsorModule('vector', options),
+  turret:            createTurretModule,
+  missileRack:       createMissileRackModule,
+  bombBay:           createBombBayModule,
+  lampTurret:        createLampTurretModule,
 };
 
 export default {
