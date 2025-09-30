@@ -1,6 +1,7 @@
 // PlaneController.js (merged & polished)
 
-const THREE = (typeof window !== 'undefined' ? window.THREE : globalThis?.THREE) ?? null;
+import THREE from '../shared/threeProxy.js';
+
 if (!THREE) throw new Error('PlaneController requires THREE to be loaded globally');
 
 // Axes & temps

@@ -1,6 +1,6 @@
 import { WorldStreamer } from '../sandbox/WorldStreamer.js';
+import THREE from '../shared/threeProxy.js';
 
-const THREE = (typeof window !== 'undefined' ? window.THREE : globalThis?.THREE) ?? null;
 if (!THREE) throw new Error('Sandbox world adapter requires THREE to be loaded globally');
 
 export function createSandboxWorld({ scene, descriptor } = {}){

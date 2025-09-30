@@ -1,6 +1,6 @@
+import THREE from '../shared/threeProxy.js';
 import { PlaneController as BasePlaneController } from '../sandbox/PlaneController.js';
 
-const THREE = (typeof window !== 'undefined' ? window.THREE : globalThis?.THREE) ?? null;
 if (!THREE) throw new Error('Terra PlaneController requires THREE to be loaded globally');
 
 export class TerraPlaneController extends BasePlaneController {

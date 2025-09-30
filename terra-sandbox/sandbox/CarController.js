@@ -1,4 +1,5 @@
-const THREE = (typeof window !== 'undefined' ? window.THREE : globalThis?.THREE) ?? null;
+import THREE from '../shared/threeProxy.js';
+
 if (!THREE) throw new Error('CarController requires THREE to be available globally');
 
 // ------------------------- utils -------------------------

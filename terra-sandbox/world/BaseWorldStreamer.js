@@ -1,5 +1,6 @@
 import { NoiseGenerator } from '../sandbox/Noise.js';
 import { TERRAIN_PRESETS } from '../sandbox/terrainConfig.js';
+import THREE from '../shared/threeProxy.js';
 import {
   createRng,
   createCraterConfig,
@@ -19,7 +20,7 @@ import {
 import { createTerrainMesh } from './terrainMesh.js';
 import { scatterTerrainFeatures } from './featureScatter.js';
 
-const DEFAULT_THREE = (typeof window !== 'undefined' ? window.THREE : globalThis?.THREE) ?? null;
+const DEFAULT_THREE = THREE;
 
 function chunkKey(x, y){
   return `${x}:${y}`;

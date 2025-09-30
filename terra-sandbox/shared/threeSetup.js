@@ -1,6 +1,9 @@
+import THREE from './threeProxy.js';
+
 const getGlobalTHREE = () => {
-  const THREE = (typeof window !== 'undefined' ? window.THREE : globalThis?.THREE) ?? null;
-  if (!THREE) throw new Error('Three.js must be loaded globally before using viewer helpers');
+  if (!THREE){
+    throw new Error('Three.js module failed to load.');
+  }
   return THREE;
 };
 

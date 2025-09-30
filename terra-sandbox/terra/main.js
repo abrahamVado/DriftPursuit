@@ -144,6 +144,7 @@ const mapSelectionHandler = createMapSelectionHandler((mapId) => {
   }
 });
 
+// Single source of truth for nav lights
 let navigationLightsEnabled = true;
 
 const hudPresets = createHudPresets();
@@ -204,7 +205,6 @@ let isInSolarSystem = false;
 let lastTerraMapId = null;
 let lastTerraMapDefinition = null;
 let terraReturnPoint = null;
-let navigationLightsEnabled = true;
 
 const vehicleSystem = createVehicleSystem({
   THREE,
