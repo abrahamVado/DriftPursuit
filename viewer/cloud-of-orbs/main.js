@@ -19,8 +19,12 @@ import { createHud, createHudPresets } from './hudConfig.js';
 import { SolarSystemWorld } from './SolarSystemWorld.js';
 import { PlanetSurfaceManager, PlanetSurfaceState } from './PlanetSurfaceManager.js';
 import { CloudOfOrbsInputManager } from './InputManager.js';
+import { MatchManager } from './MatchManager.js';
 
 const THREE = requireTHREE();
+
+const ESCAPE_ALTITUDE_THRESHOLD = 10000;
+const ESCAPE_ALTITUDE_RESET = 7600;
 
 const SPACE_ENVIRONMENT = Object.freeze({
   bodyBackground: 'radial-gradient(circle at 50% 20%, #071427 0%, #030912 55%, #010308 100%)',
@@ -80,6 +84,63 @@ const ammoOptions = ammoManager.getAmmoTypes();
 
 const input = new CloudOfOrbsInputManager();
 input.setOrbitalControlsEnabled(true);
+
+const MATCH_PRESETS = [
+  {
+    id: 'match-1',
+    label: 'Match 1',
+    description: 'Balanced runway loop with gentle turns and smooth altitude changes.',
+    loop: true,
+    arrivalTolerance: 80,
+    waypoints: [
+      [-800, -400, 1200],
+      [-200, 0, 1350],
+      [600, 420, 1200],
+      [200, -200, 1100],
+    ],
+  },
+  {
+    id: 'match-2',
+    label: 'Match 2',
+    description: 'Aggressive harbour climb threading coastal peaks before diving to the runway.',
+    loop: true,
+    arrivalTolerance: 70,
+    waypoints: [
+      [-600, -300, 1000],
+      [-150, 260, 1500],
+      [520, 520, 1400],
+      [420, -280, 1050],
+    ],
+  },
+  {
+    id: 'match-3',
+    label: 'Match 3',
+    description: 'High ridge sprint weaving through mountain saddles before a steep valley drop.',
+    loop: true,
+    arrivalTolerance: 75,
+    waypoints: [
+      [-950, -520, 900],
+      [-350, 420, 1600],
+      [580, 760, 1500],
+      [420, -100, 1800],
+      [-220, -460, 1200],
+    ],
+  },
+  {
+    id: 'match-4',
+    label: 'Match 4',
+    description: 'Stratosphere dash slinging the craft toward thin air before lining up a long glide home.',
+    loop: true,
+    arrivalTolerance: 90,
+    waypoints: [
+      [-1000, -800, 1800],
+      [-320, 240, 5200],
+      [620, 640, 9200],
+      [280, -320, 11800],
+      [-420, -540, 5200],
+    ],
+  },
+];
 
 const hudPresets = createHudPresets();
 const { hud } = createHud({
@@ -143,6 +204,7 @@ const surfaceManager = new PlanetSurfaceManager({
   hud,
   hudPresets,
   projectileManager: ammoManager,
+  skyCeiling: 20000,
   environment: { document, hemisphere, sun: sunLight, defaults: DEFAULT_WORLD_ENVIRONMENT },
   onStateChange: handleSurfaceStateChange,
   onSurfaceReady: handleSurfaceReady,
@@ -156,6 +218,9 @@ let fireInputHeld = false;
 let fireCooldownTimer = 0;
 let elapsedTime = 0;
 let lastFrameTime = typeof performance !== 'undefined' ? performance.now() : Date.now();
+let matchManager = null;
+let escapeAltitudeArmed = false;
+let lastProximityMetrics = null;
 
 handlePlanetSelection(initialPlanetId);
 hud.setActiveMap(initialPlanetId ?? '');
@@ -163,6 +228,8 @@ hud.setMapLabel('Orbital Overview');
 
 ammoManager.setScene?.(scene);
 ammoManager.setWorld?.(null);
+
+matchManager = new MatchManager({ presets: MATCH_PRESETS, hud, surfaceManager });
 
 enableWindowResizeHandling({ renderer, camera });
 requestAnimationFrame(animate);
@@ -252,12 +319,27 @@ function animate(now){
 
   const inputSample = input.readState(dt);
 
+  const matchControl = matchManager?.update(dt, {
+    surfaceState: surfaceManager.getState(),
+    vehicleSystem: surfaceManager.vehicleSystem,
+  });
+
+  if (matchControl){
+    if (matchControl.modeRequest && !inputSample.modeRequest){
+      inputSample.modeRequest = matchControl.modeRequest;
+    }
+    if (matchControl.plane){
+      inputSample.plane = matchControl.plane;
+    }
+  }
+
   if (inputSample.system?.cycle && surfaceManager.getState() === PlanetSurfaceState.SYSTEM_VIEW){
     solarSystem.cycleFocus(inputSample.system.cycle);
     handlePlanetSelection(solarSystem.getFocusPlanetId());
   }
 
   const proximityMetrics = solarSystem.update(dt, { inputSample });
+  lastProximityMetrics = proximityMetrics;
   const exitRequested = Boolean(inputSample.system?.exitPlanet);
 
   if (exitRequested && surfaceManager.getState() !== PlanetSurfaceState.SYSTEM_VIEW){
@@ -271,6 +353,8 @@ function animate(now){
     orbitInput: inputSample.cameraOrbit,
     proximityMetrics,
   });
+
+  monitorEscapeAltitude();
 
   flushVehicleQueue();
 
@@ -358,6 +442,7 @@ function handleSurfaceStateChange({ next, planetId }){
   } else {
     solarSystem.exitSystemView();
   }
+  matchManager?.handleSurfaceStateChange({ next, planetId });
   if (typeof console !== 'undefined' && typeof console.debug === 'function'){
     console.debug('[CloudOfOrbs] Surface state change', { next, planetId });
   }
@@ -385,10 +470,12 @@ function handleSurfaceStateChange({ next, planetId }){
 
 function handleSurfaceReady(){
   flushVehicleQueue();
+  matchManager?.handleSurfaceReady();
 }
 
 function handleSurfaceDisposed(){
   resetFireInput();
+  matchManager?.handleSurfaceDisposed();
 }
 
 function setFireSourceActive(source, active){
@@ -430,4 +517,29 @@ function applySpaceEnvironment(){
     SPACE_ENVIRONMENT.sun.position[1],
     SPACE_ENVIRONMENT.sun.position[2],
   );
+}
+
+function monitorEscapeAltitude(){
+  if (surfaceManager.getState() === PlanetSurfaceState.SYSTEM_VIEW){
+    escapeAltitudeArmed = false;
+    return;
+  }
+  const vehicleSystem = surfaceManager.vehicleSystem;
+  if (!vehicleSystem) return;
+  const activeVehicle = vehicleSystem.getActiveVehicle?.();
+  if (!activeVehicle || activeVehicle.mode !== 'plane') return;
+  const state = vehicleSystem.getVehicleState?.(activeVehicle);
+  if (!state) return;
+  const altitude = typeof state.altitude === 'number'
+    ? state.altitude
+    : state.position?.z ?? 0;
+  if (!escapeAltitudeArmed && altitude >= ESCAPE_ALTITUDE_THRESHOLD){
+    const targetPlanetId = surfaceManager.getActivePlanetId?.()
+      ?? lastProximityMetrics?.planetId
+      ?? solarSystem.getFocusPlanetId();
+    surfaceManager.requestSystemView({ reason: 'escape-altitude', planetId: targetPlanetId ?? null });
+    escapeAltitudeArmed = true;
+  } else if (escapeAltitudeArmed && altitude <= ESCAPE_ALTITUDE_RESET){
+    escapeAltitudeArmed = false;
+  }
 }
