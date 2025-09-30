@@ -88,7 +88,9 @@ const chaseCamera = new ChaseCamera(camera, planeCameraConfig);
 const planeControls = describeControls('plane');
 const carControls = describeControls('car');
 const hud = new HUD({ controls: planeControls });
+hud.setDropHandler(dropVehicleFromDrone);
 const collisionSystem = new CollisionSystem({ world, crashMargin: 2.2, obstaclePadding: 3 });
+updateDropButtonState();
 
 const startAnchor = new THREE.Vector3(0, -320, 0);
 let crashCount = 0;
@@ -99,9 +101,12 @@ const lastPlanePosition = new THREE.Vector3();
 let elapsedDriveTime = 0;
 let drivenDistance = 0;
 const lastCarPosition = new THREE.Vector3();
+const DRONE_CARGO_OFFSET = new THREE.Vector3(0, -14, -12);
+const TMP_EULER = new THREE.Euler();
 
 const VEHICLE_MODES = { PLANE: 'plane', CAR: 'car' };
 let activeVehicle = VEHICLE_MODES.PLANE;
+let carAttachedToDrone = true;
 
 function computeStartPosition(){
   const spawn = startAnchor.clone();
@@ -119,6 +124,9 @@ function resetPlane(){
   lastPlanePosition.copy(planeController.position);
   world.update(planeController.position);
   focusCameraOnPlane();
+  if (carAttachedToDrone){
+    resetCar({ attachToDrone: true });
+  }
 }
 
 function computeCarStartPosition(){
@@ -128,15 +136,54 @@ function computeCarStartPosition(){
   return spawn;
 }
 
-function resetCar({ alignCamera = false } = {}){
-  const spawn = computeCarStartPosition();
-  carController.reset({ position: spawn, yaw: 0 });
+function extractYaw(quaternion){
+  if (!quaternion) return 0;
+  TMP_EULER.setFromQuaternion(quaternion, 'ZXY');
+  return TMP_EULER.z || 0;
+}
+
+function computeDroneHoldPosition(){
+  const planeState = planeController.getState();
+  const basePosition = planeState?.position
+    ? planeState.position.clone()
+    : planeController.position.clone();
+  basePosition.add(DRONE_CARGO_OFFSET);
+  const ground = world.getHeightAt(basePosition.x, basePosition.y);
+  if (Number.isFinite(ground)){
+    const minZ = ground + carController.height + 4;
+    basePosition.z = Math.max(basePosition.z, minZ);
+  }
+  const yaw = planeState?.orientation ? extractYaw(planeState.orientation) : planeController.yaw ?? 0;
+  return { position: basePosition, yaw };
+}
+
+function updateDropButtonState(){
+  hud.setDropEnabled(carAttachedToDrone && activeVehicle === VEHICLE_MODES.PLANE);
+}
+
+function resetCar({ alignCamera = false, attachToDrone = false } = {}){
+  const spawn = attachToDrone
+    ? computeDroneHoldPosition()
+    : { position: computeCarStartPosition(), yaw: 0 };
+  carController.reset({ position: spawn.position, yaw: spawn.yaw ?? 0 });
+  carController.velocity.set(0, 0, 0);
+  carController.speed = 0;
   elapsedDriveTime = 0;
   drivenDistance = 0;
   lastCarPosition.copy(carController.position);
-  if (alignCamera){
-    focusCameraOnCar();
+  carAttachedToDrone = attachToDrone;
+  if (attachToDrone){
+    carRig.carMesh.visible = false;
+    if (alignCamera){
+      focusCameraOnPlane();
+    }
+  } else {
+    carRig.carMesh.visible = true;
+    if (alignCamera){
+      focusCameraOnCar();
+    }
   }
+  updateDropButtonState();
 }
 
 function focusCameraOnPlane(){
@@ -151,8 +198,48 @@ function focusCameraOnCar(){
   chaseCamera.snapTo(carController.getState());
 }
 
+function dropVehicleFromDrone(){
+  if (!carAttachedToDrone) return;
+  const hold = computeDroneHoldPosition();
+  const dropPosition = hold.position.clone();
+  const ground = world.getHeightAt(dropPosition.x, dropPosition.y);
+  if (Number.isFinite(ground)){
+    const minZ = ground + carController.height + 1.5;
+    dropPosition.z = Math.max(dropPosition.z, minZ);
+  }
+  carController.reset({ position: dropPosition, yaw: hold.yaw ?? 0 });
+  carController.velocity.set(0, 0, 0);
+  carController.speed = 0;
+  carRig.carMesh.visible = true;
+  carAttachedToDrone = false;
+  updateDropButtonState();
+  lastCarPosition.copy(carController.position);
+  hud.showMessage('Vehicle deployed!', 900);
+  activateCarMode();
+}
+
+function activatePlaneMode(){
+  activeVehicle = VEHICLE_MODES.PLANE;
+  planeMesh.visible = true;
+  carRig.carMesh.visible = !carAttachedToDrone;
+  hud.setControls(planeControls);
+  focusCameraOnPlane();
+  updateDropButtonState();
+}
+
+function activateCarMode({ focus = true } = {}){
+  activeVehicle = VEHICLE_MODES.CAR;
+  planeMesh.visible = false;
+  carRig.carMesh.visible = true;
+  hud.setControls(carControls);
+  if (focus){
+    focusCameraOnCar();
+  }
+  updateDropButtonState();
+}
+
 resetPlane();
-resetCar();
+resetCar({ attachToDrone: true });
 
 enableWindowResizeHandling({ renderer, camera });
 
@@ -168,17 +255,13 @@ let lastTime = performance.now();
 function setActiveVehicle(mode){
   if (mode === activeVehicle) return;
   if (mode === VEHICLE_MODES.PLANE){
-    activeVehicle = VEHICLE_MODES.PLANE;
-    planeMesh.visible = true;
-    carRig.carMesh.visible = false;
-    hud.setControls(planeControls);
-    focusCameraOnPlane();
+    activatePlaneMode();
   } else if (mode === VEHICLE_MODES.CAR){
-    activeVehicle = VEHICLE_MODES.CAR;
-    planeMesh.visible = false;
-    carRig.carMesh.visible = true;
-    hud.setControls(carControls);
-    focusCameraOnCar();
+    if (carAttachedToDrone){
+      dropVehicleFromDrone();
+      return;
+    }
+    activateCarMode();
   }
 }
 
@@ -227,6 +310,20 @@ function animate(now){
       }
     }
     lastPlanePosition.copy(planeState.position);
+
+    if (carAttachedToDrone){
+      const hold = computeDroneHoldPosition();
+      carController.position.copy(hold.position);
+      carController.yaw = hold.yaw;
+      carController.velocity.set(0, 0, 0);
+      carController.speed = 0;
+      carController._updateOrientation?.();
+      if (carRig.carMesh){
+        carRig.carMesh.position.copy(carController.position);
+        carRig.carMesh.quaternion.copy(carController.orientation);
+      }
+      lastCarPosition.copy(carController.position);
+    }
 
     rebaseWorldIfNeeded(planeController.position);
     world.update(planeState.position);

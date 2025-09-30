@@ -19,6 +19,9 @@ const DISTANCE_BLEND_RATE = 5.1;
 const CAMERA_ORBIT_DECAY = 3.2;
 const MAX_ORBIT_YAW = THREE.MathUtils.degToRad(145);
 const MAX_ORBIT_PITCH = THREE.MathUtils.degToRad(72);
+const SPACE_DRAG = 0.00035;
+const AUTOPILOT_RESPONSE = 2.6;
+const MANUAL_THROTTLE_TIMEOUT = 2.2;
 
 function createFallbackMesh(label = 'Body'){
   const geometry = new THREE.SphereGeometry(1, 24, 24);
@@ -77,6 +80,11 @@ export class SolarSystemWorld {
 
     this.minDistance = 1800;
     this.maxDistance = 38000;
+
+    this.propulsionTarget = 0;
+    this.manualThrottleTimer = 0;
+    this.spaceDrag = SPACE_DRAG;
+    this.launchBoostStrength = 0;
 
     this.metrics = {
       planetId: null,
@@ -159,6 +167,8 @@ export class SolarSystemWorld {
     if (this.root){
       this.root.visible = true;
     }
+    this.manualThrottleTimer = 0;
+    this.propulsionTarget = THREE.MathUtils.clamp(1 - (this.zoomNormalized ?? 0), 0, 1);
     const forcePlacement = Boolean(planetId);
     if (forcePlacement){
       this.playerShipNeedsPlacement = true;
@@ -185,6 +195,8 @@ export class SolarSystemWorld {
     this._captureShipStateForReturn();
     this.systemViewActive = false;
     this.playerShipNeedsPlacement = true;
+    this.manualThrottleTimer = 0;
+    this.propulsionTarget = 0;
     this.playerShip?.setActive(false);
     this.playerShip?.setVisible(false);
     if (this.root){
@@ -236,9 +248,14 @@ export class SolarSystemWorld {
       planet.mesh.rotation.y += dt * planet.spinSpeed;
     }
 
+    this.launchBoostStrength = 0;
     if (this.systemViewActive){
       this._ensureShipPlacement(planet);
-      const shipState = this.playerShip?.update(dt, inputSample?.plane ?? {}, {});
+      const launchBoostStrength = this._computeLaunchBoostStrength(planet, this.lastShipState);
+      this.launchBoostStrength = launchBoostStrength;
+      const planeInput = this._preparePlaneInput(dt, inputSample, { launchBoostStrength });
+      const drag = this.spaceDrag * THREE.MathUtils.lerp(1, 0.55, launchBoostStrength);
+      const shipState = this.playerShip?.update(dt, planeInput, { drag, launchBoost: launchBoostStrength });
       if (shipState){
         this.lastShipState = shipState;
         this._updateMetricsFromShip(planet, shipState);
@@ -251,6 +268,79 @@ export class SolarSystemWorld {
     this.lastInputOrbitActive = inputSample?.system?.orbitActive ?? false;
     this.lastOrbitInput = inputSample?.cameraOrbit ?? null;
     return this.metrics;
+  }
+
+  _preparePlaneInput(dt, inputSample, { launchBoostStrength = 0 } = {}){
+    const source = inputSample?.plane ?? {};
+    this._updateThrottleTarget(dt, inputSample, { launchBoostStrength });
+    const planeInput = {
+      pitch: source.pitch ?? 0,
+      roll: source.roll ?? 0,
+      yaw: source.yaw ?? 0,
+      brake: Boolean(source.brake),
+      throttleAdjust: 0,
+      throttleOverride: this.propulsionTarget,
+    };
+    if (source.aim){
+      planeInput.aim = { ...source.aim };
+    }
+    return planeInput;
+  }
+
+  _updateThrottleTarget(dt, inputSample, { launchBoostStrength = 0 } = {}){
+    if (!this.playerShip) return;
+
+    const source = inputSample?.plane ?? {};
+    const manualAdjust = Number.isFinite(source.throttleAdjust) ? source.throttleAdjust : 0;
+    const brake = Boolean(source.brake);
+    const currentThrottle = Number.isFinite(this.propulsionTarget)
+      ? this.propulsionTarget
+      : (Number.isFinite(this.playerShip.throttle) ? this.playerShip.throttle : 0);
+
+    let target = currentThrottle;
+
+    if (manualAdjust !== 0){
+      const response = this.playerShip?.config?.throttleResponsiveness ?? 1.6;
+      target += manualAdjust * response * dt;
+      this.manualThrottleTimer = MANUAL_THROTTLE_TIMEOUT;
+    } else {
+      this.manualThrottleTimer = Math.max(0, this.manualThrottleTimer - dt);
+      if (this.manualThrottleTimer <= 0){
+        const autoTarget = THREE.MathUtils.clamp(1 - (this.zoomNormalized ?? 0), 0, 1);
+        const blend = dt > 0 ? 1 - Math.exp(-AUTOPILOT_RESPONSE * dt) : 1;
+        target += (autoTarget - target) * blend;
+      }
+    }
+
+    if (brake){
+      target = Math.max(0, target - 2.4 * dt);
+      this.manualThrottleTimer = Math.max(this.manualThrottleTimer, 0.4);
+    }
+
+    if (launchBoostStrength > 0 && !brake){
+      const assistFloor = THREE.MathUtils.lerp(0.46, 0.82, launchBoostStrength);
+      const assistBlend = this.manualThrottleTimer <= 0 ? 1 : 0.92;
+      target = Math.max(target, assistFloor * assistBlend);
+    }
+
+    this.propulsionTarget = THREE.MathUtils.clamp(target, 0, 1);
+  }
+
+  _computeLaunchBoostStrength(planet, shipState){
+    if (!planet || !shipState?.position) return 0;
+    const altitude = this._computeShipAltitude(planet, shipState);
+    if (!Number.isFinite(altitude)) return 0;
+    const boostStart = Math.max(planet.radius * 0.18, 160);
+    const boostEnd = Math.max(planet.radius * 1.05, boostStart + 760);
+    if (altitude >= boostEnd){
+      return 0;
+    }
+    if (altitude <= boostStart){
+      return 1;
+    }
+    const range = Math.max(boostEnd - boostStart, 1);
+    const normalized = 1 - (altitude - boostStart) / range;
+    return THREE.MathUtils.clamp(normalized, 0, 1);
   }
 
   _initializePlanets(planetRegistry){
@@ -414,6 +504,8 @@ export class SolarSystemWorld {
     this.followDistance = clamped;
     this.cameraDistance = Math.max(this.minDistance, planet.radius * 3.2);
     this.zoomNormalized = this._computeZoomNormalized();
+    this.manualThrottleTimer = 0;
+    this.propulsionTarget = THREE.MathUtils.clamp(1 - (this.zoomNormalized ?? 0), 0, 1);
   }
 
   _ensureShipPlacement(planet, { snapCamera = false } = {}){
@@ -442,6 +534,8 @@ export class SolarSystemWorld {
     this.playerShipNeedsPlacement = false;
     this.lastShipState = this.playerShip.getState();
     this._updateMetricsFromShip(planet, this.lastShipState);
+    this.propulsionTarget = THREE.MathUtils.clamp(1 - (this.zoomNormalized ?? 0), 0, 1);
+    this.manualThrottleTimer = 0;
 
     if (snapCamera){
       this.orbitAngles.yaw = 0;
@@ -514,6 +608,8 @@ export class SolarSystemWorld {
       if (typeof this.playerShip._applyPropulsorIntensity === 'function'){
         this.playerShip._applyPropulsorIntensity(throttle);
       }
+      this.propulsionTarget = THREE.MathUtils.clamp(throttle, 0, 1);
+      this.manualThrottleTimer = MANUAL_THROTTLE_TIMEOUT;
     }
     this.playerShip.hasLaunched = hasLaunched || this.playerShip.hasLaunched;
 
@@ -600,6 +696,16 @@ export class SolarSystemWorld {
       departLeave: depart,
       systemLeave: system,
     };
+  }
+
+  _computeShipAltitude(planet, shipState){
+    if (!planet || !shipState?.position) return null;
+    const planetPosition = planet.mesh.getWorldPosition(TMP_PLANET_POS);
+    const distanceToCenter = shipState.position.distanceTo(planetPosition);
+    if (!Number.isFinite(distanceToCenter)){
+      return null;
+    }
+    return Math.max(0, distanceToCenter - planet.radius);
   }
 }
 
