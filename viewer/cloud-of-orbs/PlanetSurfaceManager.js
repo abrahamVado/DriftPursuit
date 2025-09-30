@@ -127,6 +127,7 @@ export class PlanetSurfaceManager {
       : new Map(Object.entries(planetRegistry ?? {}));
     this.hud = hud;
     this.hudPresets = hudPresets ?? {};
+    this.defaultMapLabel = 'Orbital Overview';
     this.environment = {
       document: environment.document ?? (typeof document !== 'undefined' ? document : null),
       hemisphere: environment.hemisphere ?? null,
@@ -408,13 +409,17 @@ export class PlanetSurfaceManager {
   }
 
   _setHudMapLabel(text){
-    if (!this.hud || !text) return;
+    if (!this.hud) return;
+    const label = typeof text === 'string' && text.trim()
+      ? text
+      : this.defaultMapLabel;
+    if (!label) return;
     if (typeof this.hud.setMapLabel === 'function'){
-      this.hud.setMapLabel(text);
+      this.hud.setMapLabel(label);
       return;
     }
     if (this.hud.mapLabel && typeof this.hud.mapLabel.textContent === 'string'){
-      this.hud.mapLabel.textContent = text;
+      this.hud.mapLabel.textContent = label;
     }
   }
 
