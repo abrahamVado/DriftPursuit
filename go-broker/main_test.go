@@ -69,6 +69,46 @@ func ensureViewerFixture(t *testing.T) {
 	})
 }
 
+func ensureViewerMissing(t *testing.T) {
+	t.Helper()
+
+	_, thisFile, _, ok := runtime.Caller(0)
+	if !ok {
+		t.Fatalf("runtime.Caller failed")
+	}
+	viewerDir := filepath.Clean(filepath.Join(filepath.Dir(thisFile), "..", "viewer"))
+
+	info, err := os.Stat(viewerDir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return
+		}
+		t.Fatalf("stat viewer dir: %v", err)
+	}
+	if !info.IsDir() {
+		t.Fatalf("viewer path exists but is not a directory: %s", viewerDir)
+	}
+
+	backupDir := viewerDir
+	for i := 0; ; i++ {
+		candidate := fmt.Sprintf("%s-backup-%d", viewerDir, i)
+		if _, err := os.Stat(candidate); os.IsNotExist(err) {
+			backupDir = candidate
+			break
+		}
+	}
+
+	if err := os.Rename(viewerDir, backupDir); err != nil {
+		t.Fatalf("rename viewer dir for backup: %v", err)
+	}
+
+	t.Cleanup(func() {
+		if err := os.Rename(backupDir, viewerDir); err != nil {
+			t.Fatalf("restore viewer dir: %v", err)
+		}
+	})
+}
+
 func ensureTerraSandboxFixture(t *testing.T) {
 	t.Helper()
 
@@ -228,6 +268,44 @@ func TestBrokerServesViewerOverTLS(t *testing.T) {
 
 	if err := <-serverErr; err != nil && err != http.ErrServerClosed {
 		t.Fatalf("ServeTLS: %v", err)
+	}
+}
+
+func TestBuildHandlerWithoutViewer(t *testing.T) {
+	ensureViewerMissing(t)
+	ensureTerraSandboxFixture(t)
+
+	broker := NewBroker(defaultMaxPayloadBytes, 256, time.Now())
+
+	handler, err := buildHandler(broker)
+	if err != nil {
+		t.Fatalf("buildHandler: %v", err)
+	}
+
+	srv := httptest.NewServer(handler)
+	t.Cleanup(srv.Close)
+
+	client := srv.Client()
+	client.Timeout = 5 * time.Second
+
+	respViewer, err := client.Get(srv.URL + "/viewer/index.html")
+	if err != nil {
+		t.Fatalf("GET viewer: %v", err)
+	}
+	respViewer.Body.Close()
+
+	if respViewer.StatusCode != http.StatusNotFound {
+		t.Fatalf("expected viewer to be unavailable, got status %d", respViewer.StatusCode)
+	}
+
+	respSandbox, err := client.Get(srv.URL + "/terra-sandbox/index.html")
+	if err != nil {
+		t.Fatalf("GET terra-sandbox: %v", err)
+	}
+	respSandbox.Body.Close()
+
+	if respSandbox.StatusCode != http.StatusOK {
+		t.Fatalf("expected terra-sandbox to be served, got status %d", respSandbox.StatusCode)
 	}
 }
 

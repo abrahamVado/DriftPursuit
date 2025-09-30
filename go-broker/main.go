@@ -516,11 +516,13 @@ func buildHandler(b *Broker) (http.Handler, error) {
 	}
 
 	// serve viewer static files (resolve relative to this source file)
-	viewerDir, err := resolveViewerDir()
-	if err != nil {
+	if viewerDir, err := resolveViewerDir(); err == nil {
+		mux.Handle("/viewer/", http.StripPrefix("/viewer/", http.FileServer(http.Dir(viewerDir))))
+	} else if errors.Is(err, os.ErrNotExist) {
+		log.Println("viewer directory not found; skipping /viewer/ handler registration")
+	} else {
 		return nil, err
 	}
-	mux.Handle("/viewer/", http.StripPrefix("/viewer/", http.FileServer(http.Dir(viewerDir))))
 
 	terraSandboxDir, err := resolveTerraSandboxDir()
 	if err != nil {
