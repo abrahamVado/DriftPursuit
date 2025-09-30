@@ -1,3 +1,5 @@
+// HUD.js (merged)
+
 const OVERLAY_STYLE = `
   position: absolute;
   inset: 0;
@@ -192,6 +194,11 @@ function createMetric(label){
   return { wrapper, value, title };
 }
 
+function clamp01(value){
+  if (!Number.isFinite(value)) return 0;
+  return Math.min(1, Math.max(0, value));
+}
+
 function formatTime(seconds){
   if (!Number.isFinite(seconds) || seconds <= 0) return '00:00';
   const totalSeconds = Math.floor(seconds);
@@ -209,12 +216,22 @@ function formatDistance(meters){
 }
 
 export class HUD {
+  /**
+   * @param {Object} opts
+   * @param {Object} [opts.controls]
+   *   - title: string
+   *   - items: Array<{label:string, detail?:string}>
+   *   - throttleLabel: string (e.g., 'THR')
+   *   - metricLabels: { speed?:string, crashes?:string, time?:string, distance?:string }
+   */
   constructor({ controls = {} } = {}){
+    // Root overlay
     this.overlay = document.createElement('div');
     this.overlay.id = 'hud-overlay';
     this.overlay.setAttribute('style', OVERLAY_STYLE);
     document.body.appendChild(this.overlay);
 
+    // Center cluster (reticle + throttle ring + metrics)
     this.centerGroup = document.createElement('div');
     this.centerGroup.setAttribute('style', CENTER_GROUP_STYLE);
     this.overlay.appendChild(this.centerGroup);
@@ -238,12 +255,14 @@ export class HUD {
     this.reticleCore.setAttribute('style', RETICLE_CORE_STYLE);
     this.centerGroup.appendChild(this.reticleCore);
 
+    // Throttle text
     this.throttleText = document.createElement('div');
     this.throttleText.setAttribute('style', THROTTLE_TEXT_STYLE);
     this.throttleLabel = controls.throttleLabel ?? 'THR';
     this.throttleText.textContent = `${this.throttleLabel} 0%`;
     this.centerGroup.appendChild(this.throttleText);
 
+    // Metrics around center
     this.metrics = {
       speed: createMetric('Speed'),
       crashes: createMetric('Crashes'),
@@ -271,6 +290,7 @@ export class HUD {
       this.centerGroup.appendChild(wrapper);
     });
 
+    // Controls panel (bottom center)
     this.controlsPanel = document.createElement('div');
     this.controlsPanel.id = 'hud-controls';
     this.controlsPanel.setAttribute('style', CONTROLS_PANEL_STYLE);
@@ -286,12 +306,14 @@ export class HUD {
     this.controlsPanel.appendChild(this.controlsList);
     this.overlay.appendChild(this.controlsPanel);
 
+    // Crash / message banner
     this.message = document.createElement('div');
     this.message.id = 'crash-banner';
     this.message.setAttribute('style', MESSAGE_STYLE);
     this.message.style.display = 'none';
     this.overlay.appendChild(this.message);
 
+    // Optional action button (e.g., Drop Vehicle)
     this.dropHandler = null;
     this.dropButton = document.createElement('button');
     this.dropButton.type = 'button';
@@ -305,42 +327,47 @@ export class HUD {
     });
     this.overlay.appendChild(this.dropButton);
 
+    // Controls & labels
     this.controls = Array.isArray(controls.items) ? controls.items : [];
     this.renderControls();
     this.setMetricLabels(controls.metricLabels ?? {});
     this.messageTimer = null;
   }
 
-  update({ throttle = 0, speed = 0, crashCount = 0, elapsedTime = 0, distance = 0 }){
-    const throttlePct = Math.round(Math.max(0, Math.min(1, throttle)) * 100);
+  // --- Public API ---
+
+  update({ throttle = 0, speed = 0, crashCount = 0, elapsedTime = 0, distance = 0 } = {}){
+    const throttlePct = Math.round(clamp01(throttle) * 100);
     this.throttleText.textContent = `${this.throttleLabel} ${throttlePct}%`;
+
+    // Conic gradient sweep for throttle ring
     const sweep = Math.max(0, Math.min(360, throttlePct * 3.6));
     const arcGradient = `conic-gradient(rgba(80, 255, 200, 0.8) ${sweep}deg, rgba(90, 120, 180, 0.18) ${sweep}deg 360deg)`;
     this.throttleRing.style.background = arcGradient;
 
-    this.metrics.speed.value.textContent = `${speed.toFixed(0)} kt`;
-    this.metrics.crashes.value.textContent = `${crashCount}`;
+    // Metrics
+    this.metrics.speed.value.textContent = `${Math.max(0, speed).toFixed(0)} kt`;
+    this.metrics.crashes.value.textContent = `${Math.max(0, crashCount|0)}`;
     this.metrics.time.value.textContent = formatTime(elapsedTime);
     this.metrics.distance.value.textContent = formatDistance(distance);
   }
 
-  renderControls(){
-    this.controlsList.innerHTML = '';
-    this.controls.forEach((entry) => {
-      const item = document.createElement('div');
-      item.setAttribute('style', CONTROLS_ITEM_STYLE);
-      const label = document.createElement('strong');
-      label.textContent = entry.label;
-      label.style.letterSpacing = '0.06em';
-      label.style.textTransform = 'uppercase';
-      label.style.fontSize = '12px';
-      const detail = document.createElement('span');
-      detail.textContent = entry.detail;
-      detail.style.opacity = '0.85';
-      item.appendChild(label);
-      item.appendChild(detail);
-      this.controlsList.appendChild(item);
-    });
+  showMessage(text, durationMs = 1200){
+    if (!text){
+      this.message.style.display = 'none';
+      this.message.textContent = '';
+      clearTimeout(this.messageTimer);
+      this.messageTimer = null;
+      return;
+    }
+    this.message.textContent = text;
+    this.message.style.display = 'block';
+    clearTimeout(this.messageTimer);
+    this.messageTimer = setTimeout(() => {
+      this.message.style.display = 'none';
+      this.message.textContent = '';
+      this.messageTimer = null;
+    }, durationMs);
   }
 
   setControls(config = {}){
@@ -375,15 +402,6 @@ export class HUD {
     }
   }
 
-  showMessage(text, durationMs = 1200){
-    this.message.textContent = text;
-    this.message.style.display = 'block';
-    clearTimeout(this.messageTimer);
-    this.messageTimer = setTimeout(() => {
-      this.message.style.display = 'none';
-    }, durationMs);
-  }
-
   setDropHandler(handler){
     this.dropHandler = typeof handler === 'function' ? handler : null;
   }
@@ -393,5 +411,29 @@ export class HUD {
     const visible = Boolean(enabled);
     this.dropButton.style.display = visible ? 'block' : 'none';
     this.dropButton.disabled = !visible;
+  }
+
+  // --- Internals ---
+
+  renderControls(){
+    this.controlsList.innerHTML = '';
+    this.controls.forEach((entry) => {
+      if (!entry) return;
+      const item = document.createElement('div');
+      item.setAttribute('style', CONTROLS_ITEM_STYLE);
+      const label = document.createElement('strong');
+      label.textContent = entry.label;
+      label.style.letterSpacing = '0.06em';
+      label.style.textTransform = 'uppercase';
+      label.style.fontSize = '12px';
+      const detail = document.createElement('span');
+      detail.textContent = entry.detail ?? '';
+      detail.style.opacity = '0.85';
+      item.appendChild(label);
+      if (entry.detail){
+        item.appendChild(detail);
+      }
+      this.controlsList.appendChild(item);
+    });
   }
 }

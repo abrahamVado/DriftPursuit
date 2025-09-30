@@ -1,310 +1,350 @@
 const THREE = (typeof window !== 'undefined' ? window.THREE : globalThis?.THREE) ?? null;
-if (!THREE) throw new Error('Sandbox CarController requires THREE to be loaded globally');
+if (!THREE) throw new Error('CarController requires THREE to be available globally');
+
+// ------------------------- utils -------------------------
+function clamp(value, min, max){
+  return Math.min(max, Math.max(min, value));
+}
 
 const FORWARD_AXIS = new THREE.Vector3(0, 1, 0);
 const TMP_FORWARD = new THREE.Vector3();
 const TMP_EULER = new THREE.Euler(0, 0, 0, 'ZXY');
 
+// --------------------- CarController ---------------------
 export class CarController {
-  constructor({ position = new THREE.Vector3(), yaw = 0 } = {}) {
-    this.position = position.clone();
-    this.yaw = yaw;
-    this.lean = 0;
+  /**
+   * Ground vehicle controller with smoothed throttle/steer,
+   * turret/aim manipulation, wheel rotation, and simple ground follow.
+   */
+  constructor({
+    // movement
+    maxForwardSpeed = 62,
+    maxReverseSpeed = 26,
+    acceleration = 120,          // used in throttle mode
+    brakeDeceleration = 220,
+    drag = 1.8,
+    speedResponse = 4.2,         // used in target-speed mode
+    throttleResponse = 4.5,      // used in throttle mode
+    // steering
+    turnRate = THREE.MathUtils.degToRad(75),
+    steeringRate = THREE.MathUtils.degToRad(120),
+    turnSmoothing = 8.5,
+    steeringResponse = 6.5,
+    // visuals/feel
+    leanResponse = 6.5,
+    suspensionHeight = 2.1,
+  } = {}){
+    // state
+    this.position = new THREE.Vector3();
     this.velocity = new THREE.Vector3();
     this.orientation = new THREE.Quaternion();
+    this.mesh = null;
+
+    // params (blend of both variants, pick what you use)
+    this.maxForwardSpeed = maxForwardSpeed;
+    this.maxReverseSpeed = maxReverseSpeed;
+    this.acceleration = acceleration;
+    this.brakeDeceleration = brakeDeceleration;
+    this.drag = drag;
+
+    this.turnRate = turnRate;
+    this.steeringRate = steeringRate;
+    this.turnSmoothing = turnSmoothing;
+    this.steeringResponse = steeringResponse;
+
+    this.speedResponse = speedResponse;
+    this.throttleResponse = throttleResponse;
+    this.leanResponse = leanResponse;
+    this.suspensionHeight = suspensionHeight;
+
+    // inputs/state
+    this.yaw = 0;
+    this.lean = 0;
     this.speed = 0;
-    this.maxForwardSpeed = 62;
-    this.maxReverseSpeed = 26;
-    this.speedResponse = 4.2;
-    this.brakeStrength = 7.5;
-    this.drag = 1.8;
-    this.turnRate = THREE.MathUtils.degToRad(75);
-    this.turnSmoothing = 8.5;
-    this.leanResponse = 6.5;
-    this.height = 2.1;
-    this.armYaw = 0;
-    this.armPitch = 0;
-    this.armYawLimit = THREE.MathUtils.degToRad(175);
-    this.armPitchLimit = THREE.MathUtils.degToRad(48);
-    this.armResponse = 10;
+
+    this.throttle = 0;
+    this.targetThrottle = 0;
     this.currentSteer = 0;
-    this.power = 0;
-    this.wheelRotation = 0;
+
+    // aim/turret
+    this.aim = { x: 0, y: 0 };
+    this.turretYaw = 0;
+    this.turretPitch = 0;
+    this.turretResponse = 8.5;
+    this.turretYawLimit = THREE.MathUtils.degToRad(150);
+    this.turretPitchLimit = THREE.MathUtils.degToRad(55);
+
+    // attachments
+    this.attachments = {
+      towerGroup: null,
+      towerHead: null,
+      stickYaw: null,
+      stickPitch: null,
+      wheels: [],
+    };
+
+    // temp vec
+    this._tmpForward = new THREE.Vector3();
+
     this._updateOrientation();
   }
 
-  attachMesh(mesh, { stickYaw, stickPitch, towerGroup, towerHead, wheels = [] } = {}) {
+  attachMesh(mesh, {
+    towerGroup = null,
+    towerHead = null,
+    stickYaw = null,
+    stickPitch = null,
+    wheels = [],
+  } = {}){
     this.mesh = mesh ?? null;
-    this.stickYaw = stickYaw ?? null;
-    this.stickPitch = stickPitch ?? null;
-    this.towerGroup = towerGroup ?? null;
-    this.towerHead = towerHead ?? null;
-    this.wheels = Array.isArray(wheels) ? wheels : [];
-    if (mesh) {
-      mesh.position.copy(this.position);
-      mesh.quaternion.copy(this.orientation);
+    this.attachments = {
+      towerGroup,
+      towerHead,
+      stickYaw,
+      stickPitch,
+      wheels: Array.isArray(wheels) ? wheels : [],
+    };
+    if (this.mesh){
+      this.mesh.position.copy(this.position);
+      this.mesh.quaternion.copy(this.orientation);
     }
   }
 
-  reset({ position, yaw = 0 } = {}) {
-    if (position) {
-      this.position.copy(position);
-    }
+  reset({ position, yaw = 0, throttle = 0 } = {}){
+    if (position){ this.position.copy(position); } else { this.position.set(0, 0, 0); }
     this.yaw = yaw;
     this.lean = 0;
     this.speed = 0;
     this.velocity.set(0, 0, 0);
     this.currentSteer = 0;
-    this.power = 0;
-    this.wheelRotation = 0;
-    this.armYaw = 0;
-    this.armPitch = 0;
+    this.throttle = clamp(throttle ?? 0, -1, 1);
+    this.targetThrottle = this.throttle;
+    this.aim.x = 0;
+    this.aim.y = 0;
+    this.turretYaw = 0;
+    this.turretPitch = 0;
     this._updateOrientation();
-    if (this.mesh) {
-      this.mesh.position.copy(this.position);
-      this.mesh.quaternion.copy(this.orientation);
-    }
-    this._applyManipulator({ x: 0, y: 0 }, 1);
-  }
-
-  update(dt, input = {}, { sampleGroundHeight } = {}) {
-    if (dt <= 0) return;
-
-    const throttleInput = THREE.MathUtils.clamp(input.throttle ?? 0, -1, 1);
-    const steerInput = THREE.MathUtils.clamp(input.steer ?? 0, -1, 1);
-    const brake = !!input.brake;
-
-    const forwardTarget = throttleInput >= 0
-      ? throttleInput * this.maxForwardSpeed
-      : throttleInput * this.maxReverseSpeed;
-
-    const blend = dt > 0 ? 1 - Math.exp(-this.speedResponse * dt) : 1;
-    this.speed += (forwardTarget - this.speed) * blend;
-
-    if (brake) {
-      const brakeFactor = 1 - Math.exp(-this.brakeStrength * dt);
-      this.speed += (0 - this.speed) * brakeFactor;
-    } else if (Math.abs(throttleInput) < 0.05) {
-      const dragFactor = 1 - Math.exp(-this.drag * dt);
-      this.speed += (0 - this.speed) * dragFactor;
-    }
-
-    this.power = Math.max(0, Math.min(1, Math.abs(throttleInput)));
-
-    this.currentSteer += (steerInput - this.currentSteer) * (dt > 0 ? 1 - Math.exp(-this.turnSmoothing * dt) : 1);
-    const speedFactor = Math.min(1, Math.abs(this.speed) / this.maxForwardSpeed);
-    this.yaw += this.currentSteer * this.turnRate * dt * (0.35 + speedFactor * 0.65);
-
-    this.lean += ((-this.currentSteer * speedFactor * 0.45) - this.lean) * (dt > 0 ? 1 - Math.exp(-this.leanResponse * dt) : 1);
-
-    this._updateOrientation();
-    const forward = TMP_FORWARD.copy(FORWARD_AXIS).applyQuaternion(this.orientation).normalize();
-    this.velocity.copy(forward).multiplyScalar(this.speed);
-    this.position.addScaledVector(this.velocity, dt);
-
-    if (typeof sampleGroundHeight === 'function') {
-      const ground = sampleGroundHeight(this.position.x, this.position.y);
-      if (Number.isFinite(ground)) {
-        this.position.z = ground + this.height;
-      }
-    }
-
-    this._applyManipulator(input.aim ?? { x: 0, y: 0 }, dt);
-    this._updateWheels(dt);
-
-    if (this.mesh) {
+    if (this.mesh){
       this.mesh.position.copy(this.position);
       this.mesh.quaternion.copy(this.orientation);
     }
   }
 
-  getState() {
-    return {
-      position: this.position,
-      orientation: this.orientation,
-      velocity: this.velocity,
-      speed: Math.abs(this.velocity.length()),
-      throttle: this.power,
-    };
+  setTurretAim(aim){
+    if (!aim) return;
+    this.aim.x = clamp(aim.x ?? 0, -1, 1);
+    this.aim.y = clamp(aim.y ?? 0, -1, 1);
   }
 
-  _updateOrientation() {
+  _updateTurret(dt){
+    const targetYaw = this.aim.x * this.turretYawLimit;
+    const targetPitch = this.aim.y * this.turretPitchLimit;
+    const blend = dt > 0 ? 1 - Math.exp(-this.turretResponse * dt) : 1;
+
+    this.turretYaw += (targetYaw - this.turretYaw) * blend;
+    this.turretPitch += (targetPitch - this.turretPitch) * blend;
+
+    this.turretYaw = clamp(this.turretYaw, -this.turretYawLimit, this.turretYawLimit);
+    this.turretPitch = clamp(this.turretPitch, -this.turretPitchLimit, this.turretPitchLimit);
+
+    const { towerGroup, towerHead, stickYaw, stickPitch, wheels } = this.attachments;
+
+    if (towerGroup){
+      // visual easing toward aim
+      towerGroup.rotation.z += (this.turretYaw - towerGroup.rotation.z) * blend;
+    }
+    if (towerHead){
+      towerHead.rotation.x += (this.turretPitch - towerHead.rotation.x) * blend;
+    }
+    if (stickYaw){
+      stickYaw.rotation.z = this.currentSteer * 0.6;
+    }
+    if (stickPitch){
+      stickPitch.rotation.x = this.throttle * 0.4;
+    }
+    if (Array.isArray(wheels)){
+      const rotationDelta = this.speed * dt * 0.4;
+      wheels.forEach((wheel) => {
+        if (wheel?.rotation){
+          wheel.rotation.x -= rotationDelta;
+        }
+      });
+    }
+  }
+
+  _updateOrientation(){
     TMP_EULER.set(0, this.lean, this.yaw, 'ZXY');
     this.orientation.setFromEuler(TMP_EULER);
   }
 
-  _applyManipulator(aim, dt) {
-    if (!aim) aim = { x: 0, y: 0 };
-    const targetYaw = THREE.MathUtils.clamp(aim.x ?? 0, -1, 1) * this.armYawLimit;
-    const targetPitch = THREE.MathUtils.clamp(aim.y ?? 0, -1, 1) * this.armPitchLimit;
+  update(dt, input = {}, extra = {}){
+    const delta = Math.max(0, dt ?? 0);
 
-    const blend = dt > 0 ? 1 - Math.exp(-this.armResponse * dt) : 1;
-    this.armYaw += (targetYaw - this.armYaw) * blend;
-    this.armPitch += (targetPitch - this.armPitch) * blend;
+    // inputs
+    const steerInput = clamp(input.steer ?? 0, -1, 1);
+    const throttleInput = clamp(input.throttle ?? 0, -1, 1);
+    const brake = !!input.brake;
 
-    if (this.stickYaw) {
-      this.stickYaw.rotation.z = this.armYaw;
+    if (input.aim){ this.setTurretAim(input.aim); }
+
+    // throttle smoothing (throttle-based accel)
+    this.targetThrottle = throttleInput;
+    const throttleBlend = delta > 0 ? 1 - Math.exp(-this.throttleResponse * delta) : 1;
+    this.throttle += (this.targetThrottle - this.throttle) * throttleBlend;
+
+    // speed integration (drag/brake)
+    const accel = this.throttle * this.acceleration;
+    this.speed += accel * delta;
+    this.speed -= this.drag * this.speed * delta;
+    if (brake){
+      this.speed -= this.brakeDeceleration * delta;
     }
-    if (this.stickPitch) {
-      this.stickPitch.rotation.x = this.armPitch;
+
+    // clamp forward/reverse ranges
+    this.speed = clamp(
+      this.speed,
+      -this.maxReverseSpeed,
+      this.maxForwardSpeed
+    );
+
+    // steering smoothing w/ speed scaling
+    this.currentSteer += (steerInput - this.currentSteer) * (delta > 0 ? 1 - Math.exp(-this.steeringResponse * delta) : 1);
+    const speedFactor = clamp(Math.abs(this.speed) / Math.max(1, this.maxForwardSpeed), 0, 1);
+    const steerScale = 0.35 + 0.65 * speedFactor;
+
+    // yaw & lean
+    this.yaw += this.currentSteer * this.steeringRate * steerScale * delta;
+    this.lean += ((-this.currentSteer * speedFactor * 0.45) - this.lean) * (delta > 0 ? 1 - Math.exp(-this.leanResponse * delta) : 1);
+    this._updateOrientation();
+
+    // forward velocity
+    this._tmpForward.copy(FORWARD_AXIS).applyQuaternion(this.orientation).normalize();
+    this.velocity.copy(this._tmpForward).multiplyScalar(this.speed);
+    this.position.addScaledVector(this.velocity, delta);
+
+    // ground follow (z = ground + suspensionHeight)
+    if (typeof extra.sampleGroundHeight === 'function'){
+      const ground = extra.sampleGroundHeight(this.position.x, this.position.y);
+      if (Number.isFinite(ground)){
+        this.position.z = ground + this.suspensionHeight;
+      }
     }
-    if (this.towerGroup) {
-      this.towerGroup.rotation.x += (this.armPitch * 0.5 - this.towerGroup.rotation.x) * blend;
-      this.towerGroup.rotation.z += (this.armYaw * 0.5 - this.towerGroup.rotation.z) * blend;
+
+    // write to mesh
+    if (this.mesh){
+      this.mesh.position.copy(this.position);
+      this.mesh.quaternion.copy(this.orientation);
     }
-    if (this.towerHead) {
-      this.towerHead.rotation.x += (-this.armPitch * 0.8 - this.towerHead.rotation.x) * blend;
-      this.towerHead.rotation.z += (this.armYaw * 0.8 - this.towerHead.rotation.z) * blend;
-    }
+
+    // visuals
+    this._updateTurret(delta);
   }
 
-  _updateWheels(dt) {
-    if (!Array.isArray(this.wheels) || this.wheels.length === 0) return;
-    const wheelRadius = 1.05;
-    this.wheelRotation += (this.speed * dt) / Math.max(0.2, wheelRadius);
-    for (const wheel of this.wheels) {
-      if (!wheel) continue;
-      wheel.rotation.x = this.wheelRotation;
-    }
+  getState(){
+    return {
+      position: this.position.clone(),
+      velocity: this.velocity.clone(),
+      orientation: this.orientation.clone(),
+      throttle: this.throttle,
+      targetThrottle: this.targetThrottle,
+      speed: this.speed,
+      yaw: this.yaw,
+      lean: this.lean,
+      aim: { x: this.aim.x, y: this.aim.y },
+    };
   }
 }
 
-export function createCarRig() {
-  const carGroup = new THREE.Group();
-  carGroup.name = 'groundCar';
-
-  const bodyMaterial = new THREE.MeshStandardMaterial({ color: 0x253347, metalness: 0.2, roughness: 0.5 });
-  const accentMaterial = new THREE.MeshStandardMaterial({ color: 0xff6b3d, metalness: 0.35, roughness: 0.35 });
+// ---------------------- createCarRig ----------------------
+export function createCarRig(){
+  // materials
+  const bodyMaterial  = new THREE.MeshStandardMaterial({ color: 0x3a4a66, metalness: 0.4, roughness: 0.55 });
+  const accentMaterial = new THREE.MeshStandardMaterial({ color: 0x85c8ff, metalness: 0.6, roughness: 0.4 });
   const glassMaterial = new THREE.MeshStandardMaterial({ color: 0xa3d1ff, metalness: 0.1, roughness: 0.08, transparent: true, opacity: 0.75 });
-  const stickMaterial = new THREE.MeshStandardMaterial({ color: 0xe8d37a, metalness: 0.15, roughness: 0.45 });
-  const towerMaterial = new THREE.MeshStandardMaterial({ color: 0x445c7a, metalness: 0.25, roughness: 0.4 });
+  const wheelMaterial = new THREE.MeshStandardMaterial({ color: 0x1f242b, metalness: 0.3, roughness: 0.8 });
 
-  const chassisGeometry = new THREE.BoxGeometry(9, 5.5, 2.4);
-  const chassis = new THREE.Mesh(chassisGeometry, bodyMaterial);
-  chassis.position.set(0, 0, 2.1);
-  chassis.castShadow = true;
-  chassis.receiveShadow = true;
-  carGroup.add(chassis);
+  const car = new THREE.Group();
+  car.name = 'TerraCar';
 
-  const cabinGeometry = new THREE.BoxGeometry(5.8, 3.6, 2.2);
-  const cabin = new THREE.Mesh(cabinGeometry, glassMaterial);
-  cabin.position.set(0, -0.3, 3.3);
-  cabin.castShadow = true;
-  carGroup.add(cabin);
+  // chassis
+  const chassis = new THREE.Mesh(new THREE.BoxGeometry(14, 8, 4.5), bodyMaterial);
+  chassis.position.set(0, 0, 3.2);
+  chassis.castShadow = true; chassis.receiveShadow = true;
+  car.add(chassis);
 
-  const hoodGeometry = new THREE.BoxGeometry(6.2, 2.4, 1.2);
-  const hood = new THREE.Mesh(hoodGeometry, accentMaterial);
-  hood.position.set(0, 3.4, 2.5);
-  hood.castShadow = true;
-  carGroup.add(hood);
+  // canopy
+  const canopy = new THREE.Mesh(new THREE.BoxGeometry(6.5, 4.2, 2.6), glassMaterial);
+  canopy.position.set(0, -0.4, 5.4);
+  canopy.castShadow = true; canopy.receiveShadow = true;
+  car.add(canopy);
 
-  const bumperGeometry = new THREE.BoxGeometry(9.2, 0.8, 1);
-  const bumper = new THREE.Mesh(bumperGeometry, accentMaterial);
-  bumper.position.set(0, 5, 1.8);
-  bumper.castShadow = true;
-  carGroup.add(bumper);
-
-  const wheelGeometry = new THREE.CylinderGeometry(1.05, 1.05, 0.8, 20);
-  const wheelMaterial = new THREE.MeshStandardMaterial({ color: 0x222222, metalness: 0.35, roughness: 0.7 });
-  const wheelOffsets = [
-    [2.8, 3.4, 1.05],
-    [-2.8, 3.4, 1.05],
-    [2.8, -3.4, 1.05],
-    [-2.8, -3.4, 1.05],
+  // wheels
+  const wheelGeometry = new THREE.CylinderGeometry(1.6, 1.6, 1, 16);
+  const wheelPositions = [
+    [-4.8, 3.2, 1.6],
+    [ 4.8, 3.2, 1.6],
+    [-4.8,-3.2, 1.6],
+    [ 4.8,-3.2, 1.6],
   ];
-  const wheels = [];
-  for (const [x, y, z] of wheelOffsets) {
+  const wheels = wheelPositions.map(([x, y, z]) => {
     const wheel = new THREE.Mesh(wheelGeometry, wheelMaterial);
     wheel.rotation.z = Math.PI / 2;
     wheel.position.set(x, y, z);
-    wheel.castShadow = true;
-    wheel.receiveShadow = true;
-    carGroup.add(wheel);
-    wheels.push(wheel);
-  }
+    wheel.castShadow = true; wheel.receiveShadow = true;
+    car.add(wheel);
+    return wheel;
+  });
 
-  const stickYaw = new THREE.Group();
-  stickYaw.position.set(0, 2.8, 4.1);
-  carGroup.add(stickYaw);
-
-  const stickPitch = new THREE.Group();
-  stickYaw.add(stickPitch);
-
-  const stickGeometry = new THREE.CylinderGeometry(0.18, 0.22, 6.2, 12);
-  const stick = new THREE.Mesh(stickGeometry, stickMaterial);
-  stick.position.set(0, 3.1, 0);
-  stick.castShadow = true;
-  stickPitch.add(stick);
-
-  const stickTip = new THREE.Mesh(new THREE.SphereGeometry(0.45, 14, 12), accentMaterial);
-  stickTip.position.set(0, 3.4, 0);
-  stickTip.castShadow = true;
-  stickPitch.add(stickTip);
-
+  // turret group
   const towerGroup = new THREE.Group();
-  towerGroup.position.set(0, 7.4, 0);
-  carGroup.add(towerGroup);
+  towerGroup.position.set(0, 0, 7.6);
+  car.add(towerGroup);
 
-  const towerBaseGeometry = new THREE.CylinderGeometry(1.4, 1.8, 1.2, 16);
-  const towerBase = new THREE.Mesh(towerBaseGeometry, towerMaterial);
-  towerBase.position.set(0, 0, 0.6);
-  towerBase.castShadow = true;
-  towerBase.receiveShadow = true;
+  const towerBase = new THREE.Mesh(new THREE.CylinderGeometry(1.4, 1.4, 1.4, 16), bodyMaterial);
+  towerBase.position.set(0, 0, 0.7);
+  towerBase.castShadow = true; towerBase.receiveShadow = true;
   towerGroup.add(towerBase);
 
-  const towerColumnGeometry = new THREE.CylinderGeometry(0.75, 0.75, 5.6, 18);
-  const towerColumn = new THREE.Mesh(towerColumnGeometry, towerMaterial);
-  towerColumn.position.set(0, 0, 3.7);
-  towerColumn.castShadow = true;
-  towerColumn.receiveShadow = true;
-  towerGroup.add(towerColumn);
-
   const towerHead = new THREE.Group();
-  towerHead.position.set(0, 0, 6.8);
+  towerHead.position.set(0, 0, 2.2);
   towerGroup.add(towerHead);
 
-  const towerCrossGeometry = new THREE.BoxGeometry(0.6, 3.8, 0.6);
-  const towerCross = new THREE.Mesh(towerCrossGeometry, accentMaterial);
-  towerCross.castShadow = true;
-  towerHead.add(towerCross);
+  const barrel = new THREE.Mesh(new THREE.CylinderGeometry(0.35, 0.35, 4.5, 12), accentMaterial);
+  barrel.rotation.z = Math.PI / 2;
+  barrel.position.set(0, 2.2, 0);
+  barrel.castShadow = true; barrel.receiveShadow = true;
+  towerHead.add(barrel);
 
-  const towerStickGeometry = new THREE.CylinderGeometry(0.16, 0.16, 5.4, 12);
-  const towerStick = new THREE.Mesh(towerStickGeometry, stickMaterial);
-  towerStick.rotation.x = Math.PI / 2;
-  towerStick.position.set(0, 0, -0.3);
-  towerStick.castShadow = true;
-  towerHead.add(towerStick);
+  const muzzle = new THREE.Mesh(new THREE.CylinderGeometry(0.25, 0.25, 0.9, 12), accentMaterial);
+  muzzle.rotation.z = Math.PI / 2;
+  muzzle.position.set(0, 4.8, 0);
+  muzzle.castShadow = true; muzzle.receiveShadow = true;
+  towerHead.add(muzzle);
+  car.userData.turretMuzzle = muzzle;
 
-  const towerBarrel = new THREE.Mesh(new THREE.CylinderGeometry(0.18, 0.22, 3.6, 14), accentMaterial);
-  towerBarrel.rotation.x = Math.PI / 2;
-  towerBarrel.position.set(0, 1.8, 0);
-  towerBarrel.castShadow = true;
-  towerHead.add(towerBarrel);
+  // control stick
+  const stickBase = new THREE.Group();
+  stickBase.position.set(0, -2.8, 4.4);
+  car.add(stickBase);
 
-  const towerMuzzle = new THREE.Mesh(new THREE.CylinderGeometry(0.26, 0.26, 0.9, 12), new THREE.MeshStandardMaterial({ color: 0xffe070, emissive: 0xffa040, emissiveIntensity: 0.65 }));
-  towerMuzzle.rotation.x = Math.PI / 2;
-  towerMuzzle.position.set(0, 3.4, 0);
-  towerMuzzle.castShadow = true;
-  towerHead.add(towerMuzzle);
+  const stickYaw = new THREE.Group();
+  stickBase.add(stickYaw);
 
-  const towerOrb = new THREE.Mesh(new THREE.SphereGeometry(0.55, 18, 14), new THREE.MeshStandardMaterial({ color: 0xfff0c0, emissive: 0xffc860, emissiveIntensity: 0.4 }));
-  towerOrb.position.set(0, 0, 0.7);
-  towerOrb.castShadow = true;
-  towerHead.add(towerOrb);
+  const stickPitch = new THREE.Group();
+  stickPitch.position.set(0, 0, 1.4);
+  stickYaw.add(stickPitch);
 
-  carGroup.updateMatrixWorld(true);
-  const boundingBox = new THREE.Box3().setFromObject(carGroup);
-  const boundingSphere = boundingBox.getBoundingSphere(new THREE.Sphere());
-  carGroup.userData.boundingCenter = boundingSphere.center.clone();
-  carGroup.userData.boundingRadius = boundingSphere.radius;
-  carGroup.userData.turretMuzzle = towerMuzzle;
+  const stickMesh = new THREE.Mesh(new THREE.CylinderGeometry(0.2, 0.2, 2.6, 10), accentMaterial);
+  stickMesh.position.set(0, 0, 1.3);
+  stickMesh.castShadow = true; stickMesh.receiveShadow = true;
+  stickPitch.add(stickMesh);
 
   return {
-    carMesh: carGroup,
+    carMesh: car,
     wheels,
-    stickYaw,
-    stickPitch,
     towerGroup,
     towerHead,
+    stickYaw,
+    stickPitch,
   };
 }
