@@ -19,6 +19,8 @@ import {
   normalizeAssetRootPath,
   normalizeMapDescriptor,
 } from './mapNormalization.mjs';
+import { SolarSystemWorld } from './cloud-of-orbs/SolarSystemWorld.js';
+import { getRegistrySnapshot as getPlanetRegistrySnapshot } from './cloud-of-orbs/planets/index.js';
 
 const HUD = document.getElementById('hud');
 const MANUAL_BUTTON = document.getElementById('manual-toggle');
@@ -33,6 +35,14 @@ const CONTROL_INSTRUCTIONS_LIST = document.getElementById('control-instructions'
 
 const PLANE_FOLLOW_SELECT = document.getElementById('plane-follow-select');
 const PLANE_SELECTOR_STATUS = document.getElementById('plane-selector-status');
+
+const MATCH_STATUS = document.getElementById('match-status');
+const MATCH_BUTTONS = new Map([
+  ['match-1', document.getElementById('match-1-button')],
+  ['match-2', document.getElementById('match-2-button')],
+  ['match-3', document.getElementById('match-3-button')],
+  ['match-4', document.getElementById('match-4-button')],
+]);
 
 const CONNECTION_BANNER = document.getElementById('connection-banner');
 const CONNECTION_BANNER_MESSAGE = document.getElementById('connection-banner-message');
@@ -226,6 +236,29 @@ const UI_STRINGS = {
   },
 };
 
+const SURFACE_BODY_BACKGROUND = 'linear-gradient(180deg, #bcd9ff 0%, #f1f6ff 45%, #d7e8ff 100%)';
+const SPACE_BODY_BACKGROUND = 'radial-gradient(circle at 50% 20%, #071427 0%, #030912 55%, #010308 100%)';
+const SURFACE_CAMERA_FAR = 10000;
+const SPACE_CAMERA_FAR = 260000;
+const SPACE_ENTRY_ALTITUDE_METERS = 10000;
+const SPACE_EXIT_ALTITUDE_METERS = 9000;
+
+const SURFACE_ENVIRONMENT = Object.freeze({
+  background: 0xbfd3ff,
+  fog: null,
+  hemisphere: { skyColor: 0xe4f1ff, groundColor: 0x3a5d2f, intensity: 0.8 },
+  sun: { color: 0xffffff, intensity: 0.85, position: [-180, 220, 260] },
+});
+
+const SPACE_ENVIRONMENT = Object.freeze({
+  background: 0x050b16,
+  fog: { color: 0x050b16, near: 12000, far: 36000 },
+  hemisphere: { skyColor: 0x3a4c72, groundColor: 0x040608, intensity: 0.45 },
+  sun: { color: 0xfff0d2, intensity: 2.15, position: [-5200, 4200, 2600] },
+});
+
+const PLANET_REGISTRY_SNAPSHOT = getPlanetRegistrySnapshot();
+
 function getConnectionStatusLabel(statusKey) {
   const statusEntry = UI_STRINGS.connectionStatus[statusKey];
   return statusEntry ? statusEntry.label : 'Connecting…';
@@ -257,6 +290,11 @@ const DEFAULT_CONTROL_DOCS = [
     id: 'reroute-waypoints',
     label: 'Cycle Autopilot Route',
     description: 'Send preset waypoint loops to the simulator via the set_waypoints command.'
+  },
+  {
+    id: 'match-controls',
+    label: 'Match Presets',
+    description: 'Choose Match 1–4 to instantly load tailored waypoint routes and prep for orbital escape.'
   }
 ];
 let currentControlDocs = DEFAULT_CONTROL_DOCS;
@@ -276,6 +314,13 @@ let currentFollowId = followManager ? followManager.getFollow() : null;
 let cakes = {};
 let worldManager = null;
 let worldOriginOffset = null;
+let solarSystemWorld = null;
+let spaceModeActive = false;
+let pendingSurfaceRebuildOptions = null;
+let hemisphereLight = null;
+let sunLight = null;
+let activeMatchId = null;
+let currentFollowAltitude = 0;
 
 // ----- Aircraft model (optional GLTF or procedural set) -----
 let gltfLoader = null;
@@ -285,6 +330,15 @@ let aircraftTemplate = null;
 let aircraftLoadPromise = null;
 const pendingTelemetry = [];
 const planeResources = new Map();
+
+function setPlaneMeshesVisible(visible){
+  const desired = Boolean(visible);
+  planeMeshes.forEach((mesh) => {
+    if (mesh){
+      mesh.visible = desired;
+    }
+  });
+}
 
 // ----- Manual control / HUD state -----
 let manualControlEnabled = false;
@@ -346,30 +400,78 @@ const CRUISE_SPEED_PRESETS = {
   boost: { max_speed: 290, acceleration: 26 },
 };
 
-const AUTOPILOT_PRESETS = [
+const MATCH_PRESETS = [
   {
-    label: 'Scenic Runway Loop',
-    loop: true,
-    arrivalTolerance: 80,
-    waypoints: [
-      [-800, -400, 1200],
-      [-200, 0, 1350],
-      [600, 420, 1200],
-      [200, -200, 1100],
-    ],
+    id: 'match-1',
+    label: 'Match 1',
+    description: 'Balanced runway loop with gentle turns and smooth altitude changes.',
+    autopilot: {
+      loop: true,
+      arrivalTolerance: 80,
+      waypoints: [
+        [-800, -400, 1200],
+        [-200, 0, 1350],
+        [600, 420, 1200],
+        [200, -200, 1100],
+      ],
+    },
   },
   {
-    label: 'Harbour Climb',
-    loop: true,
-    arrivalTolerance: 70,
-    waypoints: [
-      [-600, -300, 1000],
-      [-150, 260, 1500],
-      [520, 520, 1400],
-      [420, -280, 1050],
-    ],
+    id: 'match-2',
+    label: 'Match 2',
+    description: 'Aggressive harbour climb that threads coastal peaks and dives back to the runway.',
+    autopilot: {
+      loop: true,
+      arrivalTolerance: 70,
+      waypoints: [
+        [-600, -300, 1000],
+        [-150, 260, 1500],
+        [520, 520, 1400],
+        [420, -280, 1050],
+      ],
+    },
+  },
+  {
+    id: 'match-3',
+    label: 'Match 3',
+    description: 'High ridge sprint weaving through mountain saddles before a steep valley drop.',
+    autopilot: {
+      loop: true,
+      arrivalTolerance: 75,
+      waypoints: [
+        [-950, -520, 900],
+        [-350, 420, 1600],
+        [580, 760, 1500],
+        [420, -100, 1800],
+        [-220, -460, 1200],
+      ],
+    },
+  },
+  {
+    id: 'match-4',
+    label: 'Match 4',
+    description: 'Stratosphere dash that slings the craft toward thin air before lining up a long glide home.',
+    autopilot: {
+      loop: true,
+      arrivalTolerance: 90,
+      waypoints: [
+        [-1000, -800, 1400],
+        [-300, 200, 2200],
+        [700, 540, 2600],
+        [300, -300, 2800],
+        [-450, -650, 2000],
+      ],
+    },
   },
 ];
+
+const AUTOPILOT_PRESETS = MATCH_PRESETS.map((preset) => ({
+  id: preset.id,
+  label: preset.label,
+  loop: preset.autopilot.loop,
+  arrivalTolerance: preset.autopilot.arrivalTolerance,
+  waypoints: preset.autopilot.waypoints,
+}));
 
 if (CONNECTION_RECONNECT_BUTTON){
   CONNECTION_RECONNECT_BUTTON.textContent = UI_STRINGS.buttons.reconnect;
@@ -383,6 +485,7 @@ wireButtonHandlers();
 setupModelSetPicker();
 setupMapPicker();
 setupPlaneSelector();
+setupMatchControls();
 loadControlDocs();
 
 window.addEventListener('keydown', handleKeyDown);
@@ -543,6 +646,9 @@ function handleMsg(msg){
       planeMeshes.set(id, mesh);
       planeResources.set(id, { geometries, materials, textures });
       scene.add(mesh);
+      if (spaceModeActive){
+        mesh.visible = false;
+      }
     }
 
     const now = performance.now();
@@ -564,6 +670,13 @@ function handleMsg(msg){
     // optional orientation: [yaw, pitch, roll]
     const o = msg.ori;
     const shouldApplyTelemetry = !(manualControlEnabled && followId === id);
+
+    if (followId === id){
+      const altitudeMeters = Array.isArray(p) && p.length >= 3 ? Number(p[2]) || 0 : 0;
+      currentFollowAltitude = Math.max(0, altitudeMeters);
+      updateSpaceTransitionState({ altitude: currentFollowAltitude, planeId: id });
+      updateHudStatus();
+    }
 
     if (shouldApplyTelemetry){
       // update position (map sim coords to scene; z up)
@@ -654,6 +767,13 @@ function handleCommandStatus(msg){
       if (status === 'ok'){
         lastAppliedAutopilotLabel = pendingAutopilotPreset.label;
         nextAutopilotPresetIndex = (pendingAutopilotPreset.index + 1) % AUTOPILOT_PRESETS.length;
+        if (pendingAutopilotPreset.matchId){
+          activeMatchId = pendingAutopilotPreset.matchId;
+        }
+      } else if (status === 'error'){
+        if (MATCH_STATUS && pendingAutopilotPreset?.label){
+          MATCH_STATUS.textContent = `Match update failed: ${pendingAutopilotPreset.label} not applied.`;
+        }
       }
       pendingAutopilotPreset = null;
       updateRerouteButtonState();
@@ -679,6 +799,7 @@ function updateRerouteButtonState(){
     }
   }
   REROUTE_BUTTON.textContent = label;
+  updateMatchUiState();
 }
 
 function cycleAutopilotWaypoints(){
@@ -701,6 +822,7 @@ function cycleAutopilotWaypoints(){
       commandId,
       label: preset.label,
       index: nextAutopilotPresetIndex,
+      matchId: preset.id,
     };
     updateRerouteButtonState();
   }
@@ -1771,6 +1893,116 @@ function convertSimPositionToScene(simPosition){
   return scaled.sub(originOffset);
 }
 
+function ensureSolarSystemWorld(){
+  if (!scene || !camera) return null;
+  if (!solarSystemWorld){
+    solarSystemWorld = new SolarSystemWorld({
+      scene,
+      camera,
+      planetRegistry: PLANET_REGISTRY_SNAPSHOT,
+    });
+    solarSystemWorld.exitSystemView();
+  }
+  return solarSystemWorld;
+}
+
+function applySurfaceEnvironment(){
+  if (!scene) return;
+  scene.background = new THREE.Color(SURFACE_ENVIRONMENT.background);
+  scene.fog = SURFACE_ENVIRONMENT.fog
+    ? new THREE.Fog(SURFACE_ENVIRONMENT.fog.color, SURFACE_ENVIRONMENT.fog.near, SURFACE_ENVIRONMENT.fog.far)
+    : null;
+  if (hemisphereLight){
+    hemisphereLight.color.setHex(SURFACE_ENVIRONMENT.hemisphere.skyColor);
+    hemisphereLight.groundColor.setHex(SURFACE_ENVIRONMENT.hemisphere.groundColor);
+    hemisphereLight.intensity = SURFACE_ENVIRONMENT.hemisphere.intensity;
+  }
+  if (sunLight){
+    sunLight.color.setHex(SURFACE_ENVIRONMENT.sun.color);
+    sunLight.intensity = SURFACE_ENVIRONMENT.sun.intensity;
+    const [sx, sy, sz] = SURFACE_ENVIRONMENT.sun.position;
+    sunLight.position.set(sx, sy, sz);
+  }
+  if (typeof document !== 'undefined' && document.body){
+    document.body.style.background = SURFACE_BODY_BACKGROUND;
+  }
+  if (camera){
+    camera.far = SURFACE_CAMERA_FAR;
+    camera.updateProjectionMatrix();
+  }
+}
+
+function applySpaceEnvironment(){
+  if (!scene) return;
+  scene.background = new THREE.Color(SPACE_ENVIRONMENT.background);
+  if (!scene.fog){
+    scene.fog = new THREE.Fog(SPACE_ENVIRONMENT.fog.color, SPACE_ENVIRONMENT.fog.near, SPACE_ENVIRONMENT.fog.far);
+  } else {
+    scene.fog.color.setHex(SPACE_ENVIRONMENT.fog.color);
+    scene.fog.near = SPACE_ENVIRONMENT.fog.near;
+    scene.fog.far = SPACE_ENVIRONMENT.fog.far;
+  }
+  if (hemisphereLight){
+    hemisphereLight.color.setHex(SPACE_ENVIRONMENT.hemisphere.skyColor);
+    hemisphereLight.groundColor.setHex(SPACE_ENVIRONMENT.hemisphere.groundColor);
+    hemisphereLight.intensity = SPACE_ENVIRONMENT.hemisphere.intensity;
+  }
+  if (sunLight){
+    sunLight.color.setHex(SPACE_ENVIRONMENT.sun.color);
+    sunLight.intensity = SPACE_ENVIRONMENT.sun.intensity;
+    const [sx, sy, sz] = SPACE_ENVIRONMENT.sun.position;
+    sunLight.position.set(sx, sy, sz);
+  }
+  if (typeof document !== 'undefined' && document.body){
+    document.body.style.background = SPACE_BODY_BACKGROUND;
+  }
+  if (camera){
+    camera.far = SPACE_CAMERA_FAR;
+    camera.updateProjectionMatrix();
+  }
+}
+
+function enterSpaceMode(){
+  if (spaceModeActive || !scene) return;
+  spaceModeActive = true;
+  applySpaceEnvironment();
+  setPlaneMeshesVisible(false);
+  pendingSurfaceRebuildOptions = { mapId: currentMapId, force: true };
+  replaceWorldManager(null);
+  updateMapStatus({ label: 'Solar System', note: '(orbit)' });
+  const solarWorld = ensureSolarSystemWorld();
+  solarWorld?.enterSystemView({ planetId: 'earth' });
+  updateHudStatus();
+}
+
+function exitSpaceMode(){
+  if (!spaceModeActive) return;
+  spaceModeActive = false;
+  if (solarSystemWorld){
+    solarSystemWorld.exitSystemView();
+  }
+  setPlaneMeshesVisible(true);
+  applySurfaceEnvironment();
+  const rebuildOptions = pendingSurfaceRebuildOptions || { mapId: currentMapId, force: true };
+  pendingSurfaceRebuildOptions = null;
+  updateMapStatus({ label: 'Planet surface', note: '(restoring…)' });
+  rebuildWorldForCurrentMap(rebuildOptions);
+  updateHudStatus();
+}
+
+function updateSpaceTransitionState({ altitude = 0, planeId = null } = {}){
+  const followId = getCurrentFollowId();
+  if (planeId && planeId !== followId) return;
+  const altitudeMeters = Math.max(0, Number(altitude) || 0);
+  if (spaceModeActive){
+    if (altitudeMeters <= SPACE_EXIT_ALTITUDE_METERS){
+      exitSpaceMode();
+    }
+  } else if (altitudeMeters >= SPACE_ENTRY_ALTITUDE_METERS){
+    enterSpaceMode();
+  }
+}
+
 function updateWorldStreaming(){
   if (!scene || !worldManager) return;
   const focus = getCurrentWorldFocusPosition();
@@ -1861,8 +2093,7 @@ function mulberry32(a){
 // ---- Three.js init & loop ----
 function initThree(){
   scene = new THREE.Scene();
-  scene.background = new THREE.Color(0xbfd3ff);
-  camera = new THREE.PerspectiveCamera(60, window.innerWidth/window.innerHeight, 0.1, 10000);
+  camera = new THREE.PerspectiveCamera(60, window.innerWidth/window.innerHeight, 0.1, SURFACE_CAMERA_FAR);
   renderer = new THREE.WebGLRenderer({antialias:true});
   renderer.setSize(window.innerWidth, window.innerHeight);
   renderer.shadowMap.enabled = true;
@@ -1876,20 +2107,22 @@ function initThree(){
   window.addEventListener('resize', onWindowResize);
 
   // Layered light rig: hemisphere for ambient mood and a sun-style directional light.
-  const hemi = new THREE.HemisphereLight(0xe4f1ff, 0x3a5d2f, 0.8);
-  hemi.position.set(0, 200, 0);
-  scene.add(hemi);
+  hemisphereLight = new THREE.HemisphereLight(0xe4f1ff, 0x3a5d2f, 0.8);
+  hemisphereLight.position.set(0, 200, 0);
+  scene.add(hemisphereLight);
 
-  const dir = new THREE.DirectionalLight(0xffffff, 0.85);
-  dir.position.set(-180, 220, 260);
-  dir.castShadow = true;
-  dir.shadow.mapSize.set(2048, 2048);
-  dir.shadow.camera.left = -400;
-  dir.shadow.camera.right = 400;
-  dir.shadow.camera.top = 400;
-  dir.shadow.camera.bottom = -400;
-  dir.shadow.camera.far = 1200;
-  scene.add(dir);
+  sunLight = new THREE.DirectionalLight(0xffffff, 0.85);
+  sunLight.position.set(-180, 220, 260);
+  sunLight.castShadow = true;
+  sunLight.shadow.mapSize.set(2048, 2048);
+  sunLight.shadow.camera.left = -400;
+  sunLight.shadow.camera.right = 400;
+  sunLight.shadow.camera.top = 400;
+  sunLight.shadow.camera.bottom = -400;
+  sunLight.shadow.camera.far = 1200;
+  scene.add(sunLight);
+
+  applySurfaceEnvironment();
 
   buildEnvironment(scene);
 
@@ -1911,7 +2144,10 @@ function animate(now){
   lastFrameTime = now;
 
   updateManualControl(delta);
-  if (chaseCam) chaseCam.update(delta);
+  if (chaseCam && !spaceModeActive) chaseCam.update(delta);
+  if (solarSystemWorld){
+    solarSystemWorld.update(delta);
+  }
   updateWorldStreaming();
   renderer.render(scene, camera);
 }
@@ -1974,6 +2210,7 @@ function removeStalePlanes(){
 }
 
 function updateCameraTarget(mesh){
+  if (spaceModeActive) return;
   if (chaseCam){
     chaseCam.follow(mesh);
     chaseCam.snapToTarget();
@@ -2317,6 +2554,8 @@ function updateHudStatus(){
   ) * 100);
   const throttleLabel = `Throttle: ${throttlePercent}%${throttleHoldEngaged ? ' (hold)' : ''}`;
   const airspeedLabel = `Airspeed: ${manualAirspeed.toFixed(0)} u/s`;
+  const altitudeLabel = `Altitude: ${(currentFollowAltitude / 1000).toFixed(1)} km`;
+  const spaceStatusLabel = spaceModeActive ? 'Space mode: Solar system view active' : 'Space mode: Planet surface';
   const simOverrideLabel = simManualOverrideActive
     ? 'Simulator override: MANUAL'
     : 'Simulator override: autopilot';
@@ -2337,6 +2576,8 @@ function updateHudStatus(){
     `Model set: ${modelLine}\n` +
     `${throttleLabel}\n` +
     `${airspeedLabel}\n` +
+    `${altitudeLabel}\n` +
+    `${spaceStatusLabel}\n` +
     `${simOverrideLabel}\n` +
     `${invertStatusLabel}\n` +
     `[M] toggle manual · [T] throttle hold · W/S pitch · A/D roll · Q/E yaw · ${arrowInstructions}`;
@@ -2440,6 +2681,80 @@ function wireButtonHandlers(){
   updateInvertAxesButtonState();
   updateAccelerationButtonState();
   updateRerouteButtonState();
+}
+
+function setupMatchControls(){
+  MATCH_PRESETS.forEach((preset) => {
+    const button = MATCH_BUTTONS.get(preset.id);
+    if (!button) return;
+    button.textContent = preset.label;
+    button.title = preset.description;
+    button.addEventListener('click', () => {
+      handleMatchSelection(preset.id);
+    });
+  });
+  updateMatchUiState();
+}
+
+function handleMatchSelection(matchId){
+  if (pendingAutopilotPreset){
+    console.warn('Autopilot command already pending');
+    return;
+  }
+  const preset = AUTOPILOT_PRESETS.find((entry) => entry.id === matchId);
+  if (!preset){
+    console.warn('Unknown match preset', matchId);
+    return;
+  }
+  const commandId = sendSimCommand('set_waypoints', {
+    waypoints: preset.waypoints,
+    loop: preset.loop,
+    arrival_tolerance: preset.arrivalTolerance,
+  });
+  if (commandId){
+    const index = AUTOPILOT_PRESETS.findIndex((entry) => entry.id === preset.id);
+    pendingAutopilotPreset = {
+      commandId,
+      label: preset.label,
+      index: index >= 0 ? index : 0,
+      matchId: preset.id,
+    };
+    updateRerouteButtonState();
+  }
+}
+
+function updateMatchUiState(){
+  const pendingMatchId = pendingAutopilotPreset?.matchId || null;
+  const statusElement = MATCH_STATUS;
+  if (statusElement){
+    if (pendingMatchId){
+      statusElement.textContent = `Assigning ${pendingAutopilotPreset.label}…`;
+    } else if (activeMatchId){
+      const preset = getMatchPresetById(activeMatchId);
+      if (preset){
+        statusElement.textContent = `${preset.label}: ${preset.description}`;
+      } else {
+        statusElement.textContent = 'Active match engaged.';
+      }
+    } else {
+      statusElement.textContent = 'Select a match to update autopilot routing.';
+    }
+  }
+
+  MATCH_PRESETS.forEach((preset) => {
+    const button = MATCH_BUTTONS.get(preset.id);
+    if (!button) return;
+    const isActive = activeMatchId === preset.id;
+    const isPending = pendingMatchId === preset.id;
+    const shouldDisable = Boolean(pendingAutopilotPreset);
+    button.disabled = shouldDisable;
+    button.classList.toggle('is-active', isActive);
+    button.classList.toggle('is-pending', isPending);
+  });
+}
+
+function getMatchPresetById(matchId){
+  return MATCH_PRESETS.find((preset) => preset.id === matchId) || null;
 }
 
 function setupModelSetPicker(){
@@ -2934,6 +3249,14 @@ async function rebuildWorldForCurrentMap(options = {}){
   const preferredId = options.mapId || currentMapId;
   const mapId = resolveMapId(preferredId);
   currentMapId = mapId;
+  if (spaceModeActive){
+    pendingSurfaceRebuildOptions = { mapId, force: true };
+    const entryWhileInSpace = availableMaps.get(mapId) || availableMaps.get(DEFAULT_MAP_ID);
+    if (entryWhileInSpace){
+      updateMapStatus({ label: entryWhileInSpace.label || mapId, note: '(available after re-entry)' });
+    }
+    return;
+  }
   const entry = availableMaps.get(mapId) || availableMaps.get(DEFAULT_MAP_ID);
   if (entry){
     updateMapStatus({ label: entry.label, note: '(loading…)' });
@@ -2943,6 +3266,10 @@ async function rebuildWorldForCurrentMap(options = {}){
 
   try {
     const descriptor = await ensureMapDescriptor(mapId);
+    if (spaceModeActive){
+      pendingSurfaceRebuildOptions = { mapId, force: true };
+      return;
+    }
     if (token !== mapBuildToken) return;
 
     const manager = createWorldManagerFromDescriptor(descriptor);
