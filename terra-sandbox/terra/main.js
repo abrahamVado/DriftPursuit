@@ -25,8 +25,13 @@ import {
   createMapSelectionHandler,
 } from './hudConfig.js';
 import { createVehicleSystem } from './vehicles.js';
+import { preloadGLTFLoader } from './ensureGltfLoader.js';
 
 const THREE = requireTHREE();
+
+preloadGLTFLoader().catch((error) => {
+  console.warn('[Terra] Failed to preload GLTFLoader module:', error);
+});
 
 const MAPS_ENDPOINT = './maps.json';
 const DEFAULT_BODY_BACKGROUND = DEFAULT_WORLD_ENVIRONMENT.bodyBackground;
@@ -138,6 +143,8 @@ const mapSelectionHandler = createMapSelectionHandler((mapId) => {
     window.location.search = `?map=${encodeURIComponent(mapId)}`;
   }
 });
+
+let navigationLightsEnabled = true;
 
 const hudPresets = createHudPresets();
 const { hud } = createHud({
