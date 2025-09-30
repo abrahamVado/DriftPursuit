@@ -241,6 +241,76 @@ export function createPlaneMesh(){
   pitchHandle.castShadow = true;
   stickPitch.add(pitchHandle);
 
+  const propulsorHousingMaterial = new THREE.MeshStandardMaterial({
+    color: 0x314166,
+    metalness: 0.78,
+    roughness: 0.28,
+    emissive: 0x121c33,
+    emissiveIntensity: 0.08,
+  });
+  const baseGlowMaterial = new THREE.MeshBasicMaterial({
+    color: 0xffa86a,
+    transparent: true,
+    opacity: 0,
+    blending: THREE.AdditiveBlending,
+    depthWrite: false,
+    depthTest: false,
+    toneMapped: false,
+    side: THREE.DoubleSide,
+  });
+
+  const propulsorOffsets = [
+    new THREE.Vector3(-4.4, -5.1, -0.5),
+    new THREE.Vector3(4.4, -5.1, -0.5),
+    new THREE.Vector3(0, -8.4, -0.2),
+  ];
+  const propulsors = [];
+
+  propulsorOffsets.forEach((offset, index) => {
+    const housing = new THREE.Mesh(new THREE.CylinderGeometry(0.7, 1.2, 3, 18, 1, true), propulsorHousingMaterial.clone());
+    housing.rotation.x = Math.PI / 2;
+    housing.position.copy(offset);
+    housing.castShadow = true;
+    housing.receiveShadow = true;
+    group.add(housing);
+
+    const rim = new THREE.Mesh(new THREE.TorusGeometry(0.72, 0.12, 12, 20), accentMaterial);
+    rim.position.copy(offset);
+    rim.rotation.y = Math.PI / 2;
+    rim.castShadow = true;
+    group.add(rim);
+
+    const glowMaterial = baseGlowMaterial.clone();
+    const glow = new THREE.Mesh(new THREE.ConeGeometry(0.95, 4.2, 20, 1, true), glowMaterial);
+    glow.position.copy(offset);
+    glow.position.y -= index === 2 ? 2.6 : 2.2;
+    glow.rotation.x = Math.PI;
+    glow.renderOrder = 3;
+    glow.scale.set(0.8, 0.8, index === 2 ? 1.8 : 1.5);
+    group.add(glow);
+
+    const light = new THREE.PointLight(0xffb978, 0, index === 2 ? 120 : 80, 2.8);
+    light.position.copy(offset);
+    light.position.y -= index === 2 ? 1.2 : 0.8;
+    group.add(light);
+
+    propulsors.push({
+      light,
+      glowMesh: glow,
+      glowMaterial,
+      housingMaterial: housing.material,
+      minIntensity: 0.35,
+      maxIntensity: index === 2 ? 3.8 : 2.9,
+      minOpacity: 0.12,
+      maxOpacity: 0.95,
+      minScale: 0.75,
+      maxScale: index === 2 ? 1.8 : 1.55,
+      scaleZ: index === 2 ? 2.2 : 1.6,
+      minEmissive: 0.08,
+      maxEmissive: index === 2 ? 0.7 : 0.5,
+    });
+  });
+
   group.traverse((obj) => {
     if (obj.isMesh){
       obj.castShadow = true;
@@ -254,6 +324,7 @@ export function createPlaneMesh(){
   group.userData.turretStickYaw = stickYaw;
   group.userData.turretStickPitch = stickPitch;
   group.userData.turretMuzzle = muzzle;
+  group.userData.propulsors = propulsors;
 
   group.updateMatrixWorld(true);
   const boundingBox = new THREE.Box3().setFromObject(group);
