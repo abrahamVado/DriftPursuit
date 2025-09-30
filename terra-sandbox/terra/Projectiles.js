@@ -144,6 +144,13 @@ export class TerraProjectileManager {
     this.currentAmmoId = null;
     this.explosions = [];
     this.explosionGeometry = new THREE.SphereGeometry(1, 18, 18);
+    this.lamp = {
+      light: null,
+      target: null,
+      muzzle: null,
+      ownerId: null,
+      behavior: null,
+    };
     this.setAmmoTypes(ammoTypes.length ? ammoTypes : DEFAULT_AMMO_TYPES);
     this.lamp = {
       light: null,
