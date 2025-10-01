@@ -161,6 +161,22 @@ class TunnelTerrainGenerator:
 
         return tuple(self._global_rings)
 
+    def arc_lengths(self) -> Tuple[float, ...]:
+        """Return the cumulative arc length at each generated ring."""
+
+        return tuple(self._global_s_positions)
+
+    def ensure_arc_length(self, arc_length: float) -> None:
+        """Generate enough rings to cover ``arc_length`` meters of tunnel."""
+
+        if arc_length <= 0.0:
+            return
+        last_s = self._global_s_positions[-1] if self._global_s_positions else 0.0
+        if arc_length <= last_s:
+            return
+        steps_needed = int(math.ceil(arc_length / max(self._params.ring_step, 1e-6)))
+        self._ensure_ring(steps_needed + 1)
+
     def radius_floor_history(self) -> Tuple[float, ...]:
         """Return the per-ring minimum radius floor used during generation."""
 
