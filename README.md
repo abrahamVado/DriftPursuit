@@ -6,6 +6,21 @@ This starter project wires together three pieces so you can focus on gameplay an
 - `python-sim/`: Python simulation client that publishes telemetry and cake drops.
 - `viewer/`: A minimal three.js web client that subscribes to the broker feed.
   - Switch between available aircraft kits with the **Aircraft Model** dropdown in the viewer. Assets are cached locally so toggling sets is instant, your last choice is remembered in `localStorage`, and the legacy `?modelSet=` query parameter still works for deep links.
+- `tunnelcave_sandbox_web/`: Self-contained Next.js + three.js endless cave sandbox that runs entirely in the browser.
+
+## Tunnelcave Sandbox (Next.js)
+
+Looking for a fully browser-hosted version of the tunnelcave prototype? The `tunnelcave_sandbox_web/` directory contains a standalone Next.js application that reproduces the endless cave, deterministic streaming, spawn selection, and third-person camera behaviors directly in React + three.js. To run it locally:
+
+```bash
+cd tunnelcave_sandbox_web
+npm install
+npm run dev
+```
+
+By default the dev server listens on [`http://localhost:3000`](http://localhost:3000). Open the page to load the sandbox, then use **W/S** to adjust throttle, **A/D** to bank, **Shift** to tighten the follow camera, and **Space** to level the craft. The entire pipeline lives within the Next.js app, so it can be deployed to any static Next-friendly host without referencing the Python or Go stacks.
+
+The latest generator revamps the cave cross-section into a triple-lobe cavern: stacked north–south chambers stitched together by a twisting connector tunnel, with multi-octave rock noise layering fractal boulders onto every wall. The base radius is scaled up and streamed chunks remain deterministic, so existing spawn planning and occlusion-aware camera logic continue to function while the world feels more expansive.
 
 ## Viewer connection banner
 
