@@ -21,6 +21,8 @@ export interface SandboxParams {
   radiusFreq: number;
   roughAmp: number;
   roughFreq: number;
+  roughSmoothness: number;
+  roughFilterKernel: number[] | null;
   joltEveryMeters: number;
   joltStrength: number;
   maxTurnPerStepRad: number;
@@ -41,6 +43,8 @@ export const defaultParams: SandboxParams = {
   radiusFreq: 0.008,
   roughAmp: 1.1,
   roughFreq: 0.14,
+  roughSmoothness: 0.45,
+  roughFilterKernel: [0.2, 0.6, 0.2],
   joltEveryMeters: 140,
   joltStrength: 0.45,
   maxTurnPerStepRad: Math.PI / 6,
