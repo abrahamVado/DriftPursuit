@@ -20,6 +20,7 @@ def make_params(**overrides: object) -> TunnelParams:
         jolt_strength=0.25,
         max_turn_per_step_rad=0.5,
         mode="mesh",
+        field_type="divergence_free",
     )
     base.update(overrides)
     return TunnelParams(**base)

@@ -5,7 +5,12 @@ import math
 from dataclasses import dataclass, field
 from typing import List, Optional, Tuple
 
-from .direction_field import DivergenceFreeField, FieldParams
+from .direction_field import (
+    DivergenceFreeField,
+    FieldParams,
+    PipeNetworkField,
+    PipeNetworkParams,
+)
 from .frame import OrthonormalFrame
 from .geometry import ChunkGeometry, MeshChunk, RingSample, SDFChunk
 from .noise import noise3
@@ -37,6 +42,8 @@ class TunnelParams:
     jolt_strength: float
     max_turn_per_step_rad: float
     mode: str
+    field_type: str = "divergence_free"
+    pipe_network: PipeNetworkParams | None = None
     add_end_caps: bool = True
     profile: CavernProfileParams = field(default_factory=default_cavern_profile)
     rough_smoothness: float = 0.0
@@ -75,7 +82,13 @@ class TunnelTerrainGenerator:
             jolt_every_meters=params.jolt_every_meters,
             jolt_strength=params.jolt_strength,
         )
-        self._field = DivergenceFreeField(field_params)
+        if params.field_type == "divergence_free":
+            self._field = DivergenceFreeField(field_params)
+        elif params.field_type == "pipe_network":
+            pipe_params = params.pipe_network or PipeNetworkParams()
+            self._field = PipeNetworkField(field_params, pipe_params)
+        else:
+            raise ValueError(f"Unknown field_type '{params.field_type}'")
         self._global_rings: List[RingSample] = []
         self._global_s_positions: List[float] = []
         self._rings_per_chunk = int(round(params.chunk_length / params.ring_step)) + 1
@@ -129,6 +142,11 @@ class TunnelTerrainGenerator:
         arc_length = prev_s + params.ring_step
         direction = self._field.next_direction(prev_ring.center, prev_ring.forward, index, arc_length)
         origin = prev_ring.center + direction * params.ring_step
+        if hasattr(self._field, "position_at"):
+            origin = getattr(self._field, "position_at")(arc_length)
+            delta = origin - prev_ring.center
+            if delta.length() > 1e-6:
+                direction = delta.normalized()
         frame = prev_ring.frame.transport(origin, direction)
 
         base_radius = params.radius_base + params.radius_var * noise3(
