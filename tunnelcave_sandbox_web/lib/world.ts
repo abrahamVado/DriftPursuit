@@ -74,8 +74,8 @@ function interpolateRing(rings: RingStation[], arc: number): {
     right: Vec3;
     up: Vec3;
   };
-
   radius: number;
+  maxRadius: number;
 } {
   const ringIndex = Math.floor(arc);
   const nextIndex = Math.min(rings[rings.length - 1].index, ringIndex + 1);
@@ -95,7 +95,8 @@ function interpolateRing(rings: RingStation[], arc: number): {
   }
   right = cross(up, forward);
   const radius = base.radius + (next.radius - base.radius) * t;
-  return { position, frame: { forward, right, up }, radius };
+  const maxRadius = base.maxRadius + (next.maxRadius - base.maxRadius) * t;
+  return { position, frame: { forward, right, up }, radius, maxRadius };
 }
 
 function clamp(value: number, min: number, max: number) {
@@ -181,7 +182,6 @@ export function createSimulation(params: SimulationParams): SimulationState {
     right: spawn.right,
     up: spawn.up
   };
-
   const initialGoal = computeCameraGoal(
     craft.position,
     craft.forward,
@@ -204,7 +204,6 @@ export function updateSimulation(
   dt: number
 ) {
   const { craft, band } = state;
-
   craft.targetSpeed = clamp(craft.targetSpeed + input.throttleDelta * dt * 15, 2, 80);
   craft.speed += (craft.targetSpeed - craft.speed) * Math.min(1, dt * 2);
   craft.rollRate += input.rollDelta * dt * 2.5;
@@ -216,14 +215,12 @@ export function updateSimulation(
   craft.pitchRate += input.pitchDelta * dt * 2;
   craft.pitchRate *= Math.pow(0.4, dt);
   craft.pitch = clamp(craft.pitch + craft.pitchRate * dt, -Math.PI / 5, Math.PI / 5);
-
   const deltaArc = (craft.speed * dt) / params.sandbox.ringStep;
   craft.arc += deltaArc;
   const centerChunk = Math.floor((craft.arc * params.sandbox.ringStep) / params.sandbox.chunkLength);
   ensureChunks(band, centerChunk);
   const rings = collectRings(band);
   const sample = interpolateRing(rings, craft.arc);
-
   const oriented = applyOrientation(
     sample.frame.right,
     sample.frame.up,
@@ -236,7 +233,7 @@ export function updateSimulation(
   craft.forward = oriented.forward;
   craft.right = oriented.right;
   craft.up = oriented.up;
-  state.currentRingRadius = sample.radius;
+  state.currentRingRadius = sample.maxRadius;
   updateCameraRig(
     state.camera,
     craft.position,
@@ -246,8 +243,7 @@ export function updateSimulation(
     params.camera,
     dt,
     state.viewMode,
-    sample.radius,
+    sample.maxRadius,
     params.sandbox.roughAmp
   );
-
 }

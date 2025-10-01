@@ -9,6 +9,9 @@ export interface RingStation {
   position: Vec3;
   frame: OrthonormalFrame;
   radius: number;
+
+  maxRadius: number;
+
   roughness: (theta: number) => number;
 }
 
@@ -50,6 +53,9 @@ function integrateRing(state: GeneratorState): RingStation {
     position: state.position,
     frame: state.frame,
     radius: sample.radius,
+
+    maxRadius: sample.maxRadius,
+
     roughness: sample.roughness
   };
   state.ringIndex += 1;

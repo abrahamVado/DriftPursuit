@@ -31,6 +31,14 @@ class RingSample:
         t = angle_index - int(angle_index)
         return self.roughness_profile[base_index] * (1.0 - t) + self.roughness_profile[next_index] * t
 
+    @property
+    def max_radius(self) -> float:
+        return max(self.roughness_profile)
+
+    @property
+    def min_radius(self) -> float:
+        return min(self.roughness_profile)
+      
     def diameter_stats(self) -> Tuple[float, float, float]:
         values = list(self.roughness_profile)
         mean = sum(values) * 2.0 / len(values)
@@ -69,9 +77,10 @@ class ChunkGeometry:
         mins = [float("inf"), float("inf"), float("inf")]
         maxs = [float("-inf"), float("-inf"), float("-inf")]
         for ring in self.rings:
+            max_radius = ring.max_radius
             for axis in (ring.frame.right, ring.frame.up):
                 for s in (-1.0, 1.0):
-                    point = ring.center + axis * (ring.radius * s)
+                    point = ring.center + axis * (max_radius * s)
                     mins[0] = min(mins[0], point.x)
                     mins[1] = min(mins[1], point.y)
                     mins[2] = min(mins[2], point.z)

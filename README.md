@@ -20,6 +20,9 @@ npm run dev
 
 By default the dev server listens on [`http://localhost:3000`](http://localhost:3000). Open the page to load the sandbox, then use **W/S** to adjust throttle, **A/D** to bank, **Shift** to tighten the follow camera, and **Space** to level the craft. The entire pipeline lives within the Next.js app, so it can be deployed to any static Next-friendly host without referencing the Python or Go stacks.
 
+The latest generator revamps the cave cross-section into a triple-lobe cavern: stacked north–south chambers stitched together by a twisting connector tunnel, with multi-octave rock noise layering fractal boulders onto every wall. The base radius is scaled up and streamed chunks remain deterministic, so existing spawn planning and occlusion-aware camera logic continue to function while the world feels more expansive.
+
+
 ## Viewer connection banner
 
 The viewer shows a status banner while it connects to the Go broker. Earlier revisions of this documentation embedded a PNG screenshot from `docs/images/connection-banner.png`, but that asset is no longer versioned with the project. To capture a fresh banner image for release notes or runbooks:

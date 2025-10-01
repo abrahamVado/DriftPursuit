@@ -6,6 +6,7 @@ import math
 from .camera import CameraParams, ThirdPersonCamera
 from .spawn import SpawnPlanner, SpawnRequest
 from .streaming import ChunkStreamer
+from .profile import default_cavern_profile
 from .terrain_generator import TunnelParams, TunnelTerrainGenerator
 from .vector import Vector3
 
@@ -13,20 +14,21 @@ from .vector import Vector3
 def build_default_params() -> TunnelParams:
     return TunnelParams(
         world_seed=1337,
-        chunk_length=60.0,
-        ring_step=4.0,
-        tube_sides=16,
+        chunk_length=80.0,
+        ring_step=3.0,
+        tube_sides=18,
         dir_freq=0.05,
         dir_blend=0.65,
-        radius_base=8.0,
-        radius_var=2.0,
-        radius_freq=0.015,
-        rough_amp=0.8,
-        rough_freq=0.12,
-        jolt_every_meters=120.0,
-        jolt_strength=0.35,
+        radius_base=11.0,
+        radius_var=3.0,
+        radius_freq=0.012,
+        rough_amp=1.1,
+        rough_freq=0.1,
+        jolt_every_meters=140.0,
+        jolt_strength=0.3,
         max_turn_per_step_rad=0.7,
         mode="mesh+sdf",
+        profile=default_cavern_profile(),
     )
 
 

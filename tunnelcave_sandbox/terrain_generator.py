@@ -2,13 +2,14 @@
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass
-from typing import Dict, List, Tuple
+from dataclasses import dataclass, field
+from typing import List, Tuple
 
 from .direction_field import DivergenceFreeField, FieldParams
 from .frame import OrthonormalFrame
 from .geometry import ChunkGeometry, MeshChunk, RingSample, SDFChunk
-from .noise import noise3, noise3_periodic
+from .noise import noise3
+from .profile import CavernProfileParams, default_cavern_profile, fractal_roughness, lobe_scale, twist_angle
 from .vector import Vector3
 
 
@@ -29,6 +30,7 @@ class TunnelParams:
     jolt_strength: float
     max_turn_per_step_rad: float
     mode: str
+    profile: CavernProfileParams = field(default_factory=default_cavern_profile)
 
 
 class TunnelTerrainGenerator:
@@ -39,6 +41,9 @@ class TunnelTerrainGenerator:
             raise ValueError("tube_sides must be >= 3")
         if params.radius_base <= params.rough_amp:
             raise ValueError("roughness amplitude must be smaller than base radius")
+        if len(params.profile.lobe_centers) != len(params.profile.lobe_strengths):
+            raise ValueError("lobe_centers and lobe_strengths must have the same length")
+
         self._params = params
         field_params = FieldParams(
             world_seed=params.world_seed,
@@ -60,9 +65,11 @@ class TunnelTerrainGenerator:
         self._ensure_ring(end)
         rings = tuple(self._global_rings[start:end])
         chunk = ChunkGeometry(chunk_index=chunk_index, rings=rings)
-        chunk.min_radius = min(r.radius for r in rings)
-        chunk.max_radius = max(r.radius for r in rings)
-        chunk.widest_ring_index = max(range(len(rings)), key=lambda i: rings[i].radius)
+        ring_minima = [min(r.roughness_profile) for r in rings]
+        ring_maxima = [max(r.roughness_profile) for r in rings]
+        chunk.min_radius = min(ring_minima)
+        chunk.max_radius = max(ring_maxima)
+        chunk.widest_ring_index = max(range(len(rings)), key=lambda i: ring_maxima[i])
         chunk.update_bounds()
         if self._params.mode in ("mesh", "mesh+sdf"):
             chunk.mesh = self._build_mesh(rings)
@@ -86,9 +93,10 @@ class TunnelTerrainGenerator:
             origin = Vector3.zero()
             forward = Vector3.unit_z()
             frame = OrthonormalFrame.initial(origin, forward)
-            radius = params.radius_base
-            roughness = tuple([params.radius_base] * params.tube_sides)
-            ring = RingSample(frame=frame, radius=radius, roughness_profile=roughness)
+
+            base_radius = params.radius_base
+            roughness, max_radius = self._build_roughness_profile(frame, base_radius, 0.0)
+            ring = RingSample(frame=frame, radius=max_radius, roughness_profile=roughness)
             self._global_rings.append(ring)
             self._global_s_positions.append(0.0)
             return
@@ -100,35 +108,45 @@ class TunnelTerrainGenerator:
         origin = prev_ring.center + direction * params.ring_step
         frame = prev_ring.frame.transport(origin, direction)
 
-        radius = params.radius_base + params.radius_var * noise3(
+        base_radius = params.radius_base + params.radius_var * noise3(
             params.world_seed + 2000, arc_length * params.radius_freq, 0.0, 0.0
         )
-        radius = max(radius, params.radius_base * 0.2)
+        base_radius = max(base_radius, params.radius_base * 0.2)
 
-        roughness_profile = self._build_roughness_profile(index, frame, radius, arc_length)
-        ring = RingSample(frame=frame, radius=radius, roughness_profile=roughness_profile)
+        roughness_profile, max_radius = self._build_roughness_profile(frame, base_radius, arc_length)
+        ring = RingSample(frame=frame, radius=max_radius, roughness_profile=roughness_profile)
+
         self._global_rings.append(ring)
         self._global_s_positions.append(arc_length)
 
     def _build_roughness_profile(
-        self, index: int, frame: OrthonormalFrame, radius: float, arc_length: float
-    ) -> Tuple[float, ...]:
+        self, frame: OrthonormalFrame, base_radius: float, arc_length: float
+    ) -> Tuple[Tuple[float, ...], float]:
         params = self._params
+        profile = params.profile
         sides = params.tube_sides
+        scaled_radius = base_radius * profile.base_scale
+        twist = twist_angle(params.world_seed + 5000, profile, arc_length)
         values: List[float] = []
+        max_radius = scaled_radius
         for side in range(sides):
             angle = (side / sides) * math.tau
-            noise_value = noise3_periodic(
-                params.world_seed + 4000,
-                frame.origin.x * params.rough_freq,
-                frame.origin.y * params.rough_freq,
-                angle + arc_length * params.rough_freq,
-                period=math.tau,
+            shifted_angle = angle + twist
+            lobe = lobe_scale(shifted_angle, profile)
+            cavern_radius = scaled_radius * (1.0 + lobe)
+            rock_detail = fractal_roughness(
+                params.world_seed + 6000,
+                profile,
+                (frame.origin.x, frame.origin.y, frame.origin.z),
+                arc_length,
+                shifted_angle,
+                params.rough_freq,
             )
-            rough = radius + params.rough_amp * noise_value
-            rough = max(rough, radius * 0.5)
-            values.append(rough)
-        return tuple(values)
+            radius = cavern_radius + params.rough_amp * rock_detail
+            radius = max(radius, scaled_radius * 0.45)
+            values.append(radius)
+            max_radius = max(max_radius, radius)
+        return tuple(values), max_radius
 
     def _build_mesh(self, rings: Tuple[RingSample, ...]) -> MeshChunk:
         vertices: List[Vector3] = []

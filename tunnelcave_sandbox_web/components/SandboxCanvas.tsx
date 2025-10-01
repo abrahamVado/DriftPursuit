@@ -3,9 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import * as THREE from "three";
 import { defaultParams } from "../lib/config";
-
 import { computeCameraGoal, type CameraMode } from "../lib/camera";
-
 import { createSimulation, updateSimulation, type SimulationParams } from "../lib/world";
 import type { SimulationState } from "../lib/world";
 import type { ChunkData } from "../lib/terrain";
@@ -68,7 +66,6 @@ export function SandboxCanvas() {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const simRef = useRef<SimulationState | null>(null);
   const rafRef = useRef<number>();
-
   const inputRef = useRef<InputState>({
     throttle: 0,
     roll: 0,
@@ -77,7 +74,6 @@ export function SandboxCanvas() {
     boost: false,
     resetOrientation: false
   });
-
   const [speed, setSpeed] = useState(0);
   const [targetSpeed, setTargetSpeed] = useState(0);
 
@@ -206,7 +202,6 @@ export function SandboxCanvas() {
         case "Digit3":
           applyViewMode("third");
           break;
-
         case "ShiftLeft":
         case "ShiftRight":
           inputRef.current.boost = true;

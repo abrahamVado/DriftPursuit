@@ -48,7 +48,6 @@ export function createCameraRig(initialPosition: Vec3): CameraRig {
   };
 }
 
-
 export function computeCameraGoal(
   craftPosition: Vec3,
   forward: Vec3,

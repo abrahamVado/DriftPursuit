@@ -6,6 +6,7 @@ import type { SandboxParams } from "./config";
 export interface DirectionSample {
   forward: Vec3;
   radius: number;
+  maxRadius: number;
   roughness: (theta: number) => number;
 }
 
@@ -15,6 +16,7 @@ interface DirectionState {
   distance: number;
   nextJolt: number;
   chunkSeed: number;
+  arc: number;
 }
 
 export function createDirectionState(params: SandboxParams): DirectionState {
@@ -23,8 +25,116 @@ export function createDirectionState(params: SandboxParams): DirectionState {
     smoothForward: [0, 0, 1],
     distance: 0,
     nextJolt: params.joltEveryMeters,
-    chunkSeed: hashMix(params.worldSeed)
+    chunkSeed: hashMix(params.worldSeed),
+    arc: 0
   };
+}
+
+function wrapAngle(angle: number): number {
+  const twoPi = Math.PI * 2;
+  let wrapped = ((angle + Math.PI) % twoPi + twoPi) % twoPi;
+  wrapped -= Math.PI;
+  return wrapped;
+}
+
+function lobeContribution(theta: number, params: SandboxParams): number {
+  const { profile } = params;
+  if (profile.lobeWidth <= 0) {
+    return 0;
+  }
+  const count = Math.min(profile.lobeCenters.length, profile.lobeStrengths.length);
+  let total = 0;
+  for (let i = 0; i < count; i += 1) {
+    const center = profile.lobeCenters[i];
+    const strength = profile.lobeStrengths[i];
+    const diff = wrapAngle(theta - center);
+    const falloff = Math.exp(-0.5 * (diff / profile.lobeWidth) ** 2);
+    total += strength * falloff;
+  }
+  return total;
+}
+
+function computeTwist(params: SandboxParams, state: DirectionState): number {
+  const { profile } = params;
+  if (profile.twistStrength <= 0 || profile.twistFrequency <= 0) {
+    return 0;
+  }
+  const sample = fbmNoise(
+    state.chunkSeed + 313,
+    [state.arc * profile.twistFrequency, 0, 0],
+    3,
+    1,
+    0.5
+  );
+  return sample * profile.twistStrength;
+}
+
+function fractalRockiness(
+  params: SandboxParams,
+  state: DirectionState,
+  position: Vec3,
+  theta: number
+): number {
+  const { profile } = params;
+  const base: Vec3 = [
+    position[0] * params.roughFreq,
+    position[1] * params.roughFreq,
+    state.arc * params.roughFreq
+  ];
+  return fbmNoise(
+    state.chunkSeed + 997,
+    [
+      base[0] + Math.cos(theta) * profile.baseScale,
+      base[1] + Math.sin(theta) * profile.baseScale,
+      base[2] + Math.sin(theta * 0.5) * profile.baseScale
+    ],
+    profile.fractalOctaves,
+    1,
+    profile.fractalGain,
+    profile.fractalLacunarity
+  );
+}
+
+function buildRadiusSample(
+  params: SandboxParams,
+  state: DirectionState,
+  position: Vec3
+): {
+  baseRadius: number;
+  compute: (theta: number) => number;
+  maxRadius: number;
+} {
+  const { profile } = params;
+  const radiusNoise = fbmNoise(
+    state.chunkSeed + 211,
+    [
+      position[0] * params.radiusFreq,
+      position[1] * params.radiusFreq,
+      position[2] * params.radiusFreq
+    ],
+    4,
+    1,
+    0.5
+  );
+  const scaledBase = Math.max(
+    (params.radiusBase + radiusNoise * params.radiusVar) * profile.baseScale,
+    params.radiusBase * 0.4
+  );
+  const twist = computeTwist(params, state);
+  const compute = (theta: number) => {
+    const shifted = theta + twist;
+    const lobe = lobeContribution(shifted, params);
+    const cavernRadius = scaledBase * (1 + lobe);
+    const rock = fractalRockiness(params, state, position, shifted);
+    const finalRadius = Math.max(cavernRadius + params.roughAmp * rock, scaledBase * 0.45);
+    return finalRadius;
+  };
+  let maxRadius = scaledBase;
+  for (let i = 0; i < params.tubeSides; i += 1) {
+    const theta = (i / params.tubeSides) * Math.PI * 2;
+    maxRadius = Math.max(maxRadius, compute(theta));
+  }
+  return { baseRadius: scaledBase, compute, maxRadius };
 }
 
 function sampleDirectionField(
@@ -81,31 +191,14 @@ export function stepDirection(
   }
   state.forward = forward;
   state.smoothForward = forward;
-  const radiusNoise = fbmNoise(
-    state.chunkSeed + 211,
-    [
-      position[0] * params.radiusFreq,
-      position[1] * params.radiusFreq,
-      position[2] * params.radiusFreq
-    ],
-    4,
-    1,
-    0.5
-  );
-  const radius = params.radiusBase + radiusNoise * params.radiusVar;
-  const roughness = (theta: number) => {
-    const sample = fbmNoise(
-      state.chunkSeed + 997,
-      [
-        position[0] * params.roughFreq + Math.cos(theta) * 1.5,
-        position[1] * params.roughFreq + Math.sin(theta) * 1.5,
-        position[2] * params.roughFreq
-      ],
-      3,
-      1,
-      0.5
-    );
-    return sample * params.roughAmp;
+  const radiusSample = buildRadiusSample(params, state, position);
+  const roughness = (theta: number) => radiusSample.compute(theta) - radiusSample.baseRadius;
+  const result = {
+    forward,
+    radius: radiusSample.baseRadius,
+    maxRadius: radiusSample.maxRadius,
+    roughness
   };
-  return { forward, radius, roughness };
+  state.arc += params.ringStep;
+  return result;
 }
