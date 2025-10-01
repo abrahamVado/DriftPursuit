@@ -11,10 +11,12 @@ import { ControlsOverlay } from "./ControlsOverlay";
 interface InputState {
   throttle: number;
   roll: number;
+
   yaw: number;
   pitch: number;
   boost: boolean;
   resetOrientation: boolean;
+
 }
 
 function buildCraftMesh() {
@@ -65,6 +67,7 @@ export function SandboxCanvas() {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const simRef = useRef<SimulationState | null>(null);
   const rafRef = useRef<number>();
+
   const inputRef = useRef<InputState>({
     throttle: 0,
     roll: 0,
@@ -73,6 +76,7 @@ export function SandboxCanvas() {
     boost: false,
     resetOrientation: false
   });
+
   const [speed, setSpeed] = useState(0);
   const [targetSpeed, setTargetSpeed] = useState(0);
 
@@ -147,6 +151,7 @@ export function SandboxCanvas() {
     };
 
     const keyDown = (event: KeyboardEvent) => {
+
       switch (event.code) {
         case "ArrowUp":
           inputRef.current.throttle = 1;
@@ -222,6 +227,7 @@ export function SandboxCanvas() {
         default:
           break;
       }
+
     };
 
     window.addEventListener("resize", handleResize);
@@ -246,6 +252,7 @@ export function SandboxCanvas() {
         params,
         {
           throttleDelta: inputRef.current.throttle,
+
           rollDelta: inputRef.current.roll,
           yawDelta: inputRef.current.yaw,
           pitchDelta: inputRef.current.pitch
@@ -266,6 +273,7 @@ export function SandboxCanvas() {
           0
         );
         inputRef.current.resetOrientation = false;
+
       }
       syncChunks();
       const { craft, camera: cam } = simRef.current;

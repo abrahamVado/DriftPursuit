@@ -3,6 +3,7 @@ import { createChunkBand, ensureChunks, type ChunkBand } from "./streaming";
 import { chooseSpawn, type SpawnPose } from "./probe";
 import type { RingStation } from "./terrain";
 import { createCameraRig, type CameraParams, type CameraRig, updateCameraRig } from "./camera";
+
 import {
   add,
   cross,
@@ -13,6 +14,7 @@ import {
   Vec3,
   lerp
 } from "./vector";
+
 
 export interface SimulationParams {
   sandbox: SandboxParams;
@@ -26,10 +28,12 @@ export interface CraftState {
   targetSpeed: number;
   roll: number;
   rollRate: number;
+
   yaw: number;
   yawRate: number;
   pitch: number;
   pitchRate: number;
+
   position: Vec3;
   forward: Vec3;
   right: Vec3;
@@ -46,8 +50,10 @@ export interface SimulationState {
 export interface PlayerInput {
   throttleDelta: number;
   rollDelta: number;
+
   yawDelta: number;
   pitchDelta: number;
+
 }
 
 function collectRings(band: ChunkBand): RingStation[] {
@@ -61,11 +67,13 @@ function collectRings(band: ChunkBand): RingStation[] {
 
 function interpolateRing(rings: RingStation[], arc: number): {
   position: Vec3;
+
   frame: {
     forward: Vec3;
     right: Vec3;
     up: Vec3;
   };
+
 } {
   const ringIndex = Math.floor(arc);
   const nextIndex = Math.min(rings[rings.length - 1].index, ringIndex + 1);
@@ -84,6 +92,7 @@ function interpolateRing(rings: RingStation[], arc: number): {
     up = scale(up, 1 / upLen);
   }
   right = cross(up, forward);
+
   return { position, frame: { forward, right, up } };
 }
 
@@ -145,6 +154,7 @@ function applyOrientation(
   }
 
   return { forward, right, up };
+
 }
 
 export function createSimulation(params: SimulationParams): SimulationState {
@@ -161,10 +171,12 @@ export function createSimulation(params: SimulationParams): SimulationState {
     targetSpeed: 15,
     roll: spawn.rollHint,
     rollRate: 0,
+
     yaw: 0,
     yawRate: 0,
     pitch: 0,
     pitchRate: 0,
+
     position: spawn.position,
     forward: spawn.forward,
     right: spawn.right,
@@ -181,6 +193,7 @@ export function updateSimulation(
   dt: number
 ) {
   const { craft, band } = state;
+
   craft.targetSpeed = clamp(craft.targetSpeed + input.throttleDelta * dt * 15, 2, 80);
   craft.speed += (craft.targetSpeed - craft.speed) * Math.min(1, dt * 2);
   craft.rollRate += input.rollDelta * dt * 2.5;
@@ -192,12 +205,14 @@ export function updateSimulation(
   craft.pitchRate += input.pitchDelta * dt * 2;
   craft.pitchRate *= Math.pow(0.4, dt);
   craft.pitch = clamp(craft.pitch + craft.pitchRate * dt, -Math.PI / 5, Math.PI / 5);
+
   const deltaArc = (craft.speed * dt) / params.sandbox.ringStep;
   craft.arc += deltaArc;
   const centerChunk = Math.floor((craft.arc * params.sandbox.ringStep) / params.sandbox.chunkLength);
   ensureChunks(band, centerChunk);
   const rings = collectRings(band);
   const sample = interpolateRing(rings, craft.arc);
+
   const oriented = applyOrientation(
     sample.frame.right,
     sample.frame.up,
@@ -210,5 +225,6 @@ export function updateSimulation(
   craft.forward = oriented.forward;
   craft.right = oriented.right;
   craft.up = oriented.up;
+
   updateCameraRig(state.camera, craft.position, craft.forward, craft.right, craft.up, params.camera, dt);
 }
