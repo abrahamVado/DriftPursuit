@@ -276,6 +276,25 @@ export class MarsSandbox {
       this.hud.setStatus(next ? 'Auxiliary landing lights engaged.' : 'Auxiliary landing lights offline.');
     }
 
+    const adjustAuxiliaryLights = (delta) => {
+      if (!this.vehicle?.adjustAuxiliaryLightLevel) return;
+      const nextLevel = this.vehicle.adjustAuxiliaryLightLevel(delta);
+      const enabled = this.vehicle.auxiliaryLightsEnabled && nextLevel > 0;
+      if (!enabled) {
+        this.hud.setStatus('Auxiliary landing lights offline.');
+      } else {
+        const percent = Math.round(nextLevel * 100);
+        this.hud.setStatus(`Auxiliary lighting output at ${percent}%.`);
+      }
+    };
+
+    if (inputState.increaseAuxiliaryLights) {
+      adjustAuxiliaryLights(0.1);
+    }
+    if (inputState.decreaseAuxiliaryLights) {
+      adjustAuxiliaryLights(-0.1);
+    }
+
     if (inputState.dropBeacon) {
       this._deployBeacon();
     }
