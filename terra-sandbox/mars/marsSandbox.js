@@ -363,6 +363,7 @@ export class MarsSandbox {
       this.vehicle.setAuxiliaryLightsActive(true, 1);
     }
 
+
     inputState.yaw = 0;
     inputState.roll = 0;
     inputState.pitch = 0;
@@ -478,6 +479,7 @@ export class MarsSandbox {
     mesh.add(target);
     this.droneLight = light;
   }
+
 
   _attachCaveFloodLight(mesh) {
     if (!mesh) return;
