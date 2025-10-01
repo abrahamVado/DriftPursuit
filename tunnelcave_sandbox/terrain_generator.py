@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass, field
-from typing import List, Tuple
+from typing import List, Optional, Tuple
 
 from .direction_field import DivergenceFreeField, FieldParams
 from .frame import OrthonormalFrame
@@ -39,6 +39,8 @@ class TunnelParams:
     mode: str
     add_end_caps: bool = True
     profile: CavernProfileParams = field(default_factory=default_cavern_profile)
+    rough_smoothness: float = 0.0
+    rough_filter_kernel: Optional[Tuple[float, ...]] = None
 
 
 class TunnelTerrainGenerator:
@@ -51,6 +53,18 @@ class TunnelTerrainGenerator:
             raise ValueError("roughness amplitude must be smaller than base radius")
         if len(params.profile.lobe_centers) != len(params.profile.lobe_strengths):
             raise ValueError("lobe_centers and lobe_strengths must have the same length")
+        if not 0.0 <= params.rough_smoothness <= 1.0:
+            raise ValueError("rough_smoothness must be between 0 and 1")
+
+        kernel = params.rough_filter_kernel
+        if kernel is not None:
+            if len(kernel) == 0:
+                raise ValueError("rough_filter_kernel must not be empty when provided")
+            if all(weight == 0.0 for weight in kernel):
+                raise ValueError("rough_filter_kernel must contain a non-zero weight")
+            self._rough_filter_kernel: Optional[Tuple[float, ...]] = tuple(kernel)
+        else:
+            self._rough_filter_kernel = None
 
         self._params = params
         field_params = FieldParams(
@@ -65,6 +79,7 @@ class TunnelTerrainGenerator:
         self._global_rings: List[RingSample] = []
         self._global_s_positions: List[float] = []
         self._rings_per_chunk = int(round(params.chunk_length / params.ring_step)) + 1
+        self._prev_roughness_profile: Optional[Tuple[float, ...]] = None
         self._ensure_ring(0)
 
     def generate_chunk(self, chunk_index: int) -> ChunkGeometry:
@@ -137,6 +152,7 @@ class TunnelTerrainGenerator:
         twist = twist_angle(params.world_seed + 5000, profile, arc_length)
         values: List[float] = []
         max_radius = scaled_radius
+        min_radius = scaled_radius * 0.8
         for side in range(sides):
             angle = (side / sides) * math.tau
             shifted_angle = angle + twist
@@ -151,10 +167,42 @@ class TunnelTerrainGenerator:
                 params.rough_freq,
             )
             radius = cavern_radius + params.rough_amp * rock_detail
-            radius = max(radius, scaled_radius * 0.8)
+            radius = max(radius, min_radius)
             values.append(radius)
             max_radius = max(max_radius, radius)
-        return tuple(values), max_radius
+
+        previous_profile = self._prev_roughness_profile
+        smoothness = params.rough_smoothness
+        if previous_profile is not None and smoothness > 0.0:
+            blend = 1.0 - smoothness
+            smoothed: List[float] = []
+            for idx, raw_value in enumerate(values):
+                prev_value = previous_profile[idx % len(previous_profile)]
+                blended = prev_value * smoothness + raw_value * blend
+                smoothed.append(max(blended, min_radius))
+            values = smoothed
+
+        if self._rough_filter_kernel is not None:
+            kernel = self._rough_filter_kernel
+            assert kernel is not None  # for type checkers
+            kernel_sum = sum(kernel)
+            if kernel_sum == 0.0:
+                filtered = values
+            else:
+                center = len(kernel) // 2
+                filtered = []
+                for idx in range(sides):
+                    acc = 0.0
+                    for offset, weight in enumerate(kernel):
+                        neighbor = (idx + offset - center) % sides
+                        acc += values[neighbor] * weight
+                    filtered.append(max(acc / kernel_sum, min_radius))
+            values = filtered
+
+        final_max = max(values, default=min_radius)
+        result = tuple(values)
+        self._prev_roughness_profile = result
+        return result, max(final_max, scaled_radius)
 
     def _build_mesh(self, rings: Tuple[RingSample, ...]) -> MeshChunk:
         vertices: List[Vector3] = []

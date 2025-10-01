@@ -24,6 +24,8 @@ def build_default_params() -> TunnelParams:
         radius_freq=0.008,
         rough_amp=1.1,
         rough_freq=0.1,
+        rough_smoothness=0.45,
+        rough_filter_kernel=(0.2, 0.6, 0.2),
         jolt_every_meters=140.0,
         jolt_strength=0.3,
         max_turn_per_step_rad=0.7,
