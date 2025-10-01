@@ -524,11 +524,13 @@ func buildHandler(b *Broker) (http.Handler, error) {
 		return nil, err
 	}
 
-	terraSandboxDir, err := resolveTerraSandboxDir()
-	if err != nil {
+	if terraSandboxDir, err := resolveTerraSandboxDir(); err == nil {
+		mux.Handle("/terra-sandbox/", http.StripPrefix("/terra-sandbox/", http.FileServer(http.Dir(terraSandboxDir))))
+	} else if errors.Is(err, os.ErrNotExist) {
+		log.Println("terra-sandbox directory not found; skipping /terra-sandbox/ handler registration")
+	} else {
 		return nil, err
 	}
-	mux.Handle("/terra-sandbox/", http.StripPrefix("/terra-sandbox/", http.FileServer(http.Dir(terraSandboxDir))))
 
 	return mux, nil
 }
