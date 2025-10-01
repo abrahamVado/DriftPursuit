@@ -3,7 +3,6 @@
 import { useEffect, useRef, useState } from "react";
 import * as THREE from "three";
 import { defaultParams } from "../lib/config";
-import { computeCameraGoal, type CameraMode } from "../lib/camera";
 import { createSimulation, updateSimulation, type SimulationParams } from "../lib/world";
 import type { SimulationState } from "../lib/world";
 import type { ChunkData } from "../lib/terrain";
@@ -12,10 +11,8 @@ import { ControlsOverlay } from "./ControlsOverlay";
 interface InputState {
   throttle: number;
   roll: number;
-  yaw: number;
-  pitch: number;
   boost: boolean;
-  resetOrientation: boolean;
+  resetRoll: boolean;
 }
 
 function buildCraftMesh() {
@@ -66,14 +63,7 @@ export function SandboxCanvas() {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const simRef = useRef<SimulationState | null>(null);
   const rafRef = useRef<number>();
-  const inputRef = useRef<InputState>({
-    throttle: 0,
-    roll: 0,
-    yaw: 0,
-    pitch: 0,
-    boost: false,
-    resetOrientation: false
-  });
+  const inputRef = useRef<InputState>({ throttle: 0, roll: 0, boost: false, resetRoll: false });
   const [speed, setSpeed] = useState(0);
   const [targetSpeed, setTargetSpeed] = useState(0);
 
@@ -103,11 +93,10 @@ export function SandboxCanvas() {
     const simParams: SimulationParams = {
       sandbox: defaultParams,
       camera: {
-        smoothing: 3,
-        collisionBuffer: 1.2,
-        firstPerson: { forwardOffset: 2.5, heightOffset: 0.25, lookAhead: 60 },
-        secondPerson: { followDistance: 6, heightOffset: 1.8, lateralOffset: 0, lookAhead: 55 },
-        thirdPerson: { followDistance: 13.5, heightOffset: 4.5, lateralOffset: 0, lookAhead: 70 }
+        followDistance: 12,
+        heightOffset: 4,
+        lateralOffset: 0,
+        smoothing: 3
       },
       craftRadius: 2.2
     };
@@ -148,108 +137,22 @@ export function SandboxCanvas() {
       camera.updateProjectionMatrix();
     };
 
-    const applyViewMode = (mode: CameraMode) => {
-      if (!simRef.current) return;
-      simRef.current.viewMode = mode;
-      const goal = computeCameraGoal(
-        simRef.current.craft.position,
-        simRef.current.craft.forward,
-        simRef.current.craft.right,
-        simRef.current.craft.up,
-        simParams.camera,
-        mode,
-        simRef.current.currentRingRadius,
-        simParams.sandbox.roughAmp
-      );
-      simRef.current.camera.position = [...goal.position];
-      simRef.current.camera.target = [...goal.target];
-    };
-
     const keyDown = (event: KeyboardEvent) => {
-      switch (event.code) {
-        case "ArrowUp":
-          inputRef.current.throttle = 1;
-          event.preventDefault();
-          break;
-        case "ArrowDown":
-          inputRef.current.throttle = -1;
-          event.preventDefault();
-          break;
-        case "KeyA":
-          inputRef.current.roll = -1;
-          break;
-        case "KeyD":
-          inputRef.current.roll = 1;
-          break;
-        case "KeyW":
-          inputRef.current.pitch = 1;
-          break;
-        case "KeyS":
-          inputRef.current.pitch = -1;
-          break;
-        case "KeyQ":
-          inputRef.current.yaw = -1;
-          break;
-        case "KeyE":
-          inputRef.current.yaw = 1;
-          break;
-        case "Digit1":
-          applyViewMode("first");
-          break;
-        case "Digit2":
-          applyViewMode("second");
-          break;
-        case "Digit3":
-          applyViewMode("third");
-          break;
-        case "ShiftLeft":
-        case "ShiftRight":
-          inputRef.current.boost = true;
-          break;
-        case "Space":
-          inputRef.current.resetOrientation = true;
-          event.preventDefault();
-          break;
-        default:
-          break;
-      }
+      if (event.repeat) return;
+      if (event.code === "KeyW") inputRef.current.throttle = 1;
+      if (event.code === "KeyS") inputRef.current.throttle = -1;
+      if (event.code === "KeyA") inputRef.current.roll = -1;
+      if (event.code === "KeyD") inputRef.current.roll = 1;
+      if (event.code === "ShiftLeft" || event.code === "ShiftRight") inputRef.current.boost = true;
+      if (event.code === "Space") inputRef.current.resetRoll = true;
     };
 
     const keyUp = (event: KeyboardEvent) => {
-      switch (event.code) {
-        case "ArrowUp":
-          if (inputRef.current.throttle > 0) inputRef.current.throttle = 0;
-          event.preventDefault();
-          break;
-        case "ArrowDown":
-          if (inputRef.current.throttle < 0) inputRef.current.throttle = 0;
-          event.preventDefault();
-          break;
-        case "KeyA":
-          if (inputRef.current.roll < 0) inputRef.current.roll = 0;
-          break;
-        case "KeyD":
-          if (inputRef.current.roll > 0) inputRef.current.roll = 0;
-          break;
-        case "KeyW":
-          if (inputRef.current.pitch > 0) inputRef.current.pitch = 0;
-          break;
-        case "KeyS":
-          if (inputRef.current.pitch < 0) inputRef.current.pitch = 0;
-          break;
-        case "KeyQ":
-          if (inputRef.current.yaw < 0) inputRef.current.yaw = 0;
-          break;
-        case "KeyE":
-          if (inputRef.current.yaw > 0) inputRef.current.yaw = 0;
-          break;
-        case "ShiftLeft":
-        case "ShiftRight":
-          inputRef.current.boost = false;
-          break;
-        default:
-          break;
-      }
+      if (event.code === "KeyW" && inputRef.current.throttle > 0) inputRef.current.throttle = 0;
+      if (event.code === "KeyS" && inputRef.current.throttle < 0) inputRef.current.throttle = 0;
+      if (event.code === "KeyA" && inputRef.current.roll < 0) inputRef.current.roll = 0;
+      if (event.code === "KeyD" && inputRef.current.roll > 0) inputRef.current.roll = 0;
+      if (event.code === "ShiftLeft" || event.code === "ShiftRight") inputRef.current.boost = false;
     };
 
     window.addEventListener("resize", handleResize);
@@ -265,7 +168,7 @@ export function SandboxCanvas() {
         sandbox: simParams.sandbox,
         camera: {
           ...simParams.camera,
-          smoothing: inputRef.current.boost ? simParams.camera.smoothing * 1.8 : simParams.camera.smoothing
+          smoothing: inputRef.current.boost ? 6 : simParams.camera.smoothing
         },
         craftRadius: simParams.craftRadius
       };
@@ -274,26 +177,14 @@ export function SandboxCanvas() {
         params,
         {
           throttleDelta: inputRef.current.throttle,
-          rollDelta: inputRef.current.roll,
-          yawDelta: inputRef.current.yaw,
-          pitchDelta: inputRef.current.pitch
+          rollDelta: inputRef.current.roll
         },
         dt
       );
-      if (inputRef.current.resetOrientation) {
+      if (inputRef.current.resetRoll) {
         simRef.current.craft.roll = 0;
         simRef.current.craft.rollRate = 0;
-        simRef.current.craft.yaw = 0;
-        simRef.current.craft.yawRate = 0;
-        simRef.current.craft.pitch = 0;
-        simRef.current.craft.pitchRate = 0;
-        updateSimulation(
-          simRef.current,
-          params,
-          { throttleDelta: 0, rollDelta: 0, yawDelta: 0, pitchDelta: 0 },
-          0
-        );
-        inputRef.current.resetOrientation = false;
+        inputRef.current.resetRoll = false;
       }
       syncChunks();
       const { craft, camera: cam } = simRef.current;
@@ -304,9 +195,8 @@ export function SandboxCanvas() {
         new THREE.Vector3(craft.forward[0], craft.forward[1], craft.forward[2])
       );
       craftMesh.setRotationFromMatrix(basis);
-      craftMesh.visible = simRef.current.viewMode !== "first";
       camera.position.set(cam.position[0], cam.position[1], cam.position[2]);
-      camera.lookAt(new THREE.Vector3(cam.target[0], cam.target[1], cam.target[2]));
+      camera.lookAt(new THREE.Vector3(craft.position[0], craft.position[1], craft.position[2]));
       renderer.render(scene, camera);
       setSpeed(craft.speed);
       setTargetSpeed(craft.targetSpeed);

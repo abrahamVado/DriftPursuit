@@ -42,7 +42,6 @@ export interface SpawnPose {
   right: Vec3;
   up: Vec3;
   rollHint: number;
-  ringRadius: number;
 }
 
 export function chooseSpawn(rings: RingStation[], craftRadius: number): SpawnPose | null {
@@ -73,13 +72,5 @@ export function chooseSpawn(rings: RingStation[], craftRadius: number): SpawnPos
   const forward = ring.frame.forward;
   const right = normalize(scale(ring.frame.right, Math.cos(angle)));
   const up = normalize(scale(ring.frame.up, Math.sin(angle)));
-  return {
-    ringIndex: ring.index,
-    position,
-    forward,
-    right,
-    up,
-    rollHint: angle,
-    ringRadius: ring.maxRadius
-  };
+  return { ringIndex: ring.index, position, forward, right, up, rollHint: angle };
 }
