@@ -74,6 +74,7 @@ function interpolateRing(rings: RingStation[], arc: number): {
     right: Vec3;
     up: Vec3;
   };
+
   radius: number;
 } {
   const ringIndex = Math.floor(arc);
@@ -180,6 +181,7 @@ export function createSimulation(params: SimulationParams): SimulationState {
     right: spawn.right,
     up: spawn.up
   };
+
   const initialGoal = computeCameraGoal(
     craft.position,
     craft.forward,
@@ -202,6 +204,7 @@ export function updateSimulation(
   dt: number
 ) {
   const { craft, band } = state;
+
   craft.targetSpeed = clamp(craft.targetSpeed + input.throttleDelta * dt * 15, 2, 80);
   craft.speed += (craft.targetSpeed - craft.speed) * Math.min(1, dt * 2);
   craft.rollRate += input.rollDelta * dt * 2.5;
@@ -213,12 +216,14 @@ export function updateSimulation(
   craft.pitchRate += input.pitchDelta * dt * 2;
   craft.pitchRate *= Math.pow(0.4, dt);
   craft.pitch = clamp(craft.pitch + craft.pitchRate * dt, -Math.PI / 5, Math.PI / 5);
+
   const deltaArc = (craft.speed * dt) / params.sandbox.ringStep;
   craft.arc += deltaArc;
   const centerChunk = Math.floor((craft.arc * params.sandbox.ringStep) / params.sandbox.chunkLength);
   ensureChunks(band, centerChunk);
   const rings = collectRings(band);
   const sample = interpolateRing(rings, craft.arc);
+
   const oriented = applyOrientation(
     sample.frame.right,
     sample.frame.up,
@@ -244,4 +249,5 @@ export function updateSimulation(
     sample.radius,
     params.sandbox.roughAmp
   );
+
 }
