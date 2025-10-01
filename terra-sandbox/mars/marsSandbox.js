@@ -81,6 +81,7 @@ export class MarsSandbox {
     this.ambientTarget = 0.18;
 
     this.droneLight = null;
+    this.caveFloodLight = null;
     this.lanternTurret = null;
     this._lanternAim = { yaw: 0, pitch: 0 };
     this._lanternLockAuxLights = true;
@@ -156,6 +157,7 @@ export class MarsSandbox {
     this.vehicle.setAuxiliaryLightsActive(false);
     this._configureLanternTurret(shipMesh);
     this._attachDroneLight(shipMesh);
+    this._attachCaveFloodLight(shipMesh);
     this.scene.add(shipMesh);
     this.vehicleMesh = shipMesh;
 
@@ -212,6 +214,12 @@ export class MarsSandbox {
     this._clearBeacons({ silent: true });
     this._disposeChunkAccents();
     this._disposeAudio();
+    if (this.caveFloodLight) {
+      this.caveFloodLight.parent?.remove(this.caveFloodLight);
+      const glow = this.caveFloodLight.userData?.glow;
+      glow?.parent?.remove(glow);
+      this.caveFloodLight = null;
+    }
     if (this.renderer) {
       this.renderer.dispose();
       this.renderer = null;
@@ -355,6 +363,7 @@ export class MarsSandbox {
       this.vehicle.setAuxiliaryLightsActive(true, 1);
     }
 
+
     inputState.yaw = 0;
     inputState.roll = 0;
     inputState.pitch = 0;
@@ -469,6 +478,42 @@ export class MarsSandbox {
     mesh.add(light);
     mesh.add(target);
     this.droneLight = light;
+  }
+
+
+  _attachCaveFloodLight(mesh) {
+    if (!mesh) return;
+    if (this.caveFloodLight) {
+      mesh.add(this.caveFloodLight);
+      const glow = this.caveFloodLight.userData?.glow;
+      if (glow) mesh.add(glow);
+      return;
+    }
+
+    const light = new THREE.PointLight('#f7f4ff', 160, 2400, 0.28);
+    light.name = 'caveFloodLight';
+    light.position.set(0, 3.4, 0.6);
+    light.castShadow = false;
+
+    const glowMaterial = new THREE.MeshBasicMaterial({
+      color: 0xf4f0ff,
+      transparent: true,
+      opacity: 0.2,
+      depthWrite: false,
+      blending: THREE.AdditiveBlending,
+      toneMapped: false,
+    });
+    const glow = new THREE.Mesh(new THREE.SphereGeometry(3.6, 28, 20), glowMaterial);
+    glow.name = 'caveFloodLightGlow';
+    glow.position.copy(light.position);
+    glow.renderOrder = 2;
+    glow.userData.skipShadowAuto = true;
+
+    mesh.add(glow);
+    mesh.add(light);
+
+    light.userData.glow = glow;
+    this.caveFloodLight = light;
   }
 
   _configureLanternTurret(mesh) {
