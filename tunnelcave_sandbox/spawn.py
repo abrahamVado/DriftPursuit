@@ -45,7 +45,7 @@ class SpawnPlanner:
             result = self._try_ring(index, request.craft_radius)
             if result is not None:
                 return result
-        widest_index = max(range(len(self._rings)), key=lambda i: self._rings[i].max_radius)
+        widest_index = max(range(len(self._rings)), key=lambda i: self._rings[i].radius)
         fallback = self._try_ring(widest_index, request.craft_radius)
         if fallback is None:
             raise RuntimeError("Failed to find safe spawn pose")

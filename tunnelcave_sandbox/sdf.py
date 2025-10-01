@@ -31,6 +31,6 @@ class SignedDistanceField:
         distances = []
         for ring in self.rings:
             distances.append(distance_to_segment(point, ring.center, ring.center + ring.forward))
-        base_distance = min(distances) - max(r.max_radius for r in self.rings)
+        base_distance = min(distances) - max(r.radius for r in self.rings)
         detail = self.noise_amplitude * noise3(self.noise_seed, point.x, point.y, point.z)
         return base_distance + detail

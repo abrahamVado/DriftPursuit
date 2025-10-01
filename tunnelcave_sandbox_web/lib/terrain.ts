@@ -9,9 +9,6 @@ export interface RingStation {
   position: Vec3;
   frame: OrthonormalFrame;
   radius: number;
-
-  maxRadius: number;
-
   roughness: (theta: number) => number;
 }
 
@@ -32,7 +29,6 @@ interface GeneratorState {
   position: Vec3;
   frame: OrthonormalFrame;
   nextChunkIndex: number;
-  lastRing: RingStation | null;
 }
 
 export function createTerrainGenerator(params: SandboxParams): GeneratorState {
@@ -40,16 +36,7 @@ export function createTerrainGenerator(params: SandboxParams): GeneratorState {
   const directionState = createDirectionState(params);
   const position: Vec3 = [0, 0, 0];
   const frame = createInitialFrame(directionState.forward);
-  return {
-    params,
-    directionState,
-    rand,
-    ringIndex: 0,
-    position,
-    frame,
-    nextChunkIndex: 0,
-    lastRing: null
-  };
+  return { params, directionState, rand, ringIndex: 0, position, frame, nextChunkIndex: 0 };
 }
 
 function integrateRing(state: GeneratorState): RingStation {
@@ -63,9 +50,6 @@ function integrateRing(state: GeneratorState): RingStation {
     position: state.position,
     frame: state.frame,
     radius: sample.radius,
-
-    maxRadius: sample.maxRadius,
-
     roughness: sample.roughness
   };
   state.ringIndex += 1;
@@ -109,40 +93,13 @@ function subtract(a: Vec3, b: Vec3): Vec3 {
   return [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
 }
 
-function cloneVec3(v: Vec3): Vec3 {
-  return [v[0], v[1], v[2]];
-}
-
-function cloneRingStation(ring: RingStation): RingStation {
-  return {
-    index: ring.index,
-    position: cloneVec3(ring.position),
-    frame: {
-      forward: cloneVec3(ring.frame.forward),
-      right: cloneVec3(ring.frame.right),
-      up: cloneVec3(ring.frame.up)
-    },
-    radius: ring.radius,
-    maxRadius: ring.maxRadius,
-    roughness: ring.roughness
-  };
-}
-
-function buildChunkGeometry(
-  rings: RingStation[],
-  params: SandboxParams,
-  options: { includeStartCap: boolean; includeEndCap: boolean }
-) {
+function buildChunkGeometry(rings: RingStation[], params: SandboxParams) {
   const vertices: number[] = [];
   const normals: number[] = [];
   const indices: number[] = [];
   const ringVerts: Vec3[][] = rings.map((ring) => buildRingVertices(ring, params));
-  const ringStarts: number[] = [];
-  const ringCenterIndices: Array<number | null> = [];
   for (let r = 0; r < ringVerts.length; r += 1) {
     const verts = ringVerts[r];
-    const startIndex = vertices.length / 3;
-    ringStarts.push(startIndex);
     for (let v = 0; v < verts.length; v += 1) {
       const p = verts[v];
       vertices.push(p[0], p[1], p[2]);
@@ -150,47 +107,17 @@ function buildChunkGeometry(
       const normal = normalize(subtract(p, center));
       normals.push(normal[0], normal[1], normal[2]);
     }
-    const shouldAddCenter =
-      (options.includeStartCap && r === 0) || (options.includeEndCap && r === ringVerts.length - 1);
-    if (params.addEndCaps && shouldAddCenter) {
-      const center = rings[r].position;
-      vertices.push(center[0], center[1], center[2]);
-      const forward = rings[r].frame.forward;
-      const normal = r === 0 ? scale(forward, -1) : forward;
-      normals.push(normal[0], normal[1], normal[2]);
-      ringCenterIndices.push(vertices.length / 3 - 1);
-    } else {
-      ringCenterIndices.push(null);
-    }
   }
   const stride = params.tubeSides;
   for (let r = 0; r < ringVerts.length - 1; r += 1) {
     for (let v = 0; v < stride; v += 1) {
       const nextV = (v + 1) % stride;
-      const a = ringStarts[r] + v;
-      const b = ringStarts[r] + nextV;
-      const c = ringStarts[r + 1] + v;
-      const d = ringStarts[r + 1] + nextV;
+      const a = r * stride + v;
+      const b = r * stride + nextV;
+      const c = (r + 1) * stride + v;
+      const d = (r + 1) * stride + nextV;
       indices.push(a, c, b);
       indices.push(b, c, d);
-    }
-  }
-  if (params.addEndCaps && ringVerts.length > 0) {
-    const startCenter = ringCenterIndices[0];
-    if (startCenter !== null && options.includeStartCap) {
-      const base = ringStarts[0];
-      for (let v = 0; v < stride; v += 1) {
-        const nextV = (v + 1) % stride;
-        indices.push(startCenter, base + nextV, base + v);
-      }
-    }
-    const endCenter = ringCenterIndices[ringCenterIndices.length - 1];
-    if (endCenter !== null && ringVerts.length > 1 && options.includeEndCap) {
-      const base = ringStarts[ringStarts.length - 1];
-      for (let v = 0; v < stride; v += 1) {
-        const nextV = (v + 1) % stride;
-        indices.push(endCenter, base + v, base + nextV);
-      }
     }
   }
   const bbox = computeBbox(vertices);
@@ -205,17 +132,12 @@ function buildChunkGeometry(
 export function generateNextChunk(state: GeneratorState): ChunkData {
   const { params, nextChunkIndex } = state;
   const rings: RingStation[] = [];
-  const segmentsPerChunk = Math.round(params.chunkLength / params.ringStep);
-  if (state.lastRing) {
-    rings.push(cloneRingStation(state.lastRing));
-  }
-  const steps = state.lastRing ? segmentsPerChunk : segmentsPerChunk + 1;
-  for (let i = 0; i < steps; i += 1) {
+  const targetCount = Math.round(params.chunkLength / params.ringStep) + 1;
+  for (let i = 0; i < targetCount; i += 1) {
     const ring = integrateRing(state);
     rings.push(ring);
   }
-  const includeStartCap = params.addEndCaps && state.nextChunkIndex === 0;
-  const geometry = buildChunkGeometry(rings, params, { includeStartCap, includeEndCap: false });
+  const geometry = buildChunkGeometry(rings, params);
   const chunk: ChunkData = {
     chunkIndex: nextChunkIndex,
     rings,
@@ -225,6 +147,5 @@ export function generateNextChunk(state: GeneratorState): ChunkData {
     bbox: geometry.bbox
   };
   state.nextChunkIndex += 1;
-  state.lastRing = cloneRingStation(rings[rings.length - 1]);
   return chunk;
 }

@@ -39,8 +39,7 @@ export function fbmNoise(
   p: Vec3,
   octaves: number,
   frequency: number,
-  gain: number,
-  lacunarity = 2
+  gain: number
 ): number {
   let amp = 1;
   let freq = frequency;
@@ -55,7 +54,7 @@ export function fbmNoise(
     sum += sample * amp;
     norm += amp;
     amp *= gain;
-    freq *= lacunarity;
+    freq *= 2;
   }
   return norm === 0 ? 0 : sum / norm;
 }
