@@ -143,7 +143,7 @@ class TunnelTerrainGenerator:
                 params.rough_freq,
             )
             radius = cavern_radius + params.rough_amp * rock_detail
-            radius = max(radius, scaled_radius * 0.45)
+            radius = max(radius, scaled_radius * 0.8)
             values.append(radius)
             max_radius = max(max_radius, radius)
         return tuple(values), max_radius
