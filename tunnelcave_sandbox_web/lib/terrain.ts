@@ -104,8 +104,12 @@ function buildChunkGeometry(rings: RingStation[], params: SandboxParams) {
   const normals: number[] = [];
   const indices: number[] = [];
   const ringVerts: Vec3[][] = rings.map((ring) => buildRingVertices(ring, params));
+  const ringStarts: number[] = [];
+  const ringCenterIndices: Array<number | null> = [];
   for (let r = 0; r < ringVerts.length; r += 1) {
     const verts = ringVerts[r];
+    const startIndex = vertices.length / 3;
+    ringStarts.push(startIndex);
     for (let v = 0; v < verts.length; v += 1) {
       const p = verts[v];
       vertices.push(p[0], p[1], p[2]);
@@ -113,17 +117,45 @@ function buildChunkGeometry(rings: RingStation[], params: SandboxParams) {
       const normal = normalize(subtract(p, center));
       normals.push(normal[0], normal[1], normal[2]);
     }
+    if (params.addEndCaps && (r === 0 || r === ringVerts.length - 1)) {
+      const center = rings[r].position;
+      vertices.push(center[0], center[1], center[2]);
+      const forward = rings[r].frame.forward;
+      const normal = r === 0 ? scale(forward, -1) : forward;
+      normals.push(normal[0], normal[1], normal[2]);
+      ringCenterIndices.push(vertices.length / 3 - 1);
+    } else {
+      ringCenterIndices.push(null);
+    }
   }
   const stride = params.tubeSides;
   for (let r = 0; r < ringVerts.length - 1; r += 1) {
     for (let v = 0; v < stride; v += 1) {
       const nextV = (v + 1) % stride;
-      const a = r * stride + v;
-      const b = r * stride + nextV;
-      const c = (r + 1) * stride + v;
-      const d = (r + 1) * stride + nextV;
+      const a = ringStarts[r] + v;
+      const b = ringStarts[r] + nextV;
+      const c = ringStarts[r + 1] + v;
+      const d = ringStarts[r + 1] + nextV;
       indices.push(a, c, b);
       indices.push(b, c, d);
+    }
+  }
+  if (params.addEndCaps && ringVerts.length > 0) {
+    const startCenter = ringCenterIndices[0];
+    if (startCenter !== null) {
+      const base = ringStarts[0];
+      for (let v = 0; v < stride; v += 1) {
+        const nextV = (v + 1) % stride;
+        indices.push(startCenter, base + nextV, base + v);
+      }
+    }
+    const endCenter = ringCenterIndices[ringCenterIndices.length - 1];
+    if (endCenter !== null && ringVerts.length > 1) {
+      const base = ringStarts[ringStarts.length - 1];
+      for (let v = 0; v < stride; v += 1) {
+        const nextV = (v + 1) % stride;
+        indices.push(endCenter, base + v, base + nextV);
+      }
     }
   }
   const bbox = computeBbox(vertices);
