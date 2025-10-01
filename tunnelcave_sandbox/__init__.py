@@ -8,7 +8,7 @@ modules are intentionally small so every file stays well below the
 
 from .vector import Vector3
 from .noise import NoiseConfig, noise3
-from .direction_field import DivergenceFreeField
+from .direction_field import DivergenceFreeField, PipeNetworkField, PipeNetworkParams
 from .frame import OrthonormalFrame
 from .geometry import RingSample, ChunkGeometry
 from .profile import CavernProfileParams, default_cavern_profile
@@ -23,6 +23,8 @@ __all__ = [
     "NoiseConfig",
     "noise3",
     "DivergenceFreeField",
+    "PipeNetworkField",
+    "PipeNetworkParams",
     "OrthonormalFrame",
     "RingSample",
     "ChunkGeometry",
