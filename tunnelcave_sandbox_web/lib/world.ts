@@ -3,7 +3,18 @@ import { createChunkBand, ensureChunks, type ChunkBand } from "./streaming";
 import { chooseSpawn, type SpawnPose } from "./probe";
 import type { RingStation } from "./terrain";
 import { createCameraRig, type CameraParams, type CameraRig, updateCameraRig } from "./camera";
-import { add, cross, length, normalize, scale, Vec3, lerp } from "./vector";
+
+import {
+  add,
+  cross,
+  length,
+  normalize,
+  rotateAroundAxis,
+  scale,
+  Vec3,
+  lerp
+} from "./vector";
+
 
 export interface SimulationParams {
   sandbox: SandboxParams;
@@ -17,6 +28,12 @@ export interface CraftState {
   targetSpeed: number;
   roll: number;
   rollRate: number;
+
+  yaw: number;
+  yawRate: number;
+  pitch: number;
+  pitchRate: number;
+
   position: Vec3;
   forward: Vec3;
   right: Vec3;
@@ -33,6 +50,10 @@ export interface SimulationState {
 export interface PlayerInput {
   throttleDelta: number;
   rollDelta: number;
+
+  yawDelta: number;
+  pitchDelta: number;
+
 }
 
 function collectRings(band: ChunkBand): RingStation[] {
@@ -46,9 +67,13 @@ function collectRings(band: ChunkBand): RingStation[] {
 
 function interpolateRing(rings: RingStation[], arc: number): {
   position: Vec3;
-  forward: Vec3;
-  right: Vec3;
-  up: Vec3;
+
+  frame: {
+    forward: Vec3;
+    right: Vec3;
+    up: Vec3;
+  };
+
 } {
   const ringIndex = Math.floor(arc);
   const nextIndex = Math.min(rings[rings.length - 1].index, ringIndex + 1);
@@ -67,23 +92,69 @@ function interpolateRing(rings: RingStation[], arc: number): {
     up = scale(up, 1 / upLen);
   }
   right = cross(up, forward);
-  return { position, forward, right, up };
+
+  return { position, frame: { forward, right, up } };
 }
 
-function applyRoll(right: Vec3, up: Vec3, forward: Vec3, roll: number) {
-  const cos = Math.cos(roll);
-  const sin = Math.sin(roll);
-  const newRight: Vec3 = [
-    right[0] * cos + up[0] * sin,
-    right[1] * cos + up[1] * sin,
-    right[2] * cos + up[2] * sin
-  ];
-  const newUp: Vec3 = [
-    up[0] * cos - right[0] * sin,
-    up[1] * cos - right[1] * sin,
-    up[2] * cos - right[2] * sin
-  ];
-  return { right: newRight, up: newUp, forward };
+function clamp(value: number, min: number, max: number) {
+  return Math.min(max, Math.max(min, value));
+}
+
+function reorthonormalize(forward: Vec3, right: Vec3, fallbackUp: Vec3) {
+  forward = normalize(forward);
+  right = normalize(right);
+  let up = cross(forward, right);
+  const upLen = length(up);
+  if (upLen < 1e-5) {
+    up = normalize(fallbackUp);
+  } else {
+    up = scale(up, 1 / upLen);
+  }
+  right = cross(up, forward);
+  return { forward, right, up };
+}
+
+function applyOrientation(
+  baseRight: Vec3,
+  baseUp: Vec3,
+  baseForward: Vec3,
+  yaw: number,
+  pitch: number,
+  roll: number
+) {
+  let forward = baseForward;
+  let right = baseRight;
+  let up = baseUp;
+
+  if (Math.abs(yaw) > 1e-6) {
+    forward = rotateAroundAxis(forward, up, yaw);
+    right = rotateAroundAxis(right, up, yaw);
+    const ortho = reorthonormalize(forward, right, up);
+    forward = ortho.forward;
+    right = ortho.right;
+    up = ortho.up;
+  }
+
+  if (Math.abs(pitch) > 1e-6) {
+    forward = rotateAroundAxis(forward, right, pitch);
+    up = rotateAroundAxis(up, right, pitch);
+    const ortho = reorthonormalize(forward, right, up);
+    forward = ortho.forward;
+    right = ortho.right;
+    up = ortho.up;
+  }
+
+  if (Math.abs(roll) > 1e-6) {
+    right = rotateAroundAxis(right, forward, roll);
+    up = rotateAroundAxis(up, forward, roll);
+    const ortho = reorthonormalize(forward, right, up);
+    forward = ortho.forward;
+    right = ortho.right;
+    up = ortho.up;
+  }
+
+  return { forward, right, up };
+
 }
 
 export function createSimulation(params: SimulationParams): SimulationState {
@@ -100,6 +171,12 @@ export function createSimulation(params: SimulationParams): SimulationState {
     targetSpeed: 15,
     roll: spawn.rollHint,
     rollRate: 0,
+
+    yaw: 0,
+    yawRate: 0,
+    pitch: 0,
+    pitchRate: 0,
+
     position: spawn.position,
     forward: spawn.forward,
     right: spawn.right,
@@ -116,21 +193,38 @@ export function updateSimulation(
   dt: number
 ) {
   const { craft, band } = state;
-  craft.targetSpeed = Math.max(2, Math.min(80, craft.targetSpeed + input.throttleDelta * dt * 15));
+
+  craft.targetSpeed = clamp(craft.targetSpeed + input.throttleDelta * dt * 15, 2, 80);
   craft.speed += (craft.targetSpeed - craft.speed) * Math.min(1, dt * 2);
   craft.rollRate += input.rollDelta * dt * 2.5;
   craft.rollRate *= Math.pow(0.4, dt);
-  craft.roll = Math.max(-Math.PI / 3, Math.min(Math.PI / 3, craft.roll + craft.rollRate * dt));
+  craft.roll = clamp(craft.roll + craft.rollRate * dt, -Math.PI / 3, Math.PI / 3);
+  craft.yawRate += input.yawDelta * dt * 2;
+  craft.yawRate *= Math.pow(0.4, dt);
+  craft.yaw = clamp(craft.yaw + craft.yawRate * dt, -Math.PI / 4, Math.PI / 4);
+  craft.pitchRate += input.pitchDelta * dt * 2;
+  craft.pitchRate *= Math.pow(0.4, dt);
+  craft.pitch = clamp(craft.pitch + craft.pitchRate * dt, -Math.PI / 5, Math.PI / 5);
+
   const deltaArc = (craft.speed * dt) / params.sandbox.ringStep;
   craft.arc += deltaArc;
   const centerChunk = Math.floor((craft.arc * params.sandbox.ringStep) / params.sandbox.chunkLength);
   ensureChunks(band, centerChunk);
   const rings = collectRings(band);
   const sample = interpolateRing(rings, craft.arc);
-  const rolled = applyRoll(sample.right, sample.up, sample.forward, craft.roll);
+
+  const oriented = applyOrientation(
+    sample.frame.right,
+    sample.frame.up,
+    sample.frame.forward,
+    craft.yaw,
+    craft.pitch,
+    craft.roll
+  );
   craft.position = sample.position;
-  craft.forward = rolled.forward;
-  craft.right = rolled.right;
-  craft.up = rolled.up;
+  craft.forward = oriented.forward;
+  craft.right = oriented.right;
+  craft.up = oriented.up;
+
   updateCameraRig(state.camera, craft.position, craft.forward, craft.right, craft.up, params.camera, dt);
 }

@@ -11,8 +11,12 @@ import { ControlsOverlay } from "./ControlsOverlay";
 interface InputState {
   throttle: number;
   roll: number;
+
+  yaw: number;
+  pitch: number;
   boost: boolean;
-  resetRoll: boolean;
+  resetOrientation: boolean;
+
 }
 
 function buildCraftMesh() {
@@ -63,7 +67,16 @@ export function SandboxCanvas() {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const simRef = useRef<SimulationState | null>(null);
   const rafRef = useRef<number>();
-  const inputRef = useRef<InputState>({ throttle: 0, roll: 0, boost: false, resetRoll: false });
+
+  const inputRef = useRef<InputState>({
+    throttle: 0,
+    roll: 0,
+    yaw: 0,
+    pitch: 0,
+    boost: false,
+    resetOrientation: false
+  });
+
   const [speed, setSpeed] = useState(0);
   const [targetSpeed, setTargetSpeed] = useState(0);
 
@@ -138,21 +151,83 @@ export function SandboxCanvas() {
     };
 
     const keyDown = (event: KeyboardEvent) => {
-      if (event.repeat) return;
-      if (event.code === "KeyW") inputRef.current.throttle = 1;
-      if (event.code === "KeyS") inputRef.current.throttle = -1;
-      if (event.code === "KeyA") inputRef.current.roll = -1;
-      if (event.code === "KeyD") inputRef.current.roll = 1;
-      if (event.code === "ShiftLeft" || event.code === "ShiftRight") inputRef.current.boost = true;
-      if (event.code === "Space") inputRef.current.resetRoll = true;
+
+      switch (event.code) {
+        case "ArrowUp":
+          inputRef.current.throttle = 1;
+          event.preventDefault();
+          break;
+        case "ArrowDown":
+          inputRef.current.throttle = -1;
+          event.preventDefault();
+          break;
+        case "KeyA":
+          inputRef.current.roll = -1;
+          break;
+        case "KeyB":
+          inputRef.current.roll = 1;
+          break;
+        case "KeyW":
+          inputRef.current.pitch = 1;
+          break;
+        case "KeyS":
+          inputRef.current.pitch = -1;
+          break;
+        case "KeyQ":
+          inputRef.current.yaw = -1;
+          break;
+        case "KeyE":
+          inputRef.current.yaw = 1;
+          break;
+        case "ShiftLeft":
+        case "ShiftRight":
+          inputRef.current.boost = true;
+          break;
+        case "Space":
+          inputRef.current.resetOrientation = true;
+          event.preventDefault();
+          break;
+        default:
+          break;
+      }
     };
 
     const keyUp = (event: KeyboardEvent) => {
-      if (event.code === "KeyW" && inputRef.current.throttle > 0) inputRef.current.throttle = 0;
-      if (event.code === "KeyS" && inputRef.current.throttle < 0) inputRef.current.throttle = 0;
-      if (event.code === "KeyA" && inputRef.current.roll < 0) inputRef.current.roll = 0;
-      if (event.code === "KeyD" && inputRef.current.roll > 0) inputRef.current.roll = 0;
-      if (event.code === "ShiftLeft" || event.code === "ShiftRight") inputRef.current.boost = false;
+      switch (event.code) {
+        case "ArrowUp":
+          if (inputRef.current.throttle > 0) inputRef.current.throttle = 0;
+          event.preventDefault();
+          break;
+        case "ArrowDown":
+          if (inputRef.current.throttle < 0) inputRef.current.throttle = 0;
+          event.preventDefault();
+          break;
+        case "KeyA":
+          if (inputRef.current.roll < 0) inputRef.current.roll = 0;
+          break;
+        case "KeyB":
+          if (inputRef.current.roll > 0) inputRef.current.roll = 0;
+          break;
+        case "KeyW":
+          if (inputRef.current.pitch > 0) inputRef.current.pitch = 0;
+          break;
+        case "KeyS":
+          if (inputRef.current.pitch < 0) inputRef.current.pitch = 0;
+          break;
+        case "KeyQ":
+          if (inputRef.current.yaw < 0) inputRef.current.yaw = 0;
+          break;
+        case "KeyE":
+          if (inputRef.current.yaw > 0) inputRef.current.yaw = 0;
+          break;
+        case "ShiftLeft":
+        case "ShiftRight":
+          inputRef.current.boost = false;
+          break;
+        default:
+          break;
+      }
+
     };
 
     window.addEventListener("resize", handleResize);
@@ -177,14 +252,28 @@ export function SandboxCanvas() {
         params,
         {
           throttleDelta: inputRef.current.throttle,
-          rollDelta: inputRef.current.roll
+
+          rollDelta: inputRef.current.roll,
+          yawDelta: inputRef.current.yaw,
+          pitchDelta: inputRef.current.pitch
         },
         dt
       );
-      if (inputRef.current.resetRoll) {
+      if (inputRef.current.resetOrientation) {
         simRef.current.craft.roll = 0;
         simRef.current.craft.rollRate = 0;
-        inputRef.current.resetRoll = false;
+        simRef.current.craft.yaw = 0;
+        simRef.current.craft.yawRate = 0;
+        simRef.current.craft.pitch = 0;
+        simRef.current.craft.pitchRate = 0;
+        updateSimulation(
+          simRef.current,
+          params,
+          { throttleDelta: 0, rollDelta: 0, yawDelta: 0, pitchDelta: 0 },
+          0
+        );
+        inputRef.current.resetOrientation = false;
+
       }
       syncChunks();
       const { craft, camera: cam } = simRef.current;
