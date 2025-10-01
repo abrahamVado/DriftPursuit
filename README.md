@@ -22,6 +22,15 @@ By default the dev server listens on [`http://localhost:3000`](http://localhost:
 
 The latest generator revamps the cave cross-section into a triple-lobe cavern: stacked north–south chambers stitched together by a twisting connector tunnel, with multi-octave rock noise layering fractal boulders onto every wall. The base radius is scaled up and streamed chunks remain deterministic, so existing spawn planning and occlusion-aware camera logic continue to function while the world feels more expansive. Roughness now reuses the previous ring’s profile via an exponential smoother (`rough_smoothness`) and an optional angular filter, keeping neighboring frames coherent without sacrificing determinism.
 
+### Tunnel mesh end caps
+
+`TunnelTerrainGenerator` can optionally seal each chunk by setting `TunnelParams.add_end_caps` (enabled by default). When active, the new `end_cap_style` knob selects either:
+
+* `"fan"` – Adds a center vertex to the first and last rings and stitches a triangle fan across every side.
+* `"sleeve"` – Extrudes a short overlap sleeve in both directions so adjacent chunks can interpenetrate without visible seams.
+
+Disable `add_end_caps` to preserve the previous open-ended mesh layout if a consumer needs to manage boundaries manually.
+
 
 ## Viewer connection banner
 

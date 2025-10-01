@@ -36,8 +36,11 @@ class TunnelParams:
     """High level knob set for :class:`TunnelTerrainGenerator`.
 
     The ``add_end_caps`` toggle controls whether generated mesh chunks include
-    a closing fan on both ends, ensuring adjacent chunks overlap cleanly when
-    stitched together.
+    extra geometry to close off their start and end rings. When enabled the
+    ``end_cap_style`` option selects between a triangle fan (``"fan"``) that
+    adds a single center vertex per boundary ring or a short overlap sleeve
+    (``"sleeve"``) that extrudes an additional ring of vertices so adjacent
+    chunks can interpenetrate without gaps.
     """
 
     world_seed: int
@@ -58,6 +61,7 @@ class TunnelParams:
     field_type: str = "divergence_free"
     pipe_network: PipeNetworkParams | None = None
     add_end_caps: bool = True
+    end_cap_style: str = "fan"
     profile: CavernProfileParams = field(default_factory=default_cavern_profile)
     rough_smoothness: float = 0.0
     rough_filter_kernel: Optional[Tuple[float, ...]] = None
@@ -85,6 +89,9 @@ class TunnelTerrainGenerator:
             self._rough_filter_kernel: Optional[Tuple[float, ...]] = tuple(kernel)
         else:
             self._rough_filter_kernel = None
+
+        if params.end_cap_style not in {"fan", "sleeve"}:
+            raise ValueError("end_cap_style must be either 'fan' or 'sleeve'")
 
         self._params = params
         field_params = FieldParams(
@@ -262,9 +269,26 @@ class TunnelTerrainGenerator:
     def _build_mesh(self, rings: Tuple[RingSample, ...]) -> MeshChunk:
         vertices: List[Vector3] = []
         indices: List[int] = []
+        if not rings:
+            return MeshChunk(vertices=vertices, indices=indices)
+
         sides = self._params.tube_sides
         ring_vertex_starts: List[int] = []
         ring_center_indices: List[int | None] = []
+        add_fan_caps = self._params.add_end_caps and self._params.end_cap_style == "fan"
+
+        def connect_rings(prev_start: int, curr_start: int) -> None:
+            for side in range(sides):
+                next_side = (side + 1) % sides
+                indices.extend([
+                    prev_start + side,
+                    curr_start + side,
+                    curr_start + next_side,
+                    prev_start + side,
+                    curr_start + next_side,
+                    prev_start + next_side,
+                ])
+
         for ring_idx, ring in enumerate(rings):
             ring_vertex_starts.append(len(vertices))
             for side in range(sides):
@@ -272,26 +296,19 @@ class TunnelTerrainGenerator:
                 axis = ring.frame.right * math.cos(angle) + ring.frame.up * math.sin(angle)
                 radius = ring.roughness_profile[side]
                 vertices.append(ring.center + axis * radius)
-            if self._params.add_end_caps and ring_idx in (0, len(rings) - 1):
+            if add_fan_caps and ring_idx in (0, len(rings) - 1):
                 ring_center_indices.append(len(vertices))
                 vertices.append(ring.center)
             else:
                 ring_center_indices.append(None)
             if ring_idx == 0:
                 continue
-            base_prev = ring_vertex_starts[ring_idx - 1]
-            base_curr = ring_vertex_starts[ring_idx]
-            for side in range(sides):
-                next_side = (side + 1) % sides
-                indices.extend([
-                    base_prev + side,
-                    base_curr + side,
-                    base_curr + next_side,
-                    base_prev + side,
-                    base_curr + next_side,
-                    base_prev + next_side,
-                ])
-        if self._params.add_end_caps and len(rings) >= 1:
+            connect_rings(ring_vertex_starts[ring_idx - 1], ring_vertex_starts[ring_idx])
+
+        if not self._params.add_end_caps:
+            return MeshChunk(vertices=vertices, indices=indices)
+
+        if self._params.end_cap_style == "fan":
             start_center = ring_center_indices[0]
             if start_center is not None:
                 base = ring_vertex_starts[0]
@@ -312,6 +329,24 @@ class TunnelTerrainGenerator:
                         base + side,
                         base + next_side,
                     ])
+        else:  # sleeve end caps
+            sleeve_length = max(self._params.ring_step * 0.5, 1e-6)
+            start_base = ring_vertex_starts[0]
+            start_offset = rings[0].forward * (-sleeve_length)
+            start_positions = [vertices[start_base + side] for side in range(sides)]
+            start_sleeve_start = len(vertices)
+            for pos in start_positions:
+                vertices.append(pos + start_offset)
+            connect_rings(start_sleeve_start, start_base)
+
+            end_base = ring_vertex_starts[-1]
+            end_offset = rings[-1].forward * sleeve_length
+            end_positions = [vertices[end_base + side] for side in range(sides)]
+            end_sleeve_start = len(vertices)
+            for pos in end_positions:
+                vertices.append(pos + end_offset)
+            connect_rings(end_base, end_sleeve_start)
+
         return MeshChunk(vertices=vertices, indices=indices)
 
     def _build_sdf(self, chunk_index: int, rings: Tuple[RingSample, ...]) -> SDFChunk:
