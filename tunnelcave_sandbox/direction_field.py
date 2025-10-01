@@ -224,6 +224,7 @@ class PipeNetworkField:
         self._segment_end_s: List[float] = []
         self._total_length = 0.0
         self._module_index = 0
+        self._module_plan = self._build_module_plan()
 
     def next_direction(
         self,
@@ -257,8 +258,7 @@ class PipeNetworkField:
 
     def _append_segment(self) -> None:
         start_frame = self._segments[-1][0].end_frame() if self._segments else self._initial_frame
-        selector_seed = _hash64(self._params.world_seed + 31000, self._module_index)
-        selector = selector_seed % 4
+        selector = self._select_module_type()
         if selector == 0:
             segment = _StraightSegment(start_frame, self._pipe.straight_length)
         elif selector == 1:
@@ -286,6 +286,38 @@ class PipeNetworkField:
         self._total_length += segment.length
         self._segment_end_s.append(self._total_length)
         self._module_index += 1
+
+    def _build_module_plan(self) -> tuple[int, ...]:
+        """Pre-compute a deterministic module plan for repeatable layouts."""
+
+        count = max(0, int(self._pipe.module_count_hint))
+        if count == 0:
+            return ()
+        plan: List[int] = []
+        seed_base = self._params.world_seed + 30000
+        for idx in range(count):
+            hashed = _hash64(seed_base, idx)
+            plan.append(hashed % 4)
+
+        if count >= 4:
+            # Ensure each module type shows up at least once in the cycle so
+            # the layout contains straights, arcs, and helixes.
+            type_counts = [0, 0, 0, 0]
+            for module in plan:
+                type_counts[module] += 1
+            missing = [module for module, seen in enumerate(type_counts) if seen == 0]
+            if missing:
+                for replace_idx, module in zip(range(len(plan)), missing):
+                    plan[replace_idx] = module
+
+        return tuple(plan)
+
+    def _select_module_type(self) -> int:
+        if not self._module_plan:
+            selector_seed = _hash64(self._params.world_seed + 31000, self._module_index)
+            return selector_seed % 4
+        cycle_index = self._module_index % len(self._module_plan)
+        return self._module_plan[cycle_index]
 
 
 def _rotate_vector(vector: Vector3, axis: Vector3, angle: float) -> Vector3:

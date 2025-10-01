@@ -78,6 +78,14 @@ def test_pipe_network_field_repeatable_and_smooth() -> None:
         assert ring.center.y == pytest.approx(expected.y, abs=1e-4)
         assert ring.center.z == pytest.approx(expected.z, abs=1e-4)
 
+    # The module plan should include each primitive type in a single cycle so the
+    # tunnel never degenerates into a straight or purely helical run.
+    field.position_at(pipe_params.straight_length * pipe_params.module_count_hint * 2.0)
+    seen = {type(segment).__name__ for segment, _ in field._segments[: pipe_params.module_count_hint]}
+    assert "_StraightSegment" in seen
+    assert "_HelixSegment" in seen
+    assert "_ArcSegment" in seen
+
     turn_angles = []
     for prev, curr in zip(rings_a, rings_a[1:]):
         dot = max(-1.0, min(1.0, prev.forward.dot(curr.forward)))

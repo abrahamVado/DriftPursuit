@@ -10,7 +10,12 @@ stays connected across long distances.
 Choose the field by setting `TunnelParams.field_type` to `"pipe_network"`. The
 field accepts an optional `PipeNetworkParams` structure that controls the basic
 module lengths and curvature. The defaults already produce a varied layout, but
-explicit configuration makes the sequence easier to reason about:
+explicit configuration makes the sequence easier to reason about. Internally the
+field builds a deterministic *module plan* whose length is driven by
+`module_count_hint`; the plan guarantees that each cycle contains straight runs,
+helixes, and both junction arc orientations so the path never degenerates into a
+single primitive. Tweaking the pipe parameters changes how each module behaves
+while the plan keeps them smoothly stitched together:
 
 ```python
 from tunnelcave_sandbox.direction_field import PipeNetworkParams
