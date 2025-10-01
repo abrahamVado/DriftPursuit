@@ -44,6 +44,7 @@ export const defaultParams: SandboxParams = {
   joltStrength: 0.45,
   maxTurnPerStepRad: Math.PI / 6,
   profile: {
+
     baseScale: 1.3,
     lobeCenters: [Math.PI / 2, (3 * Math.PI) / 2],
     lobeStrengths: [1.05, 1.05],
@@ -53,5 +54,6 @@ export const defaultParams: SandboxParams = {
     fractalLacunarity: 2.1,
     twistFrequency: 0.018,
     twistStrength: 0.6
+
   }
 };

@@ -27,6 +27,7 @@ def default_cavern_profile() -> CavernProfileParams:
     """Return a profile that yields two caverns that braid together."""
 
     return CavernProfileParams(
+
         base_scale=1.3,
         lobe_centers=(math.pi / 2.0, 3.0 * math.pi / 2.0),
         lobe_strengths=(1.05, 1.05),
@@ -36,6 +37,7 @@ def default_cavern_profile() -> CavernProfileParams:
         fractal_lacunarity=2.1,
         twist_frequency=0.018,
         twist_strength=0.6,
+
     )
 
 
