@@ -124,7 +124,11 @@ class TestTunnelTerrainGenerator:
         params = _make_params(radius_base=6.0, rough_amp=5.5)
         generator = TunnelTerrainGenerator(params)
         generator.generate_chunk(2)
-        expected_floor = params.radius_base * 0.2 * params.profile.base_scale
-        for ring in generator.rings():
-            assert min(ring.roughness_profile) >= expected_floor
+        floors = generator.radius_floor_history()
+        rings = generator.rings()
+        assert len(floors) == len(rings)
+        base_floor = params.radius_base * 0.12
+        for ring, floor in zip(rings, floors):
+            assert min(ring.roughness_profile) >= floor - 1e-6
+            assert floor >= base_floor
 

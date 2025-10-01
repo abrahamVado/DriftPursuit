@@ -14,8 +14,21 @@ from .direction_field import (
 from .frame import OrthonormalFrame
 from .geometry import ChunkGeometry, MeshChunk, RingSample, SDFChunk
 from .noise import noise3
-from .profile import CavernProfileParams, default_cavern_profile, fractal_roughness, lobe_scale, twist_angle
+from .profile import (
+    CavernProfileParams,
+    default_cavern_profile,
+    fractal_roughness,
+    lobe_scale,
+    twist_angle,
+)
 from .vector import Vector3
+
+
+@dataclass(frozen=True)
+class _RoughnessStats:
+    mean: float
+    variance: float
+    min_radius: float
 
 
 @dataclass(frozen=True)
@@ -93,6 +106,8 @@ class TunnelTerrainGenerator:
         self._global_s_positions: List[float] = []
         self._rings_per_chunk = int(round(params.chunk_length / params.ring_step)) + 1
         self._prev_roughness_profile: Optional[Tuple[float, ...]] = None
+        self._prev_profile_stats: Optional[_RoughnessStats] = None
+        self._radius_floor_history: List[float] = []
         self._ensure_ring(0)
 
     def generate_chunk(self, chunk_index: int) -> ChunkGeometry:
@@ -117,6 +132,11 @@ class TunnelTerrainGenerator:
         """Return all generated rings so far."""
 
         return tuple(self._global_rings)
+
+    def radius_floor_history(self) -> Tuple[float, ...]:
+        """Return the per-ring minimum radius floor used during generation."""
+
+        return tuple(self._radius_floor_history)
 
     def _ensure_ring(self, index: int) -> None:
         while len(self._global_rings) <= index:
@@ -170,7 +190,7 @@ class TunnelTerrainGenerator:
         twist = twist_angle(params.world_seed + 5000, profile, arc_length)
         values: List[float] = []
         max_radius = scaled_radius
-        min_radius = scaled_radius * 0.8
+        min_radius = self._compute_min_radius_floor(base_radius, scaled_radius)
         for side in range(sides):
             angle = (side / sides) * math.tau
             shifted_angle = angle + twist
@@ -220,6 +240,18 @@ class TunnelTerrainGenerator:
         final_max = max(values, default=min_radius)
         result = tuple(values)
         self._prev_roughness_profile = result
+        self._radius_floor_history.append(min_radius)
+        if result:
+            mean_radius = sum(result) / len(result)
+            variance = sum((v - mean_radius) ** 2 for v in result) / len(result)
+            min_value = min(result)
+            self._prev_profile_stats = _RoughnessStats(
+                mean=mean_radius,
+                variance=variance,
+                min_radius=min_value,
+            )
+        else:
+            self._prev_profile_stats = None
         return result, max(final_max, scaled_radius)
 
     def _build_mesh(self, rings: Tuple[RingSample, ...]) -> MeshChunk:
@@ -281,3 +313,28 @@ class TunnelTerrainGenerator:
         indexes = tuple(range(chunk_index * (self._rings_per_chunk - 1), chunk_index * (self._rings_per_chunk - 1) + len(rings)))
         radii = tuple(r.radius for r in rings)
         return SDFChunk(ring_indexes=indexes, radii=radii)
+
+    def _compute_min_radius_floor(self, base_radius: float, scaled_radius: float) -> float:
+        profile_scale = self._params.profile.base_scale
+        scale_factor = 0.18 + 0.05 * math.tanh(profile_scale - 1.0)
+        scale_factor = max(0.1, min(scale_factor, 0.32))
+        scaled_component = scaled_radius * scale_factor
+        base_component = base_radius * 0.12
+        floor = max(base_component, scaled_component)
+
+        stats = self._prev_profile_stats
+        if stats is not None:
+            prev_mean = stats.mean
+            prev_std = math.sqrt(max(stats.variance, 0.0))
+            prev_min = stats.min_radius
+            if prev_mean > 1e-6:
+                normalized_std = min(1.0, prev_std / prev_mean)
+            else:
+                normalized_std = 0.0
+            continuity_floor = prev_min * (0.9 + 0.05 * (1.0 - normalized_std))
+            smooth_floor = prev_mean - prev_std * (0.75 + 0.25 * normalized_std)
+            floor = max(floor, continuity_floor, smooth_floor)
+
+        floor = max(floor, scaled_radius * 0.05)
+        floor = min(floor, scaled_radius * 0.95)
+        return floor
