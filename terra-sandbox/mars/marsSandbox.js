@@ -99,11 +99,11 @@ export class MarsSandbox {
     });
     const rendererPixelRatio = Math.min(1, window.devicePixelRatio || 1);
     this.renderer.setPixelRatio(rendererPixelRatio);
-    this.renderer.outputEncoding = THREE.sRGBEncoding;
+    this.renderer.outputColorSpace = THREE.SRGBColorSpace;
     this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
     this.renderer.toneMappingExposure = 1.18;
     this.renderer.shadowMap.enabled = false;
-    this.renderer.physicallyCorrectLights = true;
+    this.renderer.useLegacyLights = false;
 
     this.scene = new THREE.Scene();
     const fogColor = new THREE.Color('#080512');
