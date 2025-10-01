@@ -24,18 +24,18 @@ class CavernProfileParams:
 
 
 def default_cavern_profile() -> CavernProfileParams:
-    """Return a profile that yields three interlinked caverns."""
+    """Return a profile that yields two caverns that braid together."""
 
     return CavernProfileParams(
         base_scale=1.35,
-        lobe_centers=(math.pi / 2.0, 3.0 * math.pi / 2.0, 0.0),
-        lobe_strengths=(0.85, 0.85, 0.55),
-        lobe_width=0.9,
-        fractal_octaves=4,
-        fractal_gain=0.55,
+        lobe_centers=(math.pi / 2.0, 3.0 * math.pi / 2.0),
+        lobe_strengths=(0.95, 0.95),
+        lobe_width=1.15,
+        fractal_octaves=0,
+        fractal_gain=0.0,
         fractal_lacunarity=2.1,
-        twist_frequency=0.018,
-        twist_strength=0.65,
+        twist_frequency=0.03,
+        twist_strength=0.72,
     )
 
 
