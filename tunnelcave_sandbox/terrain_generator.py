@@ -15,6 +15,13 @@ from .vector import Vector3
 
 @dataclass(frozen=True)
 class TunnelParams:
+    """High level knob set for :class:`TunnelTerrainGenerator`.
+
+    The ``add_end_caps`` toggle controls whether generated mesh chunks include
+    a closing fan on both ends, ensuring adjacent chunks overlap cleanly when
+    stitched together.
+    """
+
     world_seed: int
     chunk_length: float
     ring_step: float
@@ -30,6 +37,7 @@ class TunnelParams:
     jolt_strength: float
     max_turn_per_step_rad: float
     mode: str
+    add_end_caps: bool = True
     profile: CavernProfileParams = field(default_factory=default_cavern_profile)
 
 
@@ -152,16 +160,24 @@ class TunnelTerrainGenerator:
         vertices: List[Vector3] = []
         indices: List[int] = []
         sides = self._params.tube_sides
+        ring_vertex_starts: List[int] = []
+        ring_center_indices: List[int | None] = []
         for ring_idx, ring in enumerate(rings):
+            ring_vertex_starts.append(len(vertices))
             for side in range(sides):
                 angle = (side / sides) * math.tau
                 axis = ring.frame.right * math.cos(angle) + ring.frame.up * math.sin(angle)
                 radius = ring.roughness_profile[side]
                 vertices.append(ring.center + axis * radius)
+            if self._params.add_end_caps and ring_idx in (0, len(rings) - 1):
+                ring_center_indices.append(len(vertices))
+                vertices.append(ring.center)
+            else:
+                ring_center_indices.append(None)
             if ring_idx == 0:
                 continue
-            base_prev = (ring_idx - 1) * sides
-            base_curr = ring_idx * sides
+            base_prev = ring_vertex_starts[ring_idx - 1]
+            base_curr = ring_vertex_starts[ring_idx]
             for side in range(sides):
                 next_side = (side + 1) % sides
                 indices.extend([
@@ -172,6 +188,27 @@ class TunnelTerrainGenerator:
                     base_curr + next_side,
                     base_prev + next_side,
                 ])
+        if self._params.add_end_caps and len(rings) >= 1:
+            start_center = ring_center_indices[0]
+            if start_center is not None:
+                base = ring_vertex_starts[0]
+                for side in range(sides):
+                    next_side = (side + 1) % sides
+                    indices.extend([
+                        start_center,
+                        base + next_side,
+                        base + side,
+                    ])
+            end_center = ring_center_indices[-1]
+            if end_center is not None and len(rings) > 1:
+                base = ring_vertex_starts[-1]
+                for side in range(sides):
+                    next_side = (side + 1) % sides
+                    indices.extend([
+                        end_center,
+                        base + side,
+                        base + next_side,
+                    ])
         return MeshChunk(vertices=vertices, indices=indices)
 
     def _build_sdf(self, chunk_index: int, rings: Tuple[RingSample, ...]) -> SDFChunk:

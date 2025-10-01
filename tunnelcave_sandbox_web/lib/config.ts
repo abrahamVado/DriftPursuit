@@ -25,6 +25,7 @@ export interface SandboxParams {
   joltStrength: number;
   maxTurnPerStepRad: number;
   profile: CavernProfileParams;
+  addEndCaps: boolean;
 
 }
 
@@ -43,6 +44,7 @@ export const defaultParams: SandboxParams = {
   joltEveryMeters: 140,
   joltStrength: 0.45,
   maxTurnPerStepRad: Math.PI / 6,
+  addEndCaps: true,
   profile: {
 
     baseScale: 1.3,
