@@ -31,6 +31,7 @@ def build_default_params() -> TunnelParams:
         max_turn_per_step_rad=0.7,
         mode="mesh+sdf",
         profile=default_cavern_profile(),
+        min_clearance_radius=4.5,
     )
 
 

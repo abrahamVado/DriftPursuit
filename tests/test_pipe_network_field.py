@@ -25,6 +25,7 @@ def make_params(pipe_params: PipeNetworkParams) -> TunnelParams:
         jolt_strength=0.0,
         max_turn_per_step_rad=0.75,
         mode="mesh",
+        min_clearance_radius=1.5,
         field_type="pipe_network",
         pipe_network=pipe_params,
     )

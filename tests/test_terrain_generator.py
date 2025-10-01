@@ -37,6 +37,7 @@ def _make_params(**overrides: object) -> TunnelParams:
         max_turn_per_step_rad=math.radians(5.0),
         mode="mesh",
         profile=default_cavern_profile(),
+        min_clearance_radius=0.0,
     )
     base.update(overrides)
     return TunnelParams(**base)
@@ -83,6 +84,15 @@ class TestTunnelTerrainGenerator:
 
         with pytest.raises(ValueError):
             TunnelTerrainGenerator(_make_params(rough_smoothness=1.1))
+
+    def test_invalid_clearance_range_is_rejected(self) -> None:
+        with pytest.raises(ValueError):
+            TunnelTerrainGenerator(_make_params(min_clearance_radius=-0.01))
+
+        with pytest.raises(ValueError):
+            TunnelTerrainGenerator(
+                _make_params(radius_base=4.0, min_clearance_radius=4.0)
+            )
 
     def test_angular_filter_kernel_reduces_profile_variation(self) -> None:
         baseline_params = _make_params(
@@ -131,4 +141,19 @@ class TestTunnelTerrainGenerator:
         for ring, floor in zip(rings, floors):
             assert min(ring.roughness_profile) >= floor - 1e-6
             assert floor >= base_floor
+
+    def test_clearance_floor_is_respected(self) -> None:
+        clearance = 3.25
+        params = _make_params(
+            radius_base=5.0,
+            rough_amp=4.0,
+            min_clearance_radius=clearance,
+            rough_smoothness=0.6,
+        )
+        generator = TunnelTerrainGenerator(params)
+        generator.generate_chunk(3)
+        rings = generator.rings()
+        assert rings
+        for ring in rings:
+            assert min(ring.roughness_profile) >= clearance - 1e-6
 
