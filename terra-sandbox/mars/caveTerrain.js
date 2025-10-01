@@ -206,6 +206,7 @@ export class MarsCaveTerrainManager {
     material,
     horizontalRadius = 1,
     verticalRadius = 0,
+    mode = 'complex',
   } = {}) {
     this.seed = seed >>> 0;
     this.chunkSize = chunkSize;
@@ -239,6 +240,7 @@ export class MarsCaveTerrainManager {
 
     this.horizontalRadius = Math.max(0, Math.floor(horizontalRadius));
     this.verticalRadius = Math.max(0, Math.floor(verticalRadius));
+    this.mode = mode;
 
     this._densityFn = this._densityAt.bind(this);
     this._desiredOffsets = this._buildDesiredOffsets();
@@ -388,6 +390,37 @@ export class MarsCaveTerrainManager {
   _densityAt(x, y, z) {
     const surface = this._surfaceElevation(x, y);
     const vertical = (surface - z) / 8.5;
+
+    if (this.mode === 'simplified') {
+      const broad = this.noise.fractalSimplex3(x * 0.6, y * 0.6, z * 0.45, {
+        frequency: 0.045,
+        octaves: 3,
+        gain: 0.62,
+        lacunarity: 2,
+        salt: 0x301,
+      });
+      const tunnels = this.noise.fractalSimplex3(x * 0.85 + 120, y * 0.85 - 120, z * 0.9, {
+        frequency: 0.11,
+        octaves: 2,
+        gain: 0.58,
+        lacunarity: 2.2,
+        salt: 0x515,
+      });
+      const ripples = this.noise.simplex3(x * 0.35 - 80, y * 0.35 + 80, z * 0.65, {
+        frequency: 0.07,
+        amplitude: 0.45,
+        salt: 0x41f,
+      });
+      const biomeBias = this._biomeDensityBias(this._biomeMask(x, y)) * 0.55;
+      return (
+        vertical +
+        broad * 0.85 -
+        Math.abs(tunnels) * 0.58 +
+        ripples * 0.3 +
+        biomeBias -
+        0.28
+      );
+    }
 
     const cavernLayer = this.noise.fractalSimplex3(x, y, z, {
       frequency: 0.072,
