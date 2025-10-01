@@ -1,6 +1,6 @@
 import { curlNoise, fbmNoise } from "./noise";
 import { hashMix, randUnitVector } from "./prng";
-import { add, normalize, scale, Vec3 } from "./vector";
+import { add, normalize, scale, vec3, Vec3 } from "./vector";
 import type { SandboxParams } from "./config";
 
 export interface DirectionSample {
@@ -172,25 +172,33 @@ export function stepDirection(
   position: Vec3,
   rand: () => number
 ): DirectionSample {
-  const fieldDir = sampleDirectionField(params, state, position);
-  const blended = normalize(
-    add(scale(state.smoothForward, params.dirBlend), scale(fieldDir, 1 - params.dirBlend))
-  );
-  let forward = blended;
-  const jolted = applyJolts(params, state, rand);
-  forward = normalize(add(scale(forward, 0.7), scale(jolted, 0.3)));
-  const turnAngle = Math.acos(
-    Math.min(
-      1,
-      Math.max(-1, state.forward[0] * forward[0] + state.forward[1] * forward[1] + state.forward[2] * forward[2])
-    )
-  );
-  if (turnAngle > params.maxTurnPerStepRad) {
-    const t = params.maxTurnPerStepRad / turnAngle;
-    forward = normalize(add(scale(state.forward, 1 - t), scale(forward, t)));
+  let forward: Vec3;
+  if (params.fieldType === "straight") {
+    forward = vec3(0, 0, 1);
+    state.forward = forward;
+    state.smoothForward = vec3(0, 0, 1);
+    state.distance += params.ringStep;
+  } else {
+    const fieldDir = sampleDirectionField(params, state, position);
+    const blended = normalize(
+      add(scale(state.smoothForward, params.dirBlend), scale(fieldDir, 1 - params.dirBlend))
+    );
+    forward = blended;
+    const jolted = applyJolts(params, state, rand);
+    forward = normalize(add(scale(forward, 0.7), scale(jolted, 0.3)));
+    const turnAngle = Math.acos(
+      Math.min(
+        1,
+        Math.max(-1, state.forward[0] * forward[0] + state.forward[1] * forward[1] + state.forward[2] * forward[2])
+      )
+    );
+    if (turnAngle > params.maxTurnPerStepRad) {
+      const t = params.maxTurnPerStepRad / turnAngle;
+      forward = normalize(add(scale(state.forward, 1 - t), scale(forward, t)));
+    }
+    state.forward = forward;
+    state.smoothForward = forward;
   }
-  state.forward = forward;
-  state.smoothForward = forward;
   const radiusSample = buildRadiusSample(params, state, position);
   const roughness = (theta: number) => radiusSample.compute(theta) - radiusSample.baseRadius;
   const result = {

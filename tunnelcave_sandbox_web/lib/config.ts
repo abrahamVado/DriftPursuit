@@ -14,6 +14,7 @@ export interface SandboxParams {
   chunkLength: number;
   ringStep: number;
   tubeSides: number;
+  fieldType: "straight" | "curl";
   dirFreq: number;
   dirBlend: number;
   radiusBase: number;
@@ -36,6 +37,7 @@ export const defaultParams: SandboxParams = {
   chunkLength: 90,
   ringStep: 3,
   tubeSides: 20,
+  fieldType: "straight",
   dirFreq: 0.05,
   dirBlend: 0.65,
   radiusBase: 11,
