@@ -1,0 +1,32 @@
+.main {
+  position: relative;
+  flex: 1;
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  justify-content: flex-start;
+}
+
+.footer {
+  position: absolute;
+  bottom: 1.5rem;
+  right: 1.5rem;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 0.2rem;
+  background: rgba(15, 23, 42, 0.65);
+  border: 1px solid rgba(148, 163, 184, 0.4);
+  border-radius: 0.75rem;
+  padding: 0.6rem 1rem;
+  color: #cbd5f5;
+  font-size: 0.8rem;
+  letter-spacing: 0.02em;
+  backdrop-filter: blur(6px);
+}
+
+.footer span:first-child {
+  font-weight: 600;
+  color: #f8fafc;
+}
