@@ -1,7 +1,6 @@
 import { add, scale, Vec3 } from "./vector";
 
 export type CameraMode = "first" | "second" | "third";
-
 export interface CameraRig {
   position: Vec3;
   target: Vec3;

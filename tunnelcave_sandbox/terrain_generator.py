@@ -43,6 +43,7 @@ class TunnelTerrainGenerator:
             raise ValueError("roughness amplitude must be smaller than base radius")
         if len(params.profile.lobe_centers) != len(params.profile.lobe_strengths):
             raise ValueError("lobe_centers and lobe_strengths must have the same length")
+
         self._params = params
         field_params = FieldParams(
             world_seed=params.world_seed,
@@ -92,6 +93,7 @@ class TunnelTerrainGenerator:
             origin = Vector3.zero()
             forward = Vector3.unit_z()
             frame = OrthonormalFrame.initial(origin, forward)
+
             base_radius = params.radius_base
             roughness, max_radius = self._build_roughness_profile(frame, base_radius, 0.0)
             ring = RingSample(frame=frame, radius=max_radius, roughness_profile=roughness)
@@ -113,6 +115,7 @@ class TunnelTerrainGenerator:
 
         roughness_profile, max_radius = self._build_roughness_profile(frame, base_radius, arc_length)
         ring = RingSample(frame=frame, radius=max_radius, roughness_profile=roughness_profile)
+
         self._global_rings.append(ring)
         self._global_s_positions.append(arc_length)
 

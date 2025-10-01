@@ -9,7 +9,6 @@ export interface CavernProfileParams {
   twistFrequency: number;
   twistStrength: number;
 }
-
 export interface SandboxParams {
   worldSeed: number;
   chunkLength: number;
@@ -26,6 +25,7 @@ export interface SandboxParams {
   joltStrength: number;
   maxTurnPerStepRad: number;
   profile: CavernProfileParams;
+
 }
 
 export const defaultParams: SandboxParams = {

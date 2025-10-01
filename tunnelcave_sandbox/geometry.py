@@ -38,7 +38,7 @@ class RingSample:
     @property
     def min_radius(self) -> float:
         return min(self.roughness_profile)
-
+      
     def diameter_stats(self) -> Tuple[float, float, float]:
         values = list(self.roughness_profile)
         mean = sum(values) * 2.0 / len(values)
