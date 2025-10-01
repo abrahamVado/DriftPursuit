@@ -41,6 +41,11 @@ class TunnelParams:
     adds a single center vertex per boundary ring or a short overlap sleeve
     (``"sleeve"``) that extrudes an additional ring of vertices so adjacent
     chunks can interpenetrate without gaps.
+
+    Use ``min_clearance_radius`` to enforce a minimum radius after all lobe,
+    noise, and smoothing adjustments. This guarantees that the tunnel never
+    collapses into the flight corridor, even when roughness amplitudes are
+    large enough to carve deep alcoves into the wall.
     """
 
     world_seed: int
@@ -65,6 +70,7 @@ class TunnelParams:
     profile: CavernProfileParams = field(default_factory=default_cavern_profile)
     rough_smoothness: float = 0.0
     rough_filter_kernel: Optional[Tuple[float, ...]] = None
+    min_clearance_radius: float = 0.0
 
 
 class TunnelTerrainGenerator:
@@ -79,6 +85,10 @@ class TunnelTerrainGenerator:
             raise ValueError("lobe_centers and lobe_strengths must have the same length")
         if not 0.0 <= params.rough_smoothness <= 1.0:
             raise ValueError("rough_smoothness must be between 0 and 1")
+        if params.min_clearance_radius < 0.0:
+            raise ValueError("min_clearance_radius must be non-negative")
+        if params.min_clearance_radius >= params.radius_base:
+            raise ValueError("min_clearance_radius must be smaller than radius_base")
 
         kernel = params.rough_filter_kernel
         if kernel is not None:
@@ -376,5 +386,11 @@ class TunnelTerrainGenerator:
             floor = max(floor, continuity_floor, smooth_floor)
 
         floor = max(floor, scaled_radius * 0.05)
-        floor = min(floor, scaled_radius * 0.95)
+        clearance = self._params.min_clearance_radius
+        if clearance > 0.0:
+            floor = max(floor, clearance)
+        cap = scaled_radius * 0.95
+        if clearance > cap:
+            cap = clearance
+        floor = min(floor, cap)
         return floor

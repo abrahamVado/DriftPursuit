@@ -39,6 +39,7 @@ params = TunnelParams(
     jolt_strength=0.0,
     max_turn_per_step_rad=0.85,
     mode="mesh+sdf",
+    min_clearance_radius=2.25,
     field_type="pipe_network",
     pipe_network=PipeNetworkParams(
         straight_length=10.0,
