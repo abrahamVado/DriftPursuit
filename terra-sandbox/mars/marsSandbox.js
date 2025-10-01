@@ -78,6 +78,10 @@ export class MarsSandbox {
     this.ambientLevel = 0.18;
     this.ambientTarget = 0.18;
     this.droneLight = null;
+    this.accentLightBudget = 0;
+    this.accentLightsAllocated = 0;
+    this.maxBeaconLights = 5;
+    this._accentLightSkipLogged = false;
 
     this._handleChunkActivated = this._handleChunkActivated.bind(this);
     this._handleChunkDeactivated = this._handleChunkDeactivated.bind(this);
@@ -140,6 +144,7 @@ export class MarsSandbox {
     this._attachDroneLight(shipMesh);
     this.scene.add(shipMesh);
     this.vehicleMesh = shipMesh;
+    this._recalculateAccentLightBudget();
 
     const spawn = this._getSpawnTransform();
     this.vehicle.reset(spawn);
@@ -196,6 +201,9 @@ export class MarsSandbox {
       this.renderer.dispose();
       this.renderer = null;
     }
+    this.accentLightBudget = 0;
+    this.accentLightsAllocated = 0;
+    this._accentLightSkipLogged = false;
     this.terrain?.dispose?.();
     this.terrain = null;
     this.scene = null;
@@ -247,6 +255,7 @@ export class MarsSandbox {
       this.terrain = null;
     }
     this._disposeChunkAccents();
+    this._resetAccentLightTracking({ recalc: Boolean(this.vehicleMesh) });
     this.exploredChunks.clear();
     this.minimapDirty = true;
     this.terrain = new MarsCaveTerrainManager({
@@ -493,6 +502,91 @@ export class MarsSandbox {
     this.ambientTarget = 0.16 + offset;
   }
 
+  _resetAccentLightTracking({ recalc = true } = {}) {
+    this.accentLightsAllocated = 0;
+    this._accentLightSkipLogged = false;
+    if (recalc) {
+      this._recalculateAccentLightBudget();
+    }
+  }
+
+  _recalculateAccentLightBudget() {
+    const renderer = this.renderer;
+    const capabilities = renderer?.capabilities ?? {};
+    const rawMaxLights = capabilities.maxLights;
+    const hasNumericMax = typeof rawMaxLights === 'number' && !Number.isNaN(rawMaxLights);
+    let maxLights = hasNumericMax ? rawMaxLights : Infinity;
+    if (Number.isFinite(maxLights) && maxLights < 0) {
+      maxLights = 0;
+    }
+
+    const shipLights = this._countPointLights(this.vehicleMesh);
+    const activeBeaconLights = Array.isArray(this.beacons)
+      ? this.beacons.reduce((sum, beacon) => sum + (beacon?.light ? 1 : 0), 0)
+      : 0;
+    const baseBeaconReserve = Math.max(activeBeaconLights, this.maxBeaconLights ?? 0);
+    const reservedBeaconLights = Number.isFinite(maxLights)
+      ? Math.min(baseBeaconReserve, Math.max(0, Math.floor(maxLights)))
+      : baseBeaconReserve;
+    const reserved = shipLights + reservedBeaconLights;
+
+    if (!Number.isFinite(maxLights)) {
+      this.accentLightBudget = Infinity;
+      this._accentLightSkipLogged = false;
+      return;
+    }
+
+    const available = maxLights - reserved;
+    this.accentLightBudget = available > 0 ? Math.floor(available) : 0;
+    if (this.accentLightsAllocated < this.accentLightBudget) {
+      this._accentLightSkipLogged = false;
+    }
+  }
+
+  _countPointLights(root) {
+    if (!root?.traverse) return 0;
+    let count = 0;
+    root.traverse((object) => {
+      if (object?.isPointLight) {
+        count += 1;
+      }
+    });
+    return count;
+  }
+
+  _canAllocateAccentLight() {
+    if (!Number.isFinite(this.accentLightBudget)) {
+      return true;
+    }
+    return this.accentLightsAllocated < this.accentLightBudget;
+  }
+
+  _allocateAccentLight() {
+    this.accentLightsAllocated += 1;
+    if (this.accentLightsAllocated < this.accentLightBudget) {
+      this._accentLightSkipLogged = false;
+    }
+  }
+
+  _releaseAccentLight(count = 1) {
+    if (count <= 0) return;
+    this.accentLightsAllocated = Math.max(0, this.accentLightsAllocated - count);
+    if (this.accentLightsAllocated < this.accentLightBudget) {
+      this._accentLightSkipLogged = false;
+    }
+  }
+
+  _notifyAccentLightSkipped(key) {
+    if (this._accentLightSkipLogged) return;
+    const allocated = this.accentLightsAllocated;
+    const budget = this.accentLightBudget;
+    const chunkLabel = key ?? 'unknown';
+    console.debug?.(
+      `[MarsSandbox] Accent light budget reached (${allocated}/${budget}). Skipping point light for chunk ${chunkLabel}.`,
+    );
+    this._accentLightSkipLogged = true;
+  }
+
   _handleChunkActivated({ key, coord, metadata }) {
     if (!coord) return;
     const centerVec = this.terrain?.getChunkCenter?.(coord);
@@ -568,14 +662,20 @@ export class MarsSandbox {
       mesh.scale.setScalar(1.3 + hazard * 0.35);
       group.add(mesh);
 
-      const light = new THREE.PointLight(color, 3 + hazard * 1.4, 90 + hazard * 42, 2.1);
-      light.position.copy(position);
-      group.add(light);
+      let light = null;
+      if (this._canAllocateAccentLight()) {
+        light = new THREE.PointLight(color, 3 + hazard * 1.4, 90 + hazard * 42, 2.1);
+        light.position.copy(position);
+        group.add(light);
+        this._allocateAccentLight();
+      } else {
+        this._notifyAccentLightSkipped(key);
+      }
 
       crystals.push({
         mesh,
         light,
-        baseIntensity: light.intensity,
+        baseIntensity: light ? light.intensity : 0,
         baseEmissive: material.emissiveIntensity,
         phase: Math.random() * Math.PI * 2,
       });
@@ -593,6 +693,9 @@ export class MarsSandbox {
     }
     if (accent.crystals) {
       for (const crystal of accent.crystals) {
+        if (crystal.light) {
+          this._releaseAccentLight();
+        }
         crystal.mesh?.geometry?.dispose?.();
         crystal.mesh?.material?.dispose?.();
       }
@@ -604,6 +707,8 @@ export class MarsSandbox {
     for (const key of [...this.chunkAccents.keys()]) {
       this._removeChunkAccent(key);
     }
+    this.accentLightsAllocated = 0;
+    this._accentLightSkipLogged = false;
   }
 
   _animateChunkAccents(elapsed) {
@@ -667,6 +772,7 @@ export class MarsSandbox {
     this.minimapDirty = true;
     this._minimapTimer = 0;
     this.hud.setStatus('Navigation beacon deployed.');
+    this._recalculateAccentLightBudget();
   }
 
   _animateBeacons(elapsed) {
@@ -700,6 +806,7 @@ export class MarsSandbox {
     }
     this.minimapDirty = true;
     this._minimapTimer = 0;
+    this._recalculateAccentLightBudget();
   }
 
   _getSpawnTransform() {
