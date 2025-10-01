@@ -48,8 +48,10 @@ export const defaultParams: SandboxParams = {
     lobeCenters: [Math.PI / 2, (3 * Math.PI) / 2],
     lobeStrengths: [0.95, 0.95],
     lobeWidth: 1.15,
-    fractalOctaves: 4,
-    fractalGain: 0.55,
+
+    fractalOctaves: 0,
+    fractalGain: 0,
+
     fractalLacunarity: 2.1,
     twistFrequency: 0.03,
     twistStrength: 0.72
