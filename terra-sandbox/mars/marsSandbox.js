@@ -1,8 +1,8 @@
+// MarsSandbox.js
 import { THREE } from './threeLoader.js';
 
 import { MarsPlaneController, createShipMesh } from './PlaneController.js';
-
-import { MarsVehicle, createMarsSkiff } from './vehicle.js';
+// import { MarsVehicle, createMarsSkiff } from './vehicle.js'; // unused here
 
 import { MarsChaseCamera } from './chaseCamera.js';
 import { MarsInputManager } from './input.js';
@@ -78,6 +78,10 @@ export class MarsSandbox {
     this.ambientLevel = 0.18;
     this.ambientTarget = 0.18;
     this.droneLight = null;
+    this.enableChunkAccents = false;
+    this.accentLightBudget = 0;
+    this.accentLightsUsed = 0;
+    this._loggedAccentLightLimit = false;
 
     this._handleChunkActivated = this._handleChunkActivated.bind(this);
     this._handleChunkDeactivated = this._handleChunkDeactivated.bind(this);
@@ -105,6 +109,9 @@ export class MarsSandbox {
     this.renderer.shadowMap.enabled = false;
     this.renderer.useLegacyLights = false;
 
+    // initialize budget now that renderer is ready
+    this._resetAccentLightBudget();
+
     this.scene = new THREE.Scene();
     const fogColor = new THREE.Color('#080512');
     this.scene.background = fogColor.clone();
@@ -130,7 +137,6 @@ export class MarsSandbox {
     this.scene.add(this.beaconGroup);
 
     this._buildTerrain();
-
     this._setupAudio();
 
     this.vehicle = new MarsPlaneController();
@@ -247,6 +253,7 @@ export class MarsSandbox {
       this.terrain = null;
     }
     this._disposeChunkAccents();
+    this._resetAccentLightBudget();
     this.exploredChunks.clear();
     this.minimapDirty = true;
     this.terrain = new MarsCaveTerrainManager({
@@ -256,6 +263,7 @@ export class MarsSandbox {
       threshold: 0,
       horizontalRadius: 3,
       verticalRadius: 2,
+      mode: 'simplified',
     });
     this.terrain.setLifecycleHandlers({
       onChunkActivated: this._handleChunkActivated,
@@ -313,19 +321,11 @@ export class MarsSandbox {
       }
     };
 
-    if (inputState.increaseAuxiliaryLights) {
-      adjustAuxiliaryLights(0.1);
-    }
-    if (inputState.decreaseAuxiliaryLights) {
-      adjustAuxiliaryLights(-0.1);
-    }
+    if (inputState.increaseAuxiliaryLights) adjustAuxiliaryLights(0.1);
+    if (inputState.decreaseAuxiliaryLights) adjustAuxiliaryLights(-0.1);
 
-    if (inputState.dropBeacon) {
-      this._deployBeacon();
-    }
-    if (inputState.clearBeacons) {
-      this._clearBeacons();
-    }
+    if (inputState.dropBeacon) this._deployBeacon();
+    if (inputState.clearBeacons) this._clearBeacons();
 
     const volumeQuery = this.terrain?.queryVolume
       ? (position, options) => this.terrain.queryVolume(position, options)
@@ -342,7 +342,13 @@ export class MarsSandbox {
     if (inputState.firing) {
       const shot = this.vehicle.firePrimary();
       if (shot) {
-        this.projectiles.fire({ origin: shot.origin, direction: shot.direction, velocity: shot.velocity, life: 4.5, color: this.weaponColor });
+        this.projectiles.fire({
+          origin: shot.origin,
+          direction: shot.direction,
+          velocity: shot.velocity,
+          life: 4.5,
+          color: this.weaponColor,
+        });
       }
     }
 
@@ -518,6 +524,10 @@ export class MarsSandbox {
 
   _spawnChunkAccents(key, coord, metadata) {
     if (!this.chunkAccentGroup || this.chunkAccents.has(key)) return;
+    if (!this.enableChunkAccents) {
+      this.chunkAccents.set(key, { group: null, crystals: [], lightCount: 0 });
+      return;
+    }
     const chunkSize = this.terrain?.chunkSize ?? 16;
     const centerVec = this.terrain?.getChunkCenter?.(coord);
     const baseCenter = centerVec ? centerVec.clone() : new THREE.Vector3(
@@ -539,6 +549,7 @@ export class MarsSandbox {
       siltstone: '#ffbe73',
       ember: '#ff6a3c',
     };
+    let lightsAllocated = 0;
 
     for (let i = 0; i < resources.length; i += 1) {
       const resource = resources[i];
@@ -568,21 +579,29 @@ export class MarsSandbox {
       mesh.scale.setScalar(1.3 + hazard * 0.35);
       group.add(mesh);
 
-      const light = new THREE.PointLight(color, 3 + hazard * 1.4, 90 + hazard * 42, 2.1);
-      light.position.copy(position);
-      group.add(light);
+      let light = null;
+      if (this.accentLightsUsed < this.accentLightBudget) {
+        light = new THREE.PointLight(color, 3 + hazard * 1.4, 90 + hazard * 42, 2.1);
+        light.position.copy(position);
+        group.add(light);
+        this.accentLightsUsed += 1;
+        lightsAllocated += 1;
+      } else if (!this._loggedAccentLightLimit) {
+        console.info('MarsSandbox: accent light budget exhausted; skipping additional chunk lights.');
+        this._loggedAccentLightLimit = true;
+      }
 
       crystals.push({
         mesh,
         light,
-        baseIntensity: light.intensity,
+        baseIntensity: light?.intensity ?? 0,
         baseEmissive: material.emissiveIntensity,
         phase: Math.random() * Math.PI * 2,
       });
     }
 
     this.chunkAccentGroup.add(group);
-    this.chunkAccents.set(key, { group, crystals });
+    this.chunkAccents.set(key, { group, crystals, lightCount: lightsAllocated });
   }
 
   _removeChunkAccent(key) {
@@ -597,6 +616,9 @@ export class MarsSandbox {
         crystal.mesh?.material?.dispose?.();
       }
     }
+    if (accent.lightCount > 0) {
+      this.accentLightsUsed = Math.max(0, this.accentLightsUsed - accent.lightCount);
+    }
     this.chunkAccents.delete(key);
   }
 
@@ -604,6 +626,20 @@ export class MarsSandbox {
     for (const key of [...this.chunkAccents.keys()]) {
       this._removeChunkAccent(key);
     }
+    this.accentLightsUsed = 0;
+    this._loggedAccentLightLimit = false;
+  }
+
+  _resetAccentLightBudget() {
+    const maxLights = this.renderer?.capabilities?.maxLights;
+    const fallback = 24;
+    const reservedLights = 6;
+    const capacity = Number.isFinite(maxLights) ? maxLights : fallback;
+    this.accentLightBudget = this.enableChunkAccents ? Math.max(0, capacity - reservedLights) : 0;
+    this.accentLightsUsed = this.enableChunkAccents
+      ? Math.min(this.accentLightsUsed, this.accentLightBudget)
+      : 0;
+    this._loggedAccentLightLimit = false;
   }
 
   _animateChunkAccents(elapsed) {
