@@ -204,6 +204,8 @@ export class MarsCaveTerrainManager {
     resolution = 16,
     threshold = 0,
     material,
+    horizontalRadius = 1,
+    verticalRadius = 0,
   } = {}) {
     this.seed = seed >>> 0;
     this.chunkSize = chunkSize;
@@ -216,12 +218,14 @@ export class MarsCaveTerrainManager {
     this.material =
       material ||
       new THREE.MeshStandardMaterial({
-        color: new THREE.Color('#7d3f26'),
-        roughness: 0.95,
-        metalness: 0.08,
-        flatShading: true,
+        color: new THREE.Color('#8e4f34'),
+        roughness: 0.88,
+        metalness: 0.1,
+        flatShading: false,
+        emissive: new THREE.Color('#1a0c12'),
+        emissiveIntensity: 0.32,
       });
-    this.material.side = THREE.FrontSide;
+    this.material.side = THREE.DoubleSide;
 
     this.activeChunks = new Map();
     this.chunkPool = [];
@@ -233,15 +237,28 @@ export class MarsCaveTerrainManager {
       onChunkDeactivated: null,
     };
 
+    this.horizontalRadius = Math.max(0, Math.floor(horizontalRadius));
+    this.verticalRadius = Math.max(0, Math.floor(verticalRadius));
+
     this._densityFn = this._densityAt.bind(this);
-    this._desiredOffsets = [
-      { x: 0, y: 0, z: 0 },
-      { x: 1, y: 0, z: 0 },
-      { x: -1, y: 0, z: 0 },
-      { x: 0, y: 1, z: 0 },
-      { x: 0, y: -1, z: 0 },
-      { x: 1, y: 1, z: 0 },
-    ];
+    this._desiredOffsets = this._buildDesiredOffsets();
+  }
+
+  _buildDesiredOffsets({ horizontal = this.horizontalRadius, vertical = this.verticalRadius } = {}) {
+    const offsets = [];
+    for (let z = -vertical; z <= vertical; z += 1) {
+      for (let x = -horizontal; x <= horizontal; x += 1) {
+        for (let y = -horizontal; y <= horizontal; y += 1) {
+          offsets.push({ x, y, z });
+        }
+      }
+    }
+    offsets.sort((a, b) => {
+      const da = Math.hypot(a.x, a.y) + Math.abs(a.z) * 1.6;
+      const db = Math.hypot(b.x, b.y) + Math.abs(b.z) * 1.6;
+      return da - db;
+    });
+    return offsets;
   }
 
   _key(coord) {
@@ -497,7 +514,7 @@ export class MarsCaveTerrainManager {
     const center = {
       x: this._positionToCoord(position.x),
       y: this._positionToCoord(position.y),
-      z: 0,
+      z: this._positionToCoord(position.z, this.verticalOffset),
     };
 
     const desired = this._desiredOffsets.map((offset) => ({
