@@ -142,20 +142,22 @@ export class MarsInputManager {
   }
 
   getState() {
-    const throttleAdjust = this._axis(['KeyW', 'ArrowUp'], ['KeyS', 'ArrowDown']);
+    const throttleAdjust = this._axis('ArrowUp', 'ArrowDown');
     return {
       throttleAdjust,
       throttle: throttleAdjust,
-      yaw: this._axis('KeyD', 'KeyA'),
-      roll: this._axis('KeyE', 'KeyQ'),
-      pitch: this._axis('ArrowDown', 'ArrowUp'),
+      yaw: this._axis('KeyE', 'KeyQ'),
+      roll: this._axis('KeyB', 'KeyA'),
+      pitch: this._axis('KeyS', 'KeyW'),
       boost: this.keys.has('ShiftLeft') || this.keys.has('ShiftRight'),
       brake: this.keys.has('Space'),
       aim: { x: this.aimX, y: this.aimY },
       firing: this.primaryFire,
       toggleNavigationLights: this._consumePressed(['KeyN', 'KeyV']),
       toggleAuxiliaryLights: this._consumePressed('KeyL'),
-      dropBeacon: this._consumePressed('KeyB'),
+      increaseAuxiliaryLights: this._consumePressed(['Equal', 'NumpadAdd']),
+      decreaseAuxiliaryLights: this._consumePressed(['Minus', 'NumpadSubtract']),
+      dropBeacon: this._consumePressed('KeyR'),
       clearBeacons: this._consumePressed('KeyX'),
     };
   }

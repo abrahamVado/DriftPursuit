@@ -451,17 +451,60 @@ export class PlaneController {
   }
 
   setAuxiliaryLightsActive(enabled, intensity = null){
+    const clampedIntensity = Number.isFinite(intensity)
+      ? THREE.MathUtils.clamp(intensity, 0, 1)
+      : null;
+
     this.auxiliaryLightsEnabled = !!enabled;
-    if (Number.isFinite(intensity)){
-      this.auxiliaryLightIntensity = Math.max(0, intensity);
+
+    if (clampedIntensity !== null){
+      this.auxiliaryLightIntensity = clampedIntensity;
+    } else if (this.auxiliaryLightsEnabled){
+      const current = Number.isFinite(this.auxiliaryLightIntensity)
+        ? this.auxiliaryLightIntensity
+        : 1;
+      this.auxiliaryLightIntensity = current > 0 ? THREE.MathUtils.clamp(current, 0, 1) : 1;
     }
+
     this._applyAuxiliaryLights();
+  }
+
+  getAuxiliaryLightLevel(){
+    return THREE.MathUtils.clamp(this.auxiliaryLightIntensity ?? 0, 0, 1);
+  }
+
+  adjustAuxiliaryLightLevel(delta = 0, { autoEnable = true } = {}){
+    if (!Number.isFinite(delta) || delta === 0){
+      return this.getAuxiliaryLightLevel();
+    }
+
+    const current = this.getAuxiliaryLightLevel();
+    const next = THREE.MathUtils.clamp(current + delta, 0, 1);
+
+    if (!autoEnable){
+      if (next !== current){
+        this.auxiliaryLightIntensity = next;
+        this._applyAuxiliaryLights();
+      }
+      return this.getAuxiliaryLightLevel();
+    }
+
+    if (next <= 0){
+      this.auxiliaryLightsEnabled = false;
+      this.auxiliaryLightIntensity = 0;
+    } else {
+      this.auxiliaryLightsEnabled = true;
+      this.auxiliaryLightIntensity = next;
+    }
+
+    this._applyAuxiliaryLights();
+    return this.getAuxiliaryLightLevel();
   }
 
   _applyAuxiliaryLights(){
     if (!Array.isArray(this.auxiliaryLights)) return;
     const enabled = this.auxiliaryLightsEnabled;
-    const level = enabled ? Math.max(0, this.auxiliaryLightIntensity ?? 1) : 0;
+    const level = enabled ? this.getAuxiliaryLightLevel() : 0;
     for (const aux of this.auxiliaryLights){
       if (!aux) continue;
       if (aux.light){

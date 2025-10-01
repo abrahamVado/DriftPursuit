@@ -95,18 +95,23 @@ export class MarsSandbox {
     this.renderer.setPixelRatio(window.devicePixelRatio);
     this.renderer.outputEncoding = THREE.sRGBEncoding;
     this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
+    this.renderer.toneMappingExposure = 1.18;
     this.renderer.shadowMap.enabled = true;
     this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+    this.renderer.physicallyCorrectLights = true;
 
     this.scene = new THREE.Scene();
-    this.scene.background = new THREE.Color('#05030a');
-    this.scene.fog = new THREE.FogExp2('#14070f', 0.0022);
+    const fogColor = new THREE.Color('#080512');
+    this.scene.background = fogColor.clone();
+    this.scene.fog = new THREE.FogExp2(fogColor, 0.0011);
 
     const aspect = this.canvas.clientWidth / this.canvas.clientHeight || window.innerWidth / window.innerHeight;
     this.camera = new THREE.PerspectiveCamera(62, aspect, 0.1, 3600);
 
-    const ambient = new THREE.HemisphereLight('#3f2740', '#0f0509', 0.45);
+    const ambient = new THREE.HemisphereLight('#4d3a63', '#12060f', 0.68);
     this.scene.add(ambient);
+    const fillLight = new THREE.AmbientLight('#1f1326', 0.42);
+    this.scene.add(fillLight);
 
     this.surfaceGroup = new THREE.Group();
     this.scene.add(this.surfaceGroup);
@@ -137,7 +142,15 @@ export class MarsSandbox {
     this.minimapDirty = true;
     this._minimapTimer = 0;
 
-    this.chaseCamera = new MarsChaseCamera({ camera: this.camera, distance: 68, height: 28, lookAhead: 36, responsiveness: 5.6 });
+    this.chaseCamera = new MarsChaseCamera({
+      camera: this.camera,
+      distance: 64,
+      height: 24,
+      lookAhead: 40,
+      responsiveness: 5.8,
+      rollFollow: true,
+      rollResponsiveness: 6.5,
+    });
     this.chaseCamera.follow(this.vehicle);
 
     this.projectiles = new MarsProjectileSystem({ scene: this.scene });
@@ -231,7 +244,12 @@ export class MarsSandbox {
     this._disposeChunkAccents();
     this.exploredChunks.clear();
     this.minimapDirty = true;
-    this.terrain = new MarsCaveTerrainManager({ seed: this.seed, chunkSize: 16, resolution: 16 });
+    this.terrain = new MarsCaveTerrainManager({
+      seed: this.seed,
+      chunkSize: 16,
+      resolution: 16,
+      horizontalRadius: 2,
+    });
     this.terrain.setLifecycleHandlers({
       onChunkActivated: this._handleChunkActivated,
       onChunkDeactivated: this._handleChunkDeactivated,
@@ -274,6 +292,25 @@ export class MarsSandbox {
       const next = !this.vehicle.auxiliaryLightsEnabled;
       this.vehicle.setAuxiliaryLightsActive(next);
       this.hud.setStatus(next ? 'Auxiliary landing lights engaged.' : 'Auxiliary landing lights offline.');
+    }
+
+    const adjustAuxiliaryLights = (delta) => {
+      if (!this.vehicle?.adjustAuxiliaryLightLevel) return;
+      const nextLevel = this.vehicle.adjustAuxiliaryLightLevel(delta);
+      const enabled = this.vehicle.auxiliaryLightsEnabled && nextLevel > 0;
+      if (!enabled) {
+        this.hud.setStatus('Auxiliary landing lights offline.');
+      } else {
+        const percent = Math.round(nextLevel * 100);
+        this.hud.setStatus(`Auxiliary lighting output at ${percent}%.`);
+      }
+    };
+
+    if (inputState.increaseAuxiliaryLights) {
+      adjustAuxiliaryLights(0.1);
+    }
+    if (inputState.decreaseAuxiliaryLights) {
+      adjustAuxiliaryLights(-0.1);
     }
 
     if (inputState.dropBeacon) {
@@ -366,13 +403,13 @@ export class MarsSandbox {
       mesh.add(this.droneLight.target);
       return;
     }
-    const light = new THREE.SpotLight('#ffd7a4', 3.1, 160, THREE.MathUtils.degToRad(40), 0.42, 1.45);
+    const light = new THREE.SpotLight('#ffd7a4', 4.5, 220, THREE.MathUtils.degToRad(44), 0.38, 1.55);
     light.castShadow = false;
     light.name = 'droneSpotlight';
-    light.position.set(0, 6.5, 2.2);
-    light.penumbra = 0.45;
+    light.position.set(0, 7.5, 2.8);
+    light.penumbra = 0.52;
     const target = light.target;
-    target.position.set(0, 18, -8);
+    target.position.set(0, 22, -10);
     mesh.add(light);
     mesh.add(target);
     this.droneLight = light;
