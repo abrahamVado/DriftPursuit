@@ -212,11 +212,16 @@ class TunnelTerrainGenerator:
         previous_profile = self._prev_roughness_profile
         smoothness = params.rough_smoothness
         if previous_profile is not None and smoothness > 0.0:
-            blend = 1.0 - smoothness
+            retain = smoothness
+            contribute = 1.0 - retain
+            prev_len = len(previous_profile)
             smoothed: List[float] = []
             for idx, raw_value in enumerate(values):
-                prev_value = previous_profile[idx % len(previous_profile)]
-                blended = prev_value * smoothness + raw_value * blend
+                if prev_len:
+                    prev_value = previous_profile[idx % prev_len]
+                else:
+                    prev_value = raw_value
+                blended = prev_value + (raw_value - prev_value) * contribute
                 smoothed.append(max(blended, min_radius))
             values = smoothed
 
