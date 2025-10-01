@@ -136,15 +136,20 @@
         color: rgba(255, 210, 190, 0.75);
       }
 
-      .nav-tools canvas {
-        display: block;
-        width: 100%;
-        max-width: 240px;
-        aspect-ratio: 1 / 1;
+      #mars-minimap {
+        position: fixed;
+        bottom: 3vh;
+        right: 3vw;
+        top: auto;
+        left: auto;
+        width: 10vw;
+        height: 10vh;
         border-radius: 10px;
         border: 1px solid rgba(255, 180, 150, 0.28);
         background: rgba(10, 7, 12, 0.85);
-        box-shadow: 0 0 18px rgba(255, 140, 90, 0.12);
+        box-shadow: 0 0 18px rgba(255, 140, 90, 0.18);
+        pointer-events: none;
+        z-index: 20;
       }
 
       .beacon-list {

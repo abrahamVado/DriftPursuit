@@ -131,19 +131,9 @@ export class MarsSandbox {
     this.scene.add(shipMesh);
     this.vehicleMesh = shipMesh;
 
-    const anchorY = 48;
-    const anchorVolume = this._queryVolumeAt(0, anchorY, 120);
-    const startGround = Number.isFinite(anchorVolume?.floor)
-      ? anchorVolume.floor
-      : this.terrain?.sampleHeight?.(0, anchorY) ?? 0;
-    const startHeight = startGround + 72;
-    this.vehicle.reset({
-      position: new THREE.Vector3(0, anchorY, startHeight),
-      yaw: THREE.MathUtils.degToRad(180),
-      pitch: THREE.MathUtils.degToRad(4),
-      throttle: 0.46,
-    });
-    this.terrain?.updateChunks?.(this.vehicle.position);
+    const spawn = this._getSpawnTransform();
+    this.vehicle.reset(spawn);
+    this.terrain?.updateChunks?.(spawn?.position ?? this.vehicle.position);
     this.minimapDirty = true;
     this._minimapTimer = 0;
 
@@ -200,19 +190,10 @@ export class MarsSandbox {
 
   resetVehicle() {
     if (!this.vehicle) return;
-    const anchorY = 48;
-    const anchorVolume = this._queryVolumeAt(0, anchorY, 120);
-    const ground = Number.isFinite(anchorVolume?.floor)
-      ? anchorVolume.floor
-      : this.terrain?.sampleHeight?.(0, anchorY) ?? 0;
-    this.vehicle.reset({
-      position: new THREE.Vector3(0, anchorY, ground + 72),
-      yaw: THREE.MathUtils.degToRad(180),
-      pitch: THREE.MathUtils.degToRad(4),
-      throttle: 0.46,
-    });
+    const spawn = this._getSpawnTransform();
+    this.vehicle.reset(spawn);
     this.chaseCamera?.snap?.();
-    this.terrain?.updateChunks?.(this.vehicle.position);
+    this.terrain?.updateChunks?.(spawn?.position ?? this.vehicle.position);
     this.hud.setStatus('Surveyor plane repositioned at orbit anchor.');
     this.minimapDirty = true;
     this._minimapTimer = 0;
@@ -225,31 +206,11 @@ export class MarsSandbox {
     this.hud.setSeed(this.seed.toString(16).toUpperCase());
     this._clearBeacons({ silent: true });
     this._buildTerrain();
-    if (this.terrain?.queryVolume) {
-      const anchorY = 48;
-      const anchorVolume = this._queryVolumeAt(0, anchorY, 120);
-      const ground = Number.isFinite(anchorVolume?.floor)
-        ? anchorVolume.floor
-        : this.terrain?.sampleHeight?.(0, anchorY) ?? 0;
-      this.vehicle?.reset({
-        position: new THREE.Vector3(0, anchorY, ground + 72),
-        yaw: THREE.MathUtils.degToRad(180),
-        pitch: THREE.MathUtils.degToRad(4),
-        throttle: 0.46,
-      });
-      this.chaseCamera?.snap?.();
-    } else if (this.terrain?.sampleHeight) {
-      const anchorY = 48;
-      const ground = this.terrain.sampleHeight(0, anchorY);
-      this.vehicle?.reset({
-        position: new THREE.Vector3(0, anchorY, ground + 72),
-        yaw: THREE.MathUtils.degToRad(180),
-        pitch: THREE.MathUtils.degToRad(4),
-        throttle: 0.46,
-      });
-      this.chaseCamera?.snap?.();
-    }
-    this.terrain?.updateChunks?.(this.vehicle?.position ?? new THREE.Vector3());
+    const spawn = this._getSpawnTransform();
+    this.vehicle?.reset(spawn);
+    this.chaseCamera?.snap?.();
+    const focus = spawn?.position ?? this.vehicle?.position ?? new THREE.Vector3();
+    this.terrain?.updateChunks?.(focus);
     this._updateWeather();
     this.hud.setStatus('Terrain regenerated. Navigation recalibrated.');
     this.minimapDirty = true;
@@ -328,8 +289,8 @@ export class MarsSandbox {
 
     this.vehicle.update(dt, inputState, {
       queryVolume: volumeQuery,
-      collisionRadius: 7.4,
-      clearance: { floor: 30, ceiling: 20, lateral: 8.5 },
+      collisionRadius: 8.4,
+      clearance: { floor: 14, ceiling: 10, lateral: 9.5 },
     });
 
     this.terrain?.updateChunks?.(this.vehicle.position);
@@ -695,6 +656,79 @@ export class MarsSandbox {
     }
     this.minimapDirty = true;
     this._minimapTimer = 0;
+  }
+
+  _getSpawnTransform() {
+    const fallback = this._createDefaultSpawnTransform();
+    const caveSpawn = this._findCaveSpawnPoint();
+    if (!caveSpawn) return fallback;
+    return {
+      position: caveSpawn.position ?? fallback.position.clone(),
+      yaw: caveSpawn.yaw ?? fallback.yaw,
+      pitch: caveSpawn.pitch ?? fallback.pitch,
+      roll: caveSpawn.roll ?? fallback.roll,
+      throttle: caveSpawn.throttle ?? fallback.throttle,
+    };
+  }
+
+  _createDefaultSpawnTransform() {
+    const anchorY = 48;
+    const anchorVolume = this._queryVolumeAt(0, anchorY, 120);
+    const ground = Number.isFinite(anchorVolume?.floor)
+      ? anchorVolume.floor
+      : this.terrain?.sampleHeight?.(0, anchorY) ?? 0;
+    const startHeight = ground + 72;
+    return {
+      position: new THREE.Vector3(0, anchorY, startHeight),
+      yaw: THREE.MathUtils.degToRad(180),
+      pitch: THREE.MathUtils.degToRad(4),
+      roll: 0,
+      throttle: 0.46,
+    };
+  }
+
+  _findCaveSpawnPoint() {
+    if (!this.terrain?.queryVolume) return null;
+    const chunkSize = this.terrain?.chunkSize ?? 16;
+    const anchor = { x: 0, y: 48 };
+    const range = chunkSize * 3;
+    const step = Math.max(6, Math.floor(chunkSize / 2));
+
+    let best = null;
+
+    for (let dx = -range; dx <= range; dx += step) {
+      for (let dy = -range; dy <= range; dy += step) {
+        const x = anchor.x + dx;
+        const y = anchor.y + dy;
+        const surface = this.terrain?.sampleHeight?.(x, y);
+        const startZ = Number.isFinite(surface) ? surface - 6 : 90;
+        const minZ = startZ - 160;
+        for (let z = startZ; z >= minZ; z -= 2.5) {
+          const volume = this._queryVolumeAt(x, y, z);
+          if (!volume || volume.inside) continue;
+          if (!Number.isFinite(volume.floor) || !Number.isFinite(volume.ceiling)) continue;
+          const clearance = volume.ceiling - volume.floor;
+          if (clearance < 28) continue;
+          const altitude = z - volume.floor;
+          if (altitude < 12 || altitude > clearance - 10) continue;
+
+          const score = clearance - Math.abs(altitude - clearance * 0.5);
+          const height = volume.floor + Math.min(clearance - 10, Math.max(18, clearance * 0.45));
+          if (!best || score > best.score) {
+            best = {
+              position: new THREE.Vector3(x, y, height),
+              yaw: THREE.MathUtils.degToRad(180),
+              pitch: THREE.MathUtils.degToRad(2.5),
+              roll: 0,
+              throttle: 0.42,
+              score,
+            };
+          }
+        }
+      }
+    }
+
+    return best;
   }
 
   _queryVolumeAt(x, y, z = 0) {
