@@ -68,20 +68,26 @@ export class MarsSandbox {
 
     this.beacons = [];
     this.beaconGroup = null;
+
     this.chunkAccents = new Map();
     this.chunkAccentGroup = null;
     this.exploredChunks = new Map();
     this.minimapDirty = true;
     this._minimapTimer = 0;
+
     this.ambientAudio = null;
     this.audioListener = null;
     this.ambientLevel = 0.18;
     this.ambientTarget = 0.18;
+
     this.droneLight = null;
-    this.enableChunkAccents = false;
-    this.accentLightBudget = 0;
-    this.accentLightsUsed = 0;
-    this._loggedAccentLightLimit = false;
+
+    // Accents / light budget
+    this.enableChunkAccents = false; // flip to true to enable glowing crystal accents
+    this.accentLightBudget = 0;      // how many point lights are available for accents
+    this.accentLightsAllocated = 0;  // how many we’ve used
+    this.maxBeaconLights = 5;        // reserve capacity for beacon lights
+    this._accentLightSkipLogged = false;
 
     this._handleChunkActivated = this._handleChunkActivated.bind(this);
     this._handleChunkDeactivated = this._handleChunkDeactivated.bind(this);
@@ -109,8 +115,8 @@ export class MarsSandbox {
     this.renderer.shadowMap.enabled = false;
     this.renderer.useLegacyLights = false;
 
-    // initialize budget now that renderer is ready
-    this._resetAccentLightBudget();
+    // prime light tracking (renderer is now available)
+    this._resetAccentLightTracking({ recalc: false });
 
     this.scene = new THREE.Scene();
     const fogColor = new THREE.Color('#080512');
@@ -147,6 +153,9 @@ export class MarsSandbox {
     this.scene.add(shipMesh);
     this.vehicleMesh = shipMesh;
 
+    // Now we can compute a precise light budget (counts ship + reserves beacons)
+    this._recalculateAccentLightBudget();
+
     const spawn = this._getSpawnTransform();
     this.vehicle.reset(spawn);
     this.terrain?.updateChunks?.(spawn?.position ?? this.vehicle.position);
@@ -174,9 +183,7 @@ export class MarsSandbox {
   }
 
   start() {
-    if (!this.renderer) {
-      throw new Error('MarsSandbox not initialized');
-    }
+    if (!this.renderer) throw new Error('MarsSandbox not initialized');
     if (this.animationHandle) return;
     this.clock.start();
     this.animationHandle = this.renderer.setAnimationLoop(this._update);
@@ -202,6 +209,11 @@ export class MarsSandbox {
       this.renderer.dispose();
       this.renderer = null;
     }
+    // reset tracking fields
+    this.accentLightBudget = 0;
+    this.accentLightsAllocated = 0;
+    this._accentLightSkipLogged = false;
+
     this.terrain?.dispose?.();
     this.terrain = null;
     this.scene = null;
@@ -253,9 +265,12 @@ export class MarsSandbox {
       this.terrain = null;
     }
     this._disposeChunkAccents();
-    this._resetAccentLightBudget();
+    // reset + optionally recalc with current ship/beacons context
+    this._resetAccentLightTracking({ recalc: Boolean(this.vehicleMesh) });
+
     this.exploredChunks.clear();
     this.minimapDirty = true;
+
     this.terrain = new MarsCaveTerrainManager({
       seed: this.seed,
       chunkSize: 18,
@@ -460,9 +475,7 @@ export class MarsSandbox {
     if (this.ambientAudio) {
       try {
         this.ambientAudio.stop();
-      } catch (error) {
-        // ignore stop errors
-      }
+      } catch (error) {}
       this.ambientAudio.disconnect?.();
       this.ambientAudio = null;
     }
@@ -499,6 +512,88 @@ export class MarsSandbox {
     this.ambientTarget = 0.16 + offset;
   }
 
+  // ---------- Accent light tracking (dynamic) ----------
+  _resetAccentLightTracking({ recalc = true } = {}) {
+    this.accentLightsAllocated = 0;
+    this._accentLightSkipLogged = false;
+    if (recalc) this._recalculateAccentLightBudget();
+  }
+
+  _recalculateAccentLightBudget() {
+    const renderer = this.renderer;
+    const capabilities = renderer?.capabilities ?? {};
+    const rawMaxLights = capabilities.maxLights;
+    const hasNumericMax = typeof rawMaxLights === 'number' && !Number.isNaN(rawMaxLights);
+    let maxLights = hasNumericMax ? rawMaxLights : Infinity;
+    if (Number.isFinite(maxLights) && maxLights < 0) maxLights = 0;
+
+    // Count lights attached to the ship (e.g., nav/aux)
+    const shipLights = this._countPointLights(this.vehicleMesh);
+
+    // Reserve some capacity for navigation beacons
+    const activeBeaconLights = Array.isArray(this.beacons)
+      ? this.beacons.reduce((sum, b) => sum + (b?.light ? 1 : 0), 0)
+      : 0;
+    const baseBeaconReserve = Math.max(activeBeaconLights, this.maxBeaconLights ?? 0);
+    const reservedBeaconLights = Number.isFinite(maxLights)
+      ? Math.min(baseBeaconReserve, Math.max(0, Math.floor(maxLights)))
+      : baseBeaconReserve;
+
+    const reserved = shipLights + reservedBeaconLights;
+
+    if (!Number.isFinite(maxLights)) {
+      this.accentLightBudget = Infinity;
+      this._accentLightSkipLogged = false;
+      return;
+    }
+
+    const available = maxLights - reserved;
+    this.accentLightBudget = available > 0 ? Math.floor(available) : 0;
+    if (this.accentLightsAllocated < this.accentLightBudget) {
+      this._accentLightSkipLogged = false;
+    }
+  }
+
+  _countPointLights(root) {
+    if (!root?.traverse) return 0;
+    let count = 0;
+    root.traverse((obj) => { if (obj?.isPointLight) count += 1; });
+    return count;
+  }
+
+  _canAllocateAccentLight() {
+    if (!this.enableChunkAccents) return false;
+    if (!Number.isFinite(this.accentLightBudget)) return true;
+    return this.accentLightsAllocated < this.accentLightBudget;
+  }
+
+  _allocateAccentLight() {
+    this.accentLightsAllocated += 1;
+    if (this.accentLightsAllocated < this.accentLightBudget) {
+      this._accentLightSkipLogged = false;
+    }
+  }
+
+  _releaseAccentLight(count = 1) {
+    if (count <= 0) return;
+    this.accentLightsAllocated = Math.max(0, this.accentLightsAllocated - count);
+    if (this.accentLightsAllocated < this.accentLightBudget) {
+      this._accentLightSkipLogged = false;
+    }
+  }
+
+  _notifyAccentLightSkipped(key) {
+    if (this._accentLightSkipLogged) return;
+    const allocated = this.accentLightsAllocated;
+    const budget = this.accentLightBudget;
+    const chunkLabel = key ?? 'unknown';
+    console.debug?.(
+      `[MarsSandbox] Accent light budget reached (${allocated}/${budget}). Skipping point light for chunk ${chunkLabel}.`
+    );
+    this._accentLightSkipLogged = true;
+  }
+  // -----------------------------------------------------
+
   _handleChunkActivated({ key, coord, metadata }) {
     if (!coord) return;
     const centerVec = this.terrain?.getChunkCenter?.(coord);
@@ -528,6 +623,7 @@ export class MarsSandbox {
       this.chunkAccents.set(key, { group: null, crystals: [], lightCount: 0 });
       return;
     }
+
     const chunkSize = this.terrain?.chunkSize ?? 16;
     const centerVec = this.terrain?.getChunkCenter?.(coord);
     const baseCenter = centerVec ? centerVec.clone() : new THREE.Vector3(
@@ -535,6 +631,7 @@ export class MarsSandbox {
       coord.y * chunkSize + chunkSize * 0.5,
       chunkSize * 0.5,
     );
+
     const hazard = Math.abs(metadata?.hazards ?? 0);
     const resources = Array.isArray(metadata?.resources) && metadata.resources.length > 0
       ? metadata.resources
@@ -544,11 +641,7 @@ export class MarsSandbox {
     group.name = `chunkAccent:${key}`;
     const crystals = [];
     const biome = metadata?.biome ?? 'ember';
-    const biomeColors = {
-      lumenite: '#63f0ff',
-      siltstone: '#ffbe73',
-      ember: '#ff6a3c',
-    };
+    const biomeColors = { lumenite: '#63f0ff', siltstone: '#ffbe73', ember: '#ff6a3c' };
     let lightsAllocated = 0;
 
     for (let i = 0; i < resources.length; i += 1) {
@@ -580,21 +673,20 @@ export class MarsSandbox {
       group.add(mesh);
 
       let light = null;
-      if (this.accentLightsUsed < this.accentLightBudget) {
+      if (this._canAllocateAccentLight()) {
         light = new THREE.PointLight(color, 3 + hazard * 1.4, 90 + hazard * 42, 2.1);
         light.position.copy(position);
         group.add(light);
-        this.accentLightsUsed += 1;
+        this._allocateAccentLight();
         lightsAllocated += 1;
-      } else if (!this._loggedAccentLightLimit) {
-        console.info('MarsSandbox: accent light budget exhausted; skipping additional chunk lights.');
-        this._loggedAccentLightLimit = true;
+      } else {
+        this._notifyAccentLightSkipped(key);
       }
 
       crystals.push({
         mesh,
         light,
-        baseIntensity: light?.intensity ?? 0,
+        baseIntensity: light ? light.intensity : 0,
         baseEmissive: material.emissiveIntensity,
         phase: Math.random() * Math.PI * 2,
       });
@@ -607,17 +699,16 @@ export class MarsSandbox {
   _removeChunkAccent(key) {
     const accent = this.chunkAccents.get(key);
     if (!accent) return;
+
     if (accent.group && this.chunkAccentGroup) {
       this.chunkAccentGroup.remove(accent.group);
     }
     if (accent.crystals) {
       for (const crystal of accent.crystals) {
+        if (crystal.light) this._releaseAccentLight(1);
         crystal.mesh?.geometry?.dispose?.();
         crystal.mesh?.material?.dispose?.();
       }
-    }
-    if (accent.lightCount > 0) {
-      this.accentLightsUsed = Math.max(0, this.accentLightsUsed - accent.lightCount);
     }
     this.chunkAccents.delete(key);
   }
@@ -626,20 +717,8 @@ export class MarsSandbox {
     for (const key of [...this.chunkAccents.keys()]) {
       this._removeChunkAccent(key);
     }
-    this.accentLightsUsed = 0;
-    this._loggedAccentLightLimit = false;
-  }
-
-  _resetAccentLightBudget() {
-    const maxLights = this.renderer?.capabilities?.maxLights;
-    const fallback = 24;
-    const reservedLights = 6;
-    const capacity = Number.isFinite(maxLights) ? maxLights : fallback;
-    this.accentLightBudget = this.enableChunkAccents ? Math.max(0, capacity - reservedLights) : 0;
-    this.accentLightsUsed = this.enableChunkAccents
-      ? Math.min(this.accentLightsUsed, this.accentLightBudget)
-      : 0;
-    this._loggedAccentLightLimit = false;
+    this.accentLightsAllocated = 0;
+    this._accentLightSkipLogged = false;
   }
 
   _animateChunkAccents(elapsed) {
@@ -703,6 +782,9 @@ export class MarsSandbox {
     this.minimapDirty = true;
     this._minimapTimer = 0;
     this.hud.setStatus('Navigation beacon deployed.');
+
+    // beacons changed; recompute budget
+    this._recalculateAccentLightBudget();
   }
 
   _animateBeacons(elapsed) {
@@ -731,11 +813,12 @@ export class MarsSandbox {
       beacon.mesh?.material?.dispose?.();
     }
     this.beacons.length = 0;
-    if (!silent) {
-      this.hud.setStatus('Navigation beacons recalled.');
-    }
+    if (!silent) this.hud.setStatus('Navigation beacons recalled.');
     this.minimapDirty = true;
     this._minimapTimer = 0;
+
+    // beacons removed; recompute budget
+    this._recalculateAccentLightBudget();
   }
 
   _getSpawnTransform() {
