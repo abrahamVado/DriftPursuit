@@ -1,8 +1,8 @@
+// MarsSandbox.js
 import { THREE } from './threeLoader.js';
 
 import { MarsPlaneController, createShipMesh } from './PlaneController.js';
-
-import { MarsVehicle, createMarsSkiff } from './vehicle.js';
+// import { MarsVehicle, createMarsSkiff } from './vehicle.js'; // unused here
 
 import { MarsChaseCamera } from './chaseCamera.js';
 import { MarsInputManager } from './input.js';
@@ -108,6 +108,8 @@ export class MarsSandbox {
     this.renderer.toneMappingExposure = 1.18;
     this.renderer.shadowMap.enabled = false;
     this.renderer.useLegacyLights = false;
+
+    // initialize budget now that renderer is ready
     this._resetAccentLightBudget();
 
     this.scene = new THREE.Scene();
@@ -135,7 +137,6 @@ export class MarsSandbox {
     this.scene.add(this.beaconGroup);
 
     this._buildTerrain();
-
     this._setupAudio();
 
     this.vehicle = new MarsPlaneController();
@@ -320,19 +321,11 @@ export class MarsSandbox {
       }
     };
 
-    if (inputState.increaseAuxiliaryLights) {
-      adjustAuxiliaryLights(0.1);
-    }
-    if (inputState.decreaseAuxiliaryLights) {
-      adjustAuxiliaryLights(-0.1);
-    }
+    if (inputState.increaseAuxiliaryLights) adjustAuxiliaryLights(0.1);
+    if (inputState.decreaseAuxiliaryLights) adjustAuxiliaryLights(-0.1);
 
-    if (inputState.dropBeacon) {
-      this._deployBeacon();
-    }
-    if (inputState.clearBeacons) {
-      this._clearBeacons();
-    }
+    if (inputState.dropBeacon) this._deployBeacon();
+    if (inputState.clearBeacons) this._clearBeacons();
 
     const volumeQuery = this.terrain?.queryVolume
       ? (position, options) => this.terrain.queryVolume(position, options)
@@ -349,7 +342,13 @@ export class MarsSandbox {
     if (inputState.firing) {
       const shot = this.vehicle.firePrimary();
       if (shot) {
-        this.projectiles.fire({ origin: shot.origin, direction: shot.direction, velocity: shot.velocity, life: 4.5, color: this.weaponColor });
+        this.projectiles.fire({
+          origin: shot.origin,
+          direction: shot.direction,
+          velocity: shot.velocity,
+          life: 4.5,
+          color: this.weaponColor,
+        });
       }
     }
 
