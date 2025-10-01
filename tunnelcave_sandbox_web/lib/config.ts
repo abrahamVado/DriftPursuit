@@ -50,7 +50,7 @@ export const defaultParams: SandboxParams = {
   joltEveryMeters: 140,
   joltStrength: 0.45,
   maxTurnPerStepRad: Math.PI / 6,
-  addEndCaps: true,
+  addEndCaps: false,
   profile: {
 
     baseScale: 1.3,

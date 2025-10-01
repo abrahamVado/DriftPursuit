@@ -59,10 +59,13 @@ export interface PlayerInput {
 }
 
 function collectRings(band: ChunkBand): RingStation[] {
-  const rings: RingStation[] = [];
+  const dedup = new Map<number, RingStation>();
   for (const chunk of band.chunks.values()) {
-    rings.push(...chunk.rings);
+    for (const ring of chunk.rings) {
+      dedup.set(ring.index, ring);
+    }
   }
+  const rings = Array.from(dedup.values());
   rings.sort((a, b) => a.index - b.index);
   return rings;
 }
