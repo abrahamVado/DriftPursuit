@@ -18,6 +18,8 @@ class FieldParams:
     max_turn_per_step_rad: float
     jolt_every_meters: float
     jolt_strength: float
+    curve_smoothing_distance: float = 0.0
+    curve_smoothing_steps: int = 1
 
 
 @dataclass(frozen=True)
@@ -38,6 +40,7 @@ class DivergenceFreeField:
 
     def __init__(self, params: FieldParams) -> None:
         self._params = params
+        self._persistent_target = Vector3.unit_z()
 
     def next_direction(
         self,
@@ -48,15 +51,52 @@ class DivergenceFreeField:
     ) -> Vector3:
         """Evaluate the field at ``position`` and apply smoothing & jolts."""
 
-        raw_x, raw_y, raw_z = curl_noise(self._params.world_seed, (position.x, position.y, position.z), self._params.dir_freq)
-        raw_dir = Vector3(raw_x, raw_y, raw_z)
-        if raw_dir.length() < 1e-6:
-            raw_dir = Vector3.unit_z()
-
-        blended = previous_direction.lerp(raw_dir, self._params.dir_blend).normalized()
+        sampled = self._sample_smoothed_direction(position, previous_direction)
+        blended = previous_direction.lerp(sampled, self._params.dir_blend).normalized()
         jolted = self._apply_jolt(blended, step_index, arc_length)
         clamped = rotate_towards(previous_direction, jolted, self._params.max_turn_per_step_rad)
         return clamped.normalized()
+
+    def _sample_smoothed_direction(self, position: Vector3, previous_direction: Vector3) -> Vector3:
+        params = self._params
+        steps = max(1, params.curve_smoothing_steps)
+        distance = max(0.0, params.curve_smoothing_distance)
+        direction = previous_direction
+        if direction.length() < 1e-5:
+            direction = Vector3.unit_z()
+        direction = direction.normalized()
+
+        if steps <= 1 or distance <= 1e-6:
+            averaged = self._sample_field(position)
+        else:
+            span = distance
+            step_size = span / max(1, steps - 1)
+            start = -0.5 * span
+            accumulator = Vector3.zero()
+            for idx in range(steps):
+                offset = start + step_size * idx
+                sample_pos = position + direction * offset
+                accumulator += self._sample_field(sample_pos)
+            averaged = accumulator / max(1, steps)
+
+        if averaged.length() < 1e-6:
+            averaged = Vector3.unit_z()
+        averaged = averaged.normalized()
+
+        history_blend = 1.0 / max(1, steps)
+        self._persistent_target = self._persistent_target.lerp(averaged, history_blend).normalized()
+        return self._persistent_target
+
+    def _sample_field(self, position: Vector3) -> Vector3:
+        raw_x, raw_y, raw_z = curl_noise(
+            self._params.world_seed,
+            (position.x, position.y, position.z),
+            self._params.dir_freq,
+        )
+        raw_dir = Vector3(raw_x, raw_y, raw_z)
+        if raw_dir.length() < 1e-6:
+            return Vector3.unit_z()
+        return raw_dir.normalized()
 
     def _apply_jolt(self, direction: Vector3, step_index: int, arc_length: float) -> Vector3:
         params = self._params

@@ -71,6 +71,8 @@ class TunnelParams:
     rough_smoothness: float = 0.0
     rough_filter_kernel: Optional[Tuple[float, ...]] = None
     min_clearance_radius: float = 0.0
+    curve_smoothing_distance: float = 18.0
+    curve_smoothing_steps: int = 5
 
 
 class TunnelTerrainGenerator:
@@ -89,6 +91,10 @@ class TunnelTerrainGenerator:
             raise ValueError("min_clearance_radius must be non-negative")
         if params.min_clearance_radius >= params.radius_base:
             raise ValueError("min_clearance_radius must be smaller than radius_base")
+        if params.curve_smoothing_distance < 0.0:
+            raise ValueError("curve_smoothing_distance must be non-negative")
+        if params.curve_smoothing_steps < 1:
+            raise ValueError("curve_smoothing_steps must be at least 1")
 
         kernel = params.rough_filter_kernel
         if kernel is not None:
@@ -111,6 +117,8 @@ class TunnelTerrainGenerator:
             max_turn_per_step_rad=params.max_turn_per_step_rad,
             jolt_every_meters=params.jolt_every_meters,
             jolt_strength=params.jolt_strength,
+            curve_smoothing_distance=params.curve_smoothing_distance,
+            curve_smoothing_steps=params.curve_smoothing_steps,
         )
         if params.field_type == "divergence_free":
             self._field = DivergenceFreeField(field_params)
