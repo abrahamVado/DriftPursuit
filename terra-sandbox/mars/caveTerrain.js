@@ -387,35 +387,45 @@ export class MarsCaveTerrainManager {
 
   _densityAt(x, y, z) {
     const surface = this._surfaceElevation(x, y);
-    const vertical = (surface - z) / 6;
+    const vertical = (surface - z) / 8.5;
 
     const cavernLayer = this.noise.fractalSimplex3(x, y, z, {
-      frequency: 0.082,
+      frequency: 0.072,
       octaves: 3,
-      gain: 0.57,
-      lacunarity: 2.05,
+      gain: 0.6,
+      lacunarity: 2.1,
       salt: 0x101,
     });
     const tunnelLayer = this.noise.fractalSimplex3(x + 200, y - 200, z * 0.8, {
       frequency: 0.14,
       octaves: 2,
-      gain: 0.6,
-      lacunarity: 2.35,
+      gain: 0.64,
+      lacunarity: 2.25,
       salt: 0x409,
     });
     const pocketLayer = this.noise.fractalSimplex3(x * 0.45, y * 0.45, z, {
       frequency: 0.19,
       octaves: 3,
-      gain: 0.58,
-      lacunarity: 1.95,
+      gain: 0.6,
+      lacunarity: 1.9,
       salt: 0x901,
     });
     const tunnelBand = Math.sin((x + this.seed * 0.13) * 0.058) + Math.sin((y - this.seed * 0.07) * 0.058);
-    const radial = Math.cos(Math.sqrt(x * x + y * y) * 0.04 + this.seed * 0.01) * 0.12;
-    const biomeBias = this._biomeDensityBias(this._biomeMask(x, y));
-    const hazards = this._hazardField(x, y, z) * -0.32;
+    const radial = Math.cos(Math.sqrt(x * x + y * y) * 0.04 + this.seed * 0.01) * 0.18;
+    const biomeBias = this._biomeDensityBias(this._biomeMask(x, y)) * 0.85;
+    const hazards = this._hazardField(x, y, z) * -0.42;
 
-    return vertical + cavernLayer * 0.78 - Math.abs(tunnelLayer) * 0.36 + pocketLayer * 0.34 + biomeBias + radial + hazards - 0.18;
+    return (
+      vertical +
+      cavernLayer * 0.92 +
+      pocketLayer * 0.46 +
+      tunnelBand * 0.22 +
+      radial +
+      biomeBias -
+      Math.abs(tunnelLayer) * 0.54 +
+      hazards -
+      0.34
+    );
   }
 
   sampleHeight(x, y) {

@@ -91,19 +91,24 @@ export class MarsSandbox {
     this.rng = createMulberry32(this.seed);
     this.hud.setSeed(this.seed.toString(16).toUpperCase());
 
-    this.renderer = new THREE.WebGLRenderer({ canvas: this.canvas, antialias: true, alpha: true });
-    this.renderer.setPixelRatio(window.devicePixelRatio);
+    this.renderer = new THREE.WebGLRenderer({
+      canvas: this.canvas,
+      antialias: false,
+      alpha: true,
+      powerPreference: 'low-power',
+    });
+    const rendererPixelRatio = Math.min(1, window.devicePixelRatio || 1);
+    this.renderer.setPixelRatio(rendererPixelRatio);
     this.renderer.outputEncoding = THREE.sRGBEncoding;
     this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
     this.renderer.toneMappingExposure = 1.18;
-    this.renderer.shadowMap.enabled = true;
-    this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+    this.renderer.shadowMap.enabled = false;
     this.renderer.physicallyCorrectLights = true;
 
     this.scene = new THREE.Scene();
     const fogColor = new THREE.Color('#080512');
     this.scene.background = fogColor.clone();
-    this.scene.fog = new THREE.FogExp2(fogColor, 0.0011);
+    this.scene.fog = new THREE.FogExp2(fogColor, 0.00065);
 
     const aspect = this.canvas.clientWidth / this.canvas.clientHeight || window.innerWidth / window.innerHeight;
     this.camera = new THREE.PerspectiveCamera(62, aspect, 0.1, 3600);
@@ -246,9 +251,11 @@ export class MarsSandbox {
     this.minimapDirty = true;
     this.terrain = new MarsCaveTerrainManager({
       seed: this.seed,
-      chunkSize: 16,
-      resolution: 16,
-      horizontalRadius: 2,
+      chunkSize: 18,
+      resolution: 8,
+      threshold: 0,
+      horizontalRadius: 3,
+      verticalRadius: 2,
     });
     this.terrain.setLifecycleHandlers({
       onChunkActivated: this._handleChunkActivated,
@@ -269,7 +276,7 @@ export class MarsSandbox {
     if (!this.renderer || !this.camera) return;
     const width = this.canvas.clientWidth || window.innerWidth - 340;
     const height = this.canvas.clientHeight || window.innerHeight;
-    const dpr = window.devicePixelRatio || 1;
+    const dpr = Math.min(1.25, window.devicePixelRatio || 1);
     this.renderer.setPixelRatio(dpr);
     this.renderer.setSize(width, height, false);
     this.camera.aspect = width / Math.max(1, height);
