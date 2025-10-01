@@ -182,7 +182,7 @@ export function SandboxCanvas() {
         case "KeyA":
           inputRef.current.roll = -1;
           break;
-        case "KeyB":
+        case "KeyD":
           inputRef.current.roll = 1;
           break;
         case "KeyW":
@@ -233,7 +233,7 @@ export function SandboxCanvas() {
         case "KeyA":
           if (inputRef.current.roll < 0) inputRef.current.roll = 0;
           break;
-        case "KeyB":
+        case "KeyD":
           if (inputRef.current.roll > 0) inputRef.current.roll = 0;
           break;
         case "KeyW":
