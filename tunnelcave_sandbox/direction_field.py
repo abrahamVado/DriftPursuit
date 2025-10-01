@@ -35,6 +35,30 @@ class PipeNetworkParams:
     junction_radius: float = 10.0
 
 
+class StraightField:
+    """Degenerate field that keeps the tunnel perfectly straight."""
+
+    def __init__(self, params: FieldParams) -> None:
+        self._params = params
+        forward, up, right = orthonormalize(Vector3.unit_z(), Vector3(0.0, 1.0, 0.0))
+        self._frame = _FrameState(Vector3.zero(), forward, up, right)
+
+    def next_direction(
+        self,
+        position: Vector3,
+        previous_direction: Vector3,
+        step_index: int,
+        arc_length: float,
+    ) -> Vector3:
+        target = self._frame.forward
+        if previous_direction.length() < 1e-6:
+            previous_direction = target
+        return rotate_towards(previous_direction, target, self._params.max_turn_per_step_rad).normalized()
+
+    def position_at(self, arc_length: float) -> Vector3:
+        return self._frame.origin + self._frame.forward * arc_length
+
+
 class DivergenceFreeField:
     """Produces smooth directions along the path using curl noise."""
 
