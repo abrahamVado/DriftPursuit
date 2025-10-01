@@ -2,10 +2,15 @@ import type { SandboxParams } from "./config";
 import { createChunkBand, ensureChunks, type ChunkBand } from "./streaming";
 import { chooseSpawn, type SpawnPose } from "./probe";
 import type { RingStation } from "./terrain";
-import { createCameraRig, type CameraParams, type CameraRig, updateCameraRig } from "./camera";
-
 import {
-  add,
+  computeCameraGoal,
+  createCameraRig,
+  type CameraMode,
+  type CameraParams,
+  type CameraRig,
+  updateCameraRig
+} from "./camera";
+import {
   cross,
   length,
   normalize,
@@ -14,7 +19,6 @@ import {
   Vec3,
   lerp
 } from "./vector";
-
 
 export interface SimulationParams {
   sandbox: SandboxParams;
@@ -28,12 +32,10 @@ export interface CraftState {
   targetSpeed: number;
   roll: number;
   rollRate: number;
-
   yaw: number;
   yawRate: number;
   pitch: number;
   pitchRate: number;
-
   position: Vec3;
   forward: Vec3;
   right: Vec3;
@@ -45,15 +47,15 @@ export interface SimulationState {
   camera: CameraRig;
   craft: CraftState;
   spawn: SpawnPose;
+  viewMode: CameraMode;
+  currentRingRadius: number;
 }
 
 export interface PlayerInput {
   throttleDelta: number;
   rollDelta: number;
-
   yawDelta: number;
   pitchDelta: number;
-
 }
 
 function collectRings(band: ChunkBand): RingStation[] {
@@ -67,13 +69,13 @@ function collectRings(band: ChunkBand): RingStation[] {
 
 function interpolateRing(rings: RingStation[], arc: number): {
   position: Vec3;
-
   frame: {
     forward: Vec3;
     right: Vec3;
     up: Vec3;
   };
 
+  radius: number;
 } {
   const ringIndex = Math.floor(arc);
   const nextIndex = Math.min(rings[rings.length - 1].index, ringIndex + 1);
@@ -92,8 +94,8 @@ function interpolateRing(rings: RingStation[], arc: number): {
     up = scale(up, 1 / upLen);
   }
   right = cross(up, forward);
-
-  return { position, frame: { forward, right, up } };
+  const radius = base.radius + (next.radius - base.radius) * t;
+  return { position, frame: { forward, right, up }, radius };
 }
 
 function clamp(value: number, min: number, max: number) {
@@ -154,7 +156,6 @@ function applyOrientation(
   }
 
   return { forward, right, up };
-
 }
 
 export function createSimulation(params: SimulationParams): SimulationState {
@@ -171,19 +172,29 @@ export function createSimulation(params: SimulationParams): SimulationState {
     targetSpeed: 15,
     roll: spawn.rollHint,
     rollRate: 0,
-
     yaw: 0,
     yawRate: 0,
     pitch: 0,
     pitchRate: 0,
-
     position: spawn.position,
     forward: spawn.forward,
     right: spawn.right,
     up: spawn.up
   };
-  const camera = createCameraRig(add(spawn.position, scale(spawn.forward, -10)));
-  return { band, camera, craft, spawn };
+
+  const initialGoal = computeCameraGoal(
+    craft.position,
+    craft.forward,
+    craft.right,
+    craft.up,
+    params.camera,
+    "third",
+    spawn.ringRadius,
+    params.sandbox.roughAmp
+  );
+  const camera = createCameraRig(initialGoal.position);
+  camera.target = [...initialGoal.target];
+  return { band, camera, craft, spawn, viewMode: "third", currentRingRadius: spawn.ringRadius };
 }
 
 export function updateSimulation(
@@ -225,6 +236,18 @@ export function updateSimulation(
   craft.forward = oriented.forward;
   craft.right = oriented.right;
   craft.up = oriented.up;
+  state.currentRingRadius = sample.radius;
+  updateCameraRig(
+    state.camera,
+    craft.position,
+    craft.forward,
+    craft.right,
+    craft.up,
+    params.camera,
+    dt,
+    state.viewMode,
+    sample.radius,
+    params.sandbox.roughAmp
+  );
 
-  updateCameraRig(state.camera, craft.position, craft.forward, craft.right, craft.up, params.camera, dt);
 }

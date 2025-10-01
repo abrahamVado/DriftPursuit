@@ -23,13 +23,12 @@ export function ControlsOverlay({ speed, targetSpeed }: OverlayProps) {
       <div className={styles.instructions}>
         <p>Controls</p>
         <ul>
-
           <li>Arrow Up / Down – Raise or lower velocity target</li>
           <li>W / S – Pitch the craft up or down</li>
           <li>Q / E – Yaw the craft left or right</li>
           <li>A / B – Roll the craft left or right</li>
+          <li>1 / 2 / 3 – Switch between first-, second-, and third-person cameras</li>
           <li>Space – Re-center orientation</li>
-
           <li>Shift – Boost follow camera tightness</li>
         </ul>
       </div>

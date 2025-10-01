@@ -3,6 +3,9 @@
 import { useEffect, useRef, useState } from "react";
 import * as THREE from "three";
 import { defaultParams } from "../lib/config";
+
+import { computeCameraGoal, type CameraMode } from "../lib/camera";
+
 import { createSimulation, updateSimulation, type SimulationParams } from "../lib/world";
 import type { SimulationState } from "../lib/world";
 import type { ChunkData } from "../lib/terrain";
@@ -11,12 +14,10 @@ import { ControlsOverlay } from "./ControlsOverlay";
 interface InputState {
   throttle: number;
   roll: number;
-
   yaw: number;
   pitch: number;
   boost: boolean;
   resetOrientation: boolean;
-
 }
 
 function buildCraftMesh() {
@@ -106,10 +107,11 @@ export function SandboxCanvas() {
     const simParams: SimulationParams = {
       sandbox: defaultParams,
       camera: {
-        followDistance: 12,
-        heightOffset: 4,
-        lateralOffset: 0,
-        smoothing: 3
+        smoothing: 3,
+        collisionBuffer: 1.2,
+        firstPerson: { forwardOffset: 2.5, heightOffset: 0.25, lookAhead: 60 },
+        secondPerson: { followDistance: 6, heightOffset: 1.8, lateralOffset: 0, lookAhead: 55 },
+        thirdPerson: { followDistance: 13.5, heightOffset: 4.5, lateralOffset: 0, lookAhead: 70 }
       },
       craftRadius: 2.2
     };
@@ -150,8 +152,24 @@ export function SandboxCanvas() {
       camera.updateProjectionMatrix();
     };
 
-    const keyDown = (event: KeyboardEvent) => {
+    const applyViewMode = (mode: CameraMode) => {
+      if (!simRef.current) return;
+      simRef.current.viewMode = mode;
+      const goal = computeCameraGoal(
+        simRef.current.craft.position,
+        simRef.current.craft.forward,
+        simRef.current.craft.right,
+        simRef.current.craft.up,
+        simParams.camera,
+        mode,
+        simRef.current.currentRingRadius,
+        simParams.sandbox.roughAmp
+      );
+      simRef.current.camera.position = [...goal.position];
+      simRef.current.camera.target = [...goal.target];
+    };
 
+    const keyDown = (event: KeyboardEvent) => {
       switch (event.code) {
         case "ArrowUp":
           inputRef.current.throttle = 1;
@@ -179,6 +197,16 @@ export function SandboxCanvas() {
         case "KeyE":
           inputRef.current.yaw = 1;
           break;
+        case "Digit1":
+          applyViewMode("first");
+          break;
+        case "Digit2":
+          applyViewMode("second");
+          break;
+        case "Digit3":
+          applyViewMode("third");
+          break;
+
         case "ShiftLeft":
         case "ShiftRight":
           inputRef.current.boost = true;
@@ -227,7 +255,6 @@ export function SandboxCanvas() {
         default:
           break;
       }
-
     };
 
     window.addEventListener("resize", handleResize);
@@ -243,7 +270,7 @@ export function SandboxCanvas() {
         sandbox: simParams.sandbox,
         camera: {
           ...simParams.camera,
-          smoothing: inputRef.current.boost ? 6 : simParams.camera.smoothing
+          smoothing: inputRef.current.boost ? simParams.camera.smoothing * 1.8 : simParams.camera.smoothing
         },
         craftRadius: simParams.craftRadius
       };
@@ -252,7 +279,6 @@ export function SandboxCanvas() {
         params,
         {
           throttleDelta: inputRef.current.throttle,
-
           rollDelta: inputRef.current.roll,
           yawDelta: inputRef.current.yaw,
           pitchDelta: inputRef.current.pitch
@@ -273,7 +299,6 @@ export function SandboxCanvas() {
           0
         );
         inputRef.current.resetOrientation = false;
-
       }
       syncChunks();
       const { craft, camera: cam } = simRef.current;
@@ -284,8 +309,9 @@ export function SandboxCanvas() {
         new THREE.Vector3(craft.forward[0], craft.forward[1], craft.forward[2])
       );
       craftMesh.setRotationFromMatrix(basis);
+      craftMesh.visible = simRef.current.viewMode !== "first";
       camera.position.set(cam.position[0], cam.position[1], cam.position[2]);
-      camera.lookAt(new THREE.Vector3(craft.position[0], craft.position[1], craft.position[2]));
+      camera.lookAt(new THREE.Vector3(cam.target[0], cam.target[1], cam.target[2]));
       renderer.render(scene, camera);
       setSpeed(craft.speed);
       setTargetSpeed(craft.targetSpeed);
