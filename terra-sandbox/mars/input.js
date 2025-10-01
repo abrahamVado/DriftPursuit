@@ -157,7 +157,9 @@ export class MarsInputManager {
       toggleAuxiliaryLights: this._consumePressed('KeyL'),
       increaseAuxiliaryLights: this._consumePressed(['Equal', 'NumpadAdd']),
       decreaseAuxiliaryLights: this._consumePressed(['Minus', 'NumpadSubtract']),
+
       dropBeacon: this._consumePressed('KeyR'),
+
       clearBeacons: this._consumePressed('KeyX'),
     };
   }
