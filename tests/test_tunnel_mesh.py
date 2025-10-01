@@ -27,7 +27,7 @@ def make_params(**overrides: object) -> TunnelParams:
 
 
 def test_mesh_caps_append_center_vertices() -> None:
-    params = make_params(add_end_caps=True)
+    params = make_params(add_end_caps=True, end_cap_style="fan")
     generator = TunnelTerrainGenerator(params)
     chunk = generator.generate_chunk(0)
     assert chunk.mesh is not None
@@ -60,3 +60,29 @@ def test_mesh_caps_can_be_disabled() -> None:
 
     assert len(mesh.vertices) == expected_vertices
     assert len(mesh.indices) == expected_indices
+
+
+def test_mesh_sleeve_caps_extend_overlap() -> None:
+    params = make_params(add_end_caps=True, end_cap_style="sleeve")
+    generator = TunnelTerrainGenerator(params)
+    chunk = generator.generate_chunk(0)
+    assert chunk.mesh is not None
+    mesh = chunk.mesh
+    ring_count = int(round(params.chunk_length / params.ring_step)) + 1
+
+    expected_vertices = ring_count * params.tube_sides + params.tube_sides * 2
+    expected_indices = (ring_count + 1) * params.tube_sides * 6
+
+    assert len(mesh.vertices) == expected_vertices
+    assert len(mesh.indices) == expected_indices
+
+    sleeve_length = max(params.ring_step * 0.5, 1e-6)
+    start_base = 0
+    start_sleeve_start = ring_count * params.tube_sides
+    start_offset = chunk.rings[0].forward * (-sleeve_length)
+    assert mesh.vertices[start_sleeve_start] == mesh.vertices[start_base] + start_offset
+
+    end_base = (ring_count - 1) * params.tube_sides
+    end_sleeve_start = start_sleeve_start + params.tube_sides
+    end_offset = chunk.rings[-1].forward * sleeve_length
+    assert mesh.vertices[end_sleeve_start] == mesh.vertices[end_base] + end_offset
