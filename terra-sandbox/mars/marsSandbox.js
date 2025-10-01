@@ -81,6 +81,12 @@ export class MarsSandbox {
     this.ambientTarget = 0.18;
 
     this.droneLight = null;
+    this.caveFloodLight = null;
+    this.lanternTurret = null;
+    this._lanternAim = { yaw: 0, pitch: 0 };
+    this._lanternLockAuxLights = true;
+
+    this._railState = null;
 
     // Accents / light budget
     this.enableChunkAccents = false; // flip to true to enable glowing crystal accents
@@ -149,7 +155,9 @@ export class MarsSandbox {
     const shipMesh = createShipMesh();
     this.vehicle.attachMesh(shipMesh);
     this.vehicle.setAuxiliaryLightsActive(false);
+    this._configureLanternTurret(shipMesh);
     this._attachDroneLight(shipMesh);
+    this._attachCaveFloodLight(shipMesh);
     this.scene.add(shipMesh);
     this.vehicleMesh = shipMesh;
 
@@ -158,6 +166,7 @@ export class MarsSandbox {
 
     const spawn = this._getSpawnTransform();
     this.vehicle.reset(spawn);
+    this._initializeRailState(spawn);
     this.terrain?.updateChunks?.(spawn?.position ?? this.vehicle.position);
     this.minimapDirty = true;
     this._minimapTimer = 0;
@@ -205,6 +214,12 @@ export class MarsSandbox {
     this._clearBeacons({ silent: true });
     this._disposeChunkAccents();
     this._disposeAudio();
+    if (this.caveFloodLight) {
+      this.caveFloodLight.parent?.remove(this.caveFloodLight);
+      const glow = this.caveFloodLight.userData?.glow;
+      glow?.parent?.remove(glow);
+      this.caveFloodLight = null;
+    }
     if (this.renderer) {
       this.renderer.dispose();
       this.renderer = null;
@@ -273,11 +288,11 @@ export class MarsSandbox {
 
     this.terrain = new MarsCaveTerrainManager({
       seed: this.seed,
-      chunkSize: 18,
+      chunkSize: 12,
       resolution: 8,
       threshold: 0,
-      horizontalRadius: 3,
-      verticalRadius: 2,
+      horizontalRadius: 2,
+      verticalRadius: 1,
       mode: 'simplified',
     });
     this.terrain.setLifecycleHandlers({
@@ -312,32 +327,49 @@ export class MarsSandbox {
 
     this.inputManager?.update?.(dt);
     const inputState = this.inputManager ? this.inputManager.getState() : {};
+    const throttleAxis = THREE.MathUtils.clamp(
+      inputState.throttleAdjust ?? inputState.throttle ?? 0,
+      -1,
+      1,
+    );
 
     if (inputState.toggleNavigationLights) {
       const next = !this.vehicle.areNavigationLightsEnabled();
       this.vehicle.setNavigationLightsEnabled(next);
       this.hud.setStatus(next ? 'Navigation beacons illuminated.' : 'Navigation beacons darkened.');
     }
-    if (inputState.toggleAuxiliaryLights) {
+    if (!this._lanternLockAuxLights && inputState.toggleAuxiliaryLights) {
       const next = !this.vehicle.auxiliaryLightsEnabled;
       this.vehicle.setAuxiliaryLightsActive(next);
       this.hud.setStatus(next ? 'Auxiliary landing lights engaged.' : 'Auxiliary landing lights offline.');
     }
 
-    const adjustAuxiliaryLights = (delta) => {
-      if (!this.vehicle?.adjustAuxiliaryLightLevel) return;
-      const nextLevel = this.vehicle.adjustAuxiliaryLightLevel(delta);
-      const enabled = this.vehicle.auxiliaryLightsEnabled && nextLevel > 0;
-      if (!enabled) {
-        this.hud.setStatus('Auxiliary landing lights offline.');
-      } else {
-        const percent = Math.round(nextLevel * 100);
-        this.hud.setStatus(`Auxiliary lighting output at ${percent}%.`);
-      }
-    };
+    if (!this._lanternLockAuxLights) {
+      const adjustAuxiliaryLights = (delta) => {
+        if (!this.vehicle?.adjustAuxiliaryLightLevel) return;
+        const nextLevel = this.vehicle.adjustAuxiliaryLightLevel(delta);
+        const enabled = this.vehicle.auxiliaryLightsEnabled && nextLevel > 0;
+        if (!enabled) {
+          this.hud.setStatus('Auxiliary landing lights offline.');
+        } else {
+          const percent = Math.round(nextLevel * 100);
+          this.hud.setStatus(`Auxiliary lighting output at ${percent}%.`);
+        }
+      };
 
-    if (inputState.increaseAuxiliaryLights) adjustAuxiliaryLights(0.1);
-    if (inputState.decreaseAuxiliaryLights) adjustAuxiliaryLights(-0.1);
+      if (inputState.increaseAuxiliaryLights) adjustAuxiliaryLights(0.1);
+      if (inputState.decreaseAuxiliaryLights) adjustAuxiliaryLights(-0.1);
+    } else if (!this.vehicle.auxiliaryLightsEnabled || this.vehicle.getAuxiliaryLightLevel() < 1) {
+      this.vehicle.setAuxiliaryLightsActive(true, 1);
+    }
+
+    inputState.yaw = 0;
+    inputState.roll = 0;
+    inputState.pitch = 0;
+    inputState.boost = false;
+    inputState.throttleAdjust = Math.max(0, throttleAxis);
+    inputState.throttle = inputState.throttleAdjust;
+    inputState.brake = throttleAxis < 0;
 
     if (inputState.dropBeacon) this._deployBeacon();
     if (inputState.clearBeacons) this._clearBeacons();
@@ -351,6 +383,8 @@ export class MarsSandbox {
       collisionRadius: 8.4,
       clearance: { floor: 14, ceiling: 10, lateral: 9.5 },
     });
+
+    this._updateRailMovement(dt, throttleAxis, volumeQuery);
 
     this.terrain?.updateChunks?.(this.vehicle.position);
 
@@ -369,6 +403,8 @@ export class MarsSandbox {
 
     this.projectiles?.update?.(dt);
     this.chaseCamera?.update?.(dt);
+
+    this._updateLanternTurret(inputState.aim, dt);
 
     const vehicleState = this.vehicle.getState(volumeQuery);
     const speedKmh = vehicleState.speed * 3.6;
@@ -441,6 +477,113 @@ export class MarsSandbox {
     mesh.add(light);
     mesh.add(target);
     this.droneLight = light;
+  }
+
+  _attachCaveFloodLight(mesh) {
+    if (!mesh) return;
+    if (this.caveFloodLight) {
+      mesh.add(this.caveFloodLight);
+      const glow = this.caveFloodLight.userData?.glow;
+      if (glow) mesh.add(glow);
+      return;
+    }
+
+    const light = new THREE.PointLight('#f7f4ff', 160, 2400, 0.28);
+    light.name = 'caveFloodLight';
+    light.position.set(0, 3.4, 0.6);
+    light.castShadow = false;
+
+    const glowMaterial = new THREE.MeshBasicMaterial({
+      color: 0xf4f0ff,
+      transparent: true,
+      opacity: 0.2,
+      depthWrite: false,
+      blending: THREE.AdditiveBlending,
+      toneMapped: false,
+    });
+    const glow = new THREE.Mesh(new THREE.SphereGeometry(3.6, 28, 20), glowMaterial);
+    glow.name = 'caveFloodLightGlow';
+    glow.position.copy(light.position);
+    glow.renderOrder = 2;
+    glow.userData.skipShadowAuto = true;
+
+    mesh.add(glow);
+    mesh.add(light);
+
+    light.userData.glow = glow;
+    this.caveFloodLight = light;
+  }
+
+  _configureLanternTurret(mesh) {
+    this.lanternTurret = null;
+    if (!mesh) return;
+    const turret = mesh.getObjectByName?.('LampTurret');
+    const lantern = turret?.userData?.lantern;
+    if (!lantern) return;
+
+    const maxYaw = Number.isFinite(lantern.maxYaw) ? lantern.maxYaw : THREE.MathUtils.degToRad(70);
+    const maxPitch = Number.isFinite(lantern.maxPitch) ? lantern.maxPitch : THREE.MathUtils.degToRad(55);
+    const minPitch = Number.isFinite(lantern.minPitch) ? lantern.minPitch : THREE.MathUtils.degToRad(-35);
+    const maxIntensity = Number.isFinite(lantern.maxIntensity) ? lantern.maxIntensity : 12;
+    const distance = Number.isFinite(lantern.distance) ? lantern.distance : 220;
+
+    this.lanternTurret = {
+      yawPivot: lantern.yawPivot ?? null,
+      pitchPivot: lantern.pitchPivot ?? null,
+      light: lantern.light ?? null,
+      target: lantern.target ?? null,
+      beam: lantern.beam ?? null,
+      maxYaw,
+      maxPitch,
+      minPitch,
+      maxIntensity,
+      distance,
+    };
+
+    if (this.lanternTurret.light) {
+      const light = this.lanternTurret.light;
+      light.visible = true;
+      light.intensity = maxIntensity;
+      light.distance = distance;
+      light.decay = 1.05;
+      light.penumbra = 0.38;
+    }
+    if (this.lanternTurret.beam?.material) {
+      this.lanternTurret.beam.material.opacity = 0.16;
+      this.lanternTurret.beam.material.transparent = true;
+      this.lanternTurret.beam.material.toneMapped = false;
+      this.lanternTurret.beam.material.needsUpdate = true;
+    }
+
+    this._lanternAim.yaw = 0;
+    this._lanternAim.pitch = 0;
+    this.vehicle?.setAuxiliaryLightsActive?.(true, 1);
+  }
+
+  _updateLanternTurret(aim, dt) {
+    if (!this.lanternTurret) return;
+    const { yawPivot, pitchPivot, light, beam, maxYaw, maxPitch, minPitch, maxIntensity, distance } = this.lanternTurret;
+    const aimX = THREE.MathUtils.clamp(aim?.x ?? 0, -1, 1);
+    const aimY = THREE.MathUtils.clamp(aim?.y ?? 0, -1, 1);
+
+    const yawTarget = aimX * maxYaw;
+    const pitchTarget = THREE.MathUtils.clamp(aimY * 0.5 * (maxPitch - minPitch) + (maxPitch + minPitch) * 0.5, minPitch, maxPitch);
+    const smoothing = dt > 0 ? 1 - Math.exp(-9 * dt) : 1;
+    this._lanternAim.yaw += (yawTarget - this._lanternAim.yaw) * smoothing;
+    this._lanternAim.pitch += (pitchTarget - this._lanternAim.pitch) * smoothing;
+
+    if (yawPivot) yawPivot.rotation.z = this._lanternAim.yaw;
+    if (pitchPivot) pitchPivot.rotation.x = this._lanternAim.pitch;
+
+    if (light) {
+      light.intensity = maxIntensity;
+      light.distance = distance;
+      light.visible = true;
+    }
+    if (beam?.material) {
+      beam.material.opacity = 0.18;
+      beam.material.needsUpdate = true;
+    }
   }
 
   _setupAudio() {
@@ -850,6 +993,40 @@ export class MarsSandbox {
     };
   }
 
+  _initializeRailState(spawn) {
+    const origin = spawn?.position ? spawn.position.clone() : this.vehicle?.position.clone() ?? new THREE.Vector3();
+    const yaw = Number.isFinite(spawn?.yaw) ? spawn.yaw : this.vehicle?.yaw ?? Math.PI;
+    const orientation = new THREE.Euler(0, 0, yaw, 'ZXY');
+    const direction = new THREE.Vector3(0, 1, 0).applyEuler(orientation);
+    direction.z = 0;
+    if (direction.lengthSq() < 1e-5) {
+      direction.set(0, -1, 0);
+    }
+    direction.normalize();
+
+    const floorInfo = this._sampleRailFloor(origin);
+    const floor = Number.isFinite(floorInfo?.floor) ? floorInfo.floor : origin.z - 12;
+    const heightOffset = Math.max(6, origin.z - floor);
+
+    this._railState = {
+      origin,
+      direction,
+      distance: 0,
+      velocity: 0,
+      heightOffset,
+      range: 160,
+    };
+
+    this.vehicle.yaw = Math.atan2(direction.x, direction.y);
+    this.vehicle.pitch = 0;
+    this.vehicle.roll = 0;
+    this.vehicle._updateOrientation?.();
+    if (this.vehicle.mesh) {
+      this.vehicle.mesh.quaternion.copy(this.vehicle.orientation);
+      this.vehicle.mesh.position.copy(origin);
+    }
+  }
+
   _findCaveSpawnPoint() {
     if (!this.terrain?.queryVolume) return null;
     const chunkSize = this.terrain?.chunkSize ?? 16;
@@ -898,6 +1075,70 @@ export class MarsSandbox {
     if (!this.terrain?.queryVolume) return null;
     const probe = new THREE.Vector3(x, y, z);
     return this.terrain.queryVolume(probe, { radius: 0, verticalRange: 160, step: 0.5 });
+  }
+
+  _sampleRailFloor(position, volumeQuery = null) {
+    const probe = position instanceof THREE.Vector3 ? position.clone() : new THREE.Vector3(position.x, position.y, position.z ?? 0);
+    let sample = null;
+    if (typeof volumeQuery === 'function') {
+      sample = volumeQuery(probe, { radius: 0, verticalRange: 160, step: 0.5 });
+    } else if (this.terrain?.queryVolume) {
+      sample = this.terrain.queryVolume(probe, { radius: 0, verticalRange: 160, step: 0.5 });
+    }
+    if (sample && (Number.isFinite(sample.floor) || Number.isFinite(sample.ceiling))) {
+      return { floor: sample.floor ?? null, ceiling: sample.ceiling ?? null };
+    }
+    const fallback = this.terrain?.sampleHeight?.(probe.x, probe.y);
+    if (Number.isFinite(fallback)) {
+      return { floor: fallback, ceiling: null };
+    }
+    return null;
+  }
+
+  _updateRailMovement(dt, throttleAxis, volumeQuery) {
+    if (!this._railState || !this.vehicle) return;
+    const state = this._railState;
+    const smoothing = dt > 0 ? 1 - Math.exp(-4.5 * dt) : 1;
+    const maxSpeed = 52;
+    const targetVelocity = throttleAxis * maxSpeed;
+    state.velocity += (targetVelocity - state.velocity) * smoothing;
+
+    let nextDistance = state.distance + state.velocity * dt;
+    if (Number.isFinite(state.range)) {
+      const clamped = THREE.MathUtils.clamp(nextDistance, -state.range, state.range);
+      if (clamped !== nextDistance) {
+        nextDistance = clamped;
+        state.velocity = 0;
+      }
+    }
+    state.distance = nextDistance;
+
+    const position = state.origin.clone().addScaledVector(state.direction, state.distance);
+    const floorInfo = this._sampleRailFloor(position, volumeQuery);
+    const floor = Number.isFinite(floorInfo?.floor) ? floorInfo.floor : position.z - state.heightOffset;
+    const ceiling = Number.isFinite(floorInfo?.ceiling) ? floorInfo.ceiling : null;
+    let targetZ = floor + state.heightOffset;
+    if (Number.isFinite(ceiling)) {
+      targetZ = Math.min(targetZ, ceiling - 6);
+    }
+    position.z = targetZ;
+
+    this.vehicle.position.copy(position);
+    this.vehicle.velocity.copy(state.direction).multiplyScalar(state.velocity);
+    this.vehicle.speed = Math.abs(state.velocity);
+    this.vehicle.altitude = Number.isFinite(floor) ? targetZ - floor : this.vehicle.altitude;
+    this.vehicle.throttle = Math.abs(throttleAxis);
+    this.vehicle.targetThrottle = this.vehicle.throttle;
+
+    this.vehicle.yaw = Math.atan2(state.direction.x, state.direction.y);
+    this.vehicle.pitch = 0;
+    this.vehicle.roll = 0;
+    this.vehicle._updateOrientation?.();
+
+    if (this.vehicle.mesh) {
+      this.vehicle.mesh.position.copy(position);
+      this.vehicle.mesh.quaternion.copy(this.vehicle.orientation);
+    }
   }
 
   _generateSeed() {

@@ -414,11 +414,11 @@ export class MarsCaveTerrainManager {
       const biomeBias = this._biomeDensityBias(this._biomeMask(x, y)) * 0.55;
       return (
         vertical +
-        broad * 0.85 -
-        Math.abs(tunnels) * 0.58 +
-        ripples * 0.3 +
+        broad * 0.82 -
+        Math.abs(tunnels) * 0.46 +
+        ripples * 0.26 +
         biomeBias -
-        0.28
+        0.12
       );
     }
 
@@ -450,14 +450,14 @@ export class MarsCaveTerrainManager {
 
     return (
       vertical +
-      cavernLayer * 0.92 +
-      pocketLayer * 0.46 +
-      tunnelBand * 0.22 +
+      cavernLayer * 0.88 +
+      pocketLayer * 0.32 +
+      tunnelBand * 0.18 +
       radial +
       biomeBias -
-      Math.abs(tunnelLayer) * 0.54 +
+      Math.abs(tunnelLayer) * 0.48 +
       hazards -
-      0.34
+      0.18
     );
   }
 

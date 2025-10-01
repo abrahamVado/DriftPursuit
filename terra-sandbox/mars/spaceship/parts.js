@@ -438,36 +438,54 @@ export function createLampTurretModule(options = {}) {
   group.name = 'LampTurret';
 
   const housingMaterial = new THREE.MeshStandardMaterial({ color: 0x35415c, metalness: 0.6, roughness: 0.34 });
-  const lensMaterial    = new THREE.MeshStandardMaterial({ color: 0xbcdcff, metalness: 0.24, roughness: 0.18, transparent: true, opacity: 0.9, toneMapped: false });
+  const lensMaterial = new THREE.MeshStandardMaterial({
+    color: 0xbcdcff,
+    metalness: 0.24,
+    roughness: 0.18,
+    transparent: true,
+    opacity: 0.9,
+    toneMapped: false,
+  });
 
   const base = new THREE.Mesh(new THREE.CylinderGeometry(0.9, 1.1, 0.7, 14), housingMaterial);
   group.add(base);
 
-  const dome = new THREE.Mesh(new THREE.SphereGeometry(0.9, 18, 14, 0, Math.PI), housingMaterial);
+  const yawPivot = new THREE.Group();
+  yawPivot.name = 'LampTurretYaw';
+  yawPivot.position.set(0, 0.35, 0);
+  group.add(yawPivot);
+
+  const pitchPivot = new THREE.Group();
+  pitchPivot.name = 'LampTurretPitch';
+  pitchPivot.position.set(0, 0.55, 0);
+  yawPivot.add(pitchPivot);
+
+  const dome = new THREE.Mesh(new THREE.SphereGeometry(0.95, 20, 16, 0, Math.PI), housingMaterial);
   dome.rotation.x = Math.PI / 2;
-  dome.position.set(0, 0.6, 0);
-  group.add(dome);
+  dome.position.set(0, 0.2, 0);
+  pitchPivot.add(dome);
 
-  const lens = new THREE.Mesh(new THREE.CylinderGeometry(0.5, 0.5, 0.2, 12), lensMaterial);
-  lens.rotation.x = Math.PI / 2;
-  lens.position.set(0, 0.95, 0);
+  const lens = new THREE.Mesh(new THREE.CylinderGeometry(0.5, 0.5, 0.22, 16), lensMaterial);
+  lens.position.set(0, 0.65, 0);
   lens.userData.skipShadowAuto = true;
-  group.add(lens);
+  pitchPivot.add(lens);
 
-  const spotlight = new THREE.SpotLight(0xcfe9ff, 0, 420, Math.PI / 5.2, 0.34, 1.1);
-  spotlight.position.set(0, 0.8, 0);
+  const spotlight = new THREE.SpotLight(0xd7f1ff, 0, 240, Math.PI / 5.2, 0.32, 1.1);
+  spotlight.name = 'LanternSpotlight';
+  spotlight.position.set(0, 0.65, 0);
+  spotlight.castShadow = false;
   const target = new THREE.Object3D();
-  target.position.set(0, 20, -4);
-  group.add(spotlight);
-  group.add(target);
+  target.name = 'LanternSpotlightTarget';
+  target.position.set(0, 120, 0);
+  pitchPivot.add(spotlight);
+  pitchPivot.add(target);
   spotlight.target = target;
 
   const beamMaterial = new THREE.MeshBasicMaterial({ color: 0xbfe1ff, transparent: true, opacity: 0, toneMapped: false });
-  const beam = new THREE.Mesh(new THREE.ConeGeometry(0.85, 3.6, 16, 1, true), beamMaterial);
-  beam.rotation.x = Math.PI / 2;
-  beam.position.set(0, 1.4, -0.1);
+  const beam = new THREE.Mesh(new THREE.ConeGeometry(1.1, 16, 20, 1, true), beamMaterial);
+  beam.position.set(0, 0.65, 0);
   beam.renderOrder = 3;
-  group.add(beam);
+  pitchPivot.add(beam);
 
   const plugAnchor = new THREE.Object3D();
   plugAnchor.name = 'mount';
@@ -479,7 +497,7 @@ export function createLampTurretModule(options = {}) {
     kind: 'utility',
     size: 1,
     tags: ['nose'],
-    node: plugAnchor
+    node: plugAnchor,
   });
   group.userData.plugs = [plug];
 
@@ -488,8 +506,22 @@ export function createLampTurretModule(options = {}) {
     light: spotlight,
     target,
     material: beamMaterial,
-    maxIntensity: 2.4,
-    minOpacity: 0.04,
+    maxIntensity: 12,
+    minOpacity: 0.08,
+    distance: 220,
+  };
+
+  group.userData.lantern = {
+    yawPivot,
+    pitchPivot,
+    light: spotlight,
+    target,
+    beam,
+    maxYaw: THREE.MathUtils.degToRad(70),
+    maxPitch: THREE.MathUtils.degToRad(55),
+    minPitch: THREE.MathUtils.degToRad(-35),
+    maxIntensity: 12,
+    distance: 220,
   };
 
   group.userData.boundingRadius = 1.4;
