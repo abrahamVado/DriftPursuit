@@ -17,15 +17,19 @@ message RadarFrame {
   repeated RadarContact contacts = 5;
 }
 
-// RadarContact represents a single detection from the emitter's perspective.
+// RadarContact bundles detections originating from a single sensor source.
 message RadarContact {
   string schema_version = 1;
-  string track_id = 2;
-  string entity_id = 3;
-  double range_m = 4;
-  double bearing_deg = 5;
-  double elevation_deg = 6;
-  double radial_velocity_mps = 7;
-  double confidence = 8;
-  InterestTier suggested_tier = 9;
+  string source_entity_id = 2;
+  repeated RadarContactEntry entries = 3;
+}
+
+// RadarContactEntry captures the per-target solution produced by the radar.
+message RadarContactEntry {
+  string target_entity_id = 1;
+  Vector3 position = 2;
+  Vector3 velocity = 3;
+  double confidence = 4;
+  bool occluded = 5;
+  InterestTier suggested_tier = 6;
 }

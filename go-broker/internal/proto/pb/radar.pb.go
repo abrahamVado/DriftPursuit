@@ -2,7 +2,7 @@
 // versions:
 // 	protoc-gen-go v1.36.9
 // 	protoc        v3.21.12
-// source: go-broker/internal/proto/radar.proto
+// source: internal/proto/radar.proto
 
 package pb
 
@@ -35,7 +35,7 @@ type RadarFrame struct {
 
 func (x *RadarFrame) Reset() {
 	*x = RadarFrame{}
-	mi := &file_go_broker_internal_proto_radar_proto_msgTypes[0]
+	mi := &file_internal_proto_radar_proto_msgTypes[0]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -47,7 +47,7 @@ func (x *RadarFrame) String() string {
 func (*RadarFrame) ProtoMessage() {}
 
 func (x *RadarFrame) ProtoReflect() protoreflect.Message {
-	mi := &file_go_broker_internal_proto_radar_proto_msgTypes[0]
+	mi := &file_internal_proto_radar_proto_msgTypes[0]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -60,7 +60,7 @@ func (x *RadarFrame) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RadarFrame.ProtoReflect.Descriptor instead.
 func (*RadarFrame) Descriptor() ([]byte, []int) {
-	return file_go_broker_internal_proto_radar_proto_rawDescGZIP(), []int{0}
+	return file_internal_proto_radar_proto_rawDescGZIP(), []int{0}
 }
 
 func (x *RadarFrame) GetSchemaVersion() string {
@@ -98,25 +98,19 @@ func (x *RadarFrame) GetContacts() []*RadarContact {
 	return nil
 }
 
-// RadarContact represents a single detection from the emitter's perspective.
+// RadarContact bundles detections originating from a single sensor source.
 type RadarContact struct {
-	state             protoimpl.MessageState `protogen:"open.v1"`
-	SchemaVersion     string                 `protobuf:"bytes,1,opt,name=schema_version,json=schemaVersion,proto3" json:"schema_version,omitempty"`
-	TrackId           string                 `protobuf:"bytes,2,opt,name=track_id,json=trackId,proto3" json:"track_id,omitempty"`
-	EntityId          string                 `protobuf:"bytes,3,opt,name=entity_id,json=entityId,proto3" json:"entity_id,omitempty"`
-	RangeM            float64                `protobuf:"fixed64,4,opt,name=range_m,json=rangeM,proto3" json:"range_m,omitempty"`
-	BearingDeg        float64                `protobuf:"fixed64,5,opt,name=bearing_deg,json=bearingDeg,proto3" json:"bearing_deg,omitempty"`
-	ElevationDeg      float64                `protobuf:"fixed64,6,opt,name=elevation_deg,json=elevationDeg,proto3" json:"elevation_deg,omitempty"`
-	RadialVelocityMps float64                `protobuf:"fixed64,7,opt,name=radial_velocity_mps,json=radialVelocityMps,proto3" json:"radial_velocity_mps,omitempty"`
-	Confidence        float64                `protobuf:"fixed64,8,opt,name=confidence,proto3" json:"confidence,omitempty"`
-	SuggestedTier     InterestTier           `protobuf:"varint,9,opt,name=suggested_tier,json=suggestedTier,proto3,enum=driftpursuit.networking.v1.InterestTier" json:"suggested_tier,omitempty"`
-	unknownFields     protoimpl.UnknownFields
-	sizeCache         protoimpl.SizeCache
+	state          protoimpl.MessageState `protogen:"open.v1"`
+	SchemaVersion  string                 `protobuf:"bytes,1,opt,name=schema_version,json=schemaVersion,proto3" json:"schema_version,omitempty"`
+	SourceEntityId string                 `protobuf:"bytes,2,opt,name=source_entity_id,json=sourceEntityId,proto3" json:"source_entity_id,omitempty"`
+	Entries        []*RadarContactEntry   `protobuf:"bytes,3,rep,name=entries,proto3" json:"entries,omitempty"`
+	unknownFields  protoimpl.UnknownFields
+	sizeCache      protoimpl.SizeCache
 }
 
 func (x *RadarContact) Reset() {
 	*x = RadarContact{}
-	mi := &file_go_broker_internal_proto_radar_proto_msgTypes[1]
+	mi := &file_internal_proto_radar_proto_msgTypes[1]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -128,7 +122,7 @@ func (x *RadarContact) String() string {
 func (*RadarContact) ProtoMessage() {}
 
 func (x *RadarContact) ProtoReflect() protoreflect.Message {
-	mi := &file_go_broker_internal_proto_radar_proto_msgTypes[1]
+	mi := &file_internal_proto_radar_proto_msgTypes[1]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -141,7 +135,7 @@ func (x *RadarContact) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RadarContact.ProtoReflect.Descriptor instead.
 func (*RadarContact) Descriptor() ([]byte, []int) {
-	return file_go_broker_internal_proto_radar_proto_rawDescGZIP(), []int{1}
+	return file_internal_proto_radar_proto_rawDescGZIP(), []int{1}
 }
 
 func (x *RadarContact) GetSchemaVersion() string {
@@ -151,120 +145,168 @@ func (x *RadarContact) GetSchemaVersion() string {
 	return ""
 }
 
-func (x *RadarContact) GetTrackId() string {
+func (x *RadarContact) GetSourceEntityId() string {
 	if x != nil {
-		return x.TrackId
+		return x.SourceEntityId
 	}
 	return ""
 }
 
-func (x *RadarContact) GetEntityId() string {
+func (x *RadarContact) GetEntries() []*RadarContactEntry {
 	if x != nil {
-		return x.EntityId
+		return x.Entries
+	}
+	return nil
+}
+
+// RadarContactEntry captures the per-target solution produced by the radar.
+type RadarContactEntry struct {
+	state          protoimpl.MessageState `protogen:"open.v1"`
+	TargetEntityId string                 `protobuf:"bytes,1,opt,name=target_entity_id,json=targetEntityId,proto3" json:"target_entity_id,omitempty"`
+	Position       *Vector3               `protobuf:"bytes,2,opt,name=position,proto3" json:"position,omitempty"`
+	Velocity       *Vector3               `protobuf:"bytes,3,opt,name=velocity,proto3" json:"velocity,omitempty"`
+	Confidence     float64                `protobuf:"fixed64,4,opt,name=confidence,proto3" json:"confidence,omitempty"`
+	Occluded       bool                   `protobuf:"varint,5,opt,name=occluded,proto3" json:"occluded,omitempty"`
+	SuggestedTier  InterestTier           `protobuf:"varint,6,opt,name=suggested_tier,json=suggestedTier,proto3,enum=driftpursuit.networking.v1.InterestTier" json:"suggested_tier,omitempty"`
+	unknownFields  protoimpl.UnknownFields
+	sizeCache      protoimpl.SizeCache
+}
+
+func (x *RadarContactEntry) Reset() {
+	*x = RadarContactEntry{}
+	mi := &file_internal_proto_radar_proto_msgTypes[2]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *RadarContactEntry) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*RadarContactEntry) ProtoMessage() {}
+
+func (x *RadarContactEntry) ProtoReflect() protoreflect.Message {
+	mi := &file_internal_proto_radar_proto_msgTypes[2]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use RadarContactEntry.ProtoReflect.Descriptor instead.
+func (*RadarContactEntry) Descriptor() ([]byte, []int) {
+	return file_internal_proto_radar_proto_rawDescGZIP(), []int{2}
+}
+
+func (x *RadarContactEntry) GetTargetEntityId() string {
+	if x != nil {
+		return x.TargetEntityId
 	}
 	return ""
 }
 
-func (x *RadarContact) GetRangeM() float64 {
+func (x *RadarContactEntry) GetPosition() *Vector3 {
 	if x != nil {
-		return x.RangeM
+		return x.Position
 	}
-	return 0
+	return nil
 }
 
-func (x *RadarContact) GetBearingDeg() float64 {
+func (x *RadarContactEntry) GetVelocity() *Vector3 {
 	if x != nil {
-		return x.BearingDeg
+		return x.Velocity
 	}
-	return 0
+	return nil
 }
 
-func (x *RadarContact) GetElevationDeg() float64 {
-	if x != nil {
-		return x.ElevationDeg
-	}
-	return 0
-}
-
-func (x *RadarContact) GetRadialVelocityMps() float64 {
-	if x != nil {
-		return x.RadialVelocityMps
-	}
-	return 0
-}
-
-func (x *RadarContact) GetConfidence() float64 {
+func (x *RadarContactEntry) GetConfidence() float64 {
 	if x != nil {
 		return x.Confidence
 	}
 	return 0
 }
 
-func (x *RadarContact) GetSuggestedTier() InterestTier {
+func (x *RadarContactEntry) GetOccluded() bool {
+	if x != nil {
+		return x.Occluded
+	}
+	return false
+}
+
+func (x *RadarContactEntry) GetSuggestedTier() InterestTier {
 	if x != nil {
 		return x.SuggestedTier
 	}
 	return InterestTier_INTEREST_TIER_UNSPECIFIED
 }
 
-var File_go_broker_internal_proto_radar_proto protoreflect.FileDescriptor
+var File_internal_proto_radar_proto protoreflect.FileDescriptor
 
-const file_go_broker_internal_proto_radar_proto_rawDesc = "" +
+const file_internal_proto_radar_proto_rawDesc = "" +
 	"\n" +
-	"$go-broker/internal/proto/radar.proto\x12\x1adriftpursuit.networking.v1\x1a$go-broker/internal/proto/types.proto\"\xe6\x01\n" +
+	"\x1ainternal/proto/radar.proto\x12\x1adriftpursuit.networking.v1\x1a$go-broker/internal/proto/types.proto\"\xe6\x01\n" +
 	"\n" +
 	"RadarFrame\x12%\n" +
 	"\x0eschema_version\x18\x01 \x01(\tR\rschemaVersion\x12\x19\n" +
 	"\bframe_id\x18\x02 \x01(\x04R\aframeId\x12*\n" +
 	"\x11emitter_entity_id\x18\x03 \x01(\tR\x0femitterEntityId\x12$\n" +
 	"\x0ecaptured_at_ms\x18\x04 \x01(\x03R\fcapturedAtMs\x12D\n" +
-	"\bcontacts\x18\x05 \x03(\v2(.driftpursuit.networking.v1.RadarContactR\bcontacts\"\xed\x02\n" +
+	"\bcontacts\x18\x05 \x03(\v2(.driftpursuit.networking.v1.RadarContactR\bcontacts\"\xa8\x01\n" +
 	"\fRadarContact\x12%\n" +
-	"\x0eschema_version\x18\x01 \x01(\tR\rschemaVersion\x12\x19\n" +
-	"\btrack_id\x18\x02 \x01(\tR\atrackId\x12\x1b\n" +
-	"\tentity_id\x18\x03 \x01(\tR\bentityId\x12\x17\n" +
-	"\arange_m\x18\x04 \x01(\x01R\x06rangeM\x12\x1f\n" +
-	"\vbearing_deg\x18\x05 \x01(\x01R\n" +
-	"bearingDeg\x12#\n" +
-	"\relevation_deg\x18\x06 \x01(\x01R\felevationDeg\x12.\n" +
-	"\x13radial_velocity_mps\x18\a \x01(\x01R\x11radialVelocityMps\x12\x1e\n" +
+	"\x0eschema_version\x18\x01 \x01(\tR\rschemaVersion\x12(\n" +
+	"\x10source_entity_id\x18\x02 \x01(\tR\x0esourceEntityId\x12G\n" +
+	"\aentries\x18\x03 \x03(\v2-.driftpursuit.networking.v1.RadarContactEntryR\aentries\"\xcc\x02\n" +
+	"\x11RadarContactEntry\x12(\n" +
+	"\x10target_entity_id\x18\x01 \x01(\tR\x0etargetEntityId\x12?\n" +
+	"\bposition\x18\x02 \x01(\v2#.driftpursuit.networking.v1.Vector3R\bposition\x12?\n" +
+	"\bvelocity\x18\x03 \x01(\v2#.driftpursuit.networking.v1.Vector3R\bvelocity\x12\x1e\n" +
 	"\n" +
-	"confidence\x18\b \x01(\x01R\n" +
-	"confidence\x12O\n" +
-	"\x0esuggested_tier\x18\t \x01(\x0e2(.driftpursuit.networking.v1.InterestTierR\rsuggestedTierBR\n" +
+	"confidence\x18\x04 \x01(\x01R\n" +
+	"confidence\x12\x1a\n" +
+	"\boccluded\x18\x05 \x01(\bR\boccluded\x12O\n" +
+	"\x0esuggested_tier\x18\x06 \x01(\x0e2(.driftpursuit.networking.v1.InterestTierR\rsuggestedTierBR\n" +
 	"$build.buf.driftpursuit.networking.v1P\x01Z(driftpursuit/broker/internal/proto/pb;pbb\x06proto3"
 
 var (
-	file_go_broker_internal_proto_radar_proto_rawDescOnce sync.Once
-	file_go_broker_internal_proto_radar_proto_rawDescData []byte
+	file_internal_proto_radar_proto_rawDescOnce sync.Once
+	file_internal_proto_radar_proto_rawDescData []byte
 )
 
-func file_go_broker_internal_proto_radar_proto_rawDescGZIP() []byte {
-	file_go_broker_internal_proto_radar_proto_rawDescOnce.Do(func() {
-		file_go_broker_internal_proto_radar_proto_rawDescData = protoimpl.X.CompressGZIP(unsafe.Slice(unsafe.StringData(file_go_broker_internal_proto_radar_proto_rawDesc), len(file_go_broker_internal_proto_radar_proto_rawDesc)))
+func file_internal_proto_radar_proto_rawDescGZIP() []byte {
+	file_internal_proto_radar_proto_rawDescOnce.Do(func() {
+		file_internal_proto_radar_proto_rawDescData = protoimpl.X.CompressGZIP(unsafe.Slice(unsafe.StringData(file_internal_proto_radar_proto_rawDesc), len(file_internal_proto_radar_proto_rawDesc)))
 	})
-	return file_go_broker_internal_proto_radar_proto_rawDescData
+	return file_internal_proto_radar_proto_rawDescData
 }
 
-var file_go_broker_internal_proto_radar_proto_msgTypes = make([]protoimpl.MessageInfo, 2)
-var file_go_broker_internal_proto_radar_proto_goTypes = []any{
-	(*RadarFrame)(nil),   // 0: driftpursuit.networking.v1.RadarFrame
-	(*RadarContact)(nil), // 1: driftpursuit.networking.v1.RadarContact
-	(InterestTier)(0),    // 2: driftpursuit.networking.v1.InterestTier
+var file_internal_proto_radar_proto_msgTypes = make([]protoimpl.MessageInfo, 3)
+var file_internal_proto_radar_proto_goTypes = []any{
+	(*RadarFrame)(nil),        // 0: driftpursuit.networking.v1.RadarFrame
+	(*RadarContact)(nil),      // 1: driftpursuit.networking.v1.RadarContact
+	(*RadarContactEntry)(nil), // 2: driftpursuit.networking.v1.RadarContactEntry
+	(*Vector3)(nil),           // 3: driftpursuit.networking.v1.Vector3
+	(InterestTier)(0),         // 4: driftpursuit.networking.v1.InterestTier
 }
-var file_go_broker_internal_proto_radar_proto_depIdxs = []int32{
+var file_internal_proto_radar_proto_depIdxs = []int32{
 	1, // 0: driftpursuit.networking.v1.RadarFrame.contacts:type_name -> driftpursuit.networking.v1.RadarContact
-	2, // 1: driftpursuit.networking.v1.RadarContact.suggested_tier:type_name -> driftpursuit.networking.v1.InterestTier
-	2, // [2:2] is the sub-list for method output_type
-	2, // [2:2] is the sub-list for method input_type
-	2, // [2:2] is the sub-list for extension type_name
-	2, // [2:2] is the sub-list for extension extendee
-	0, // [0:2] is the sub-list for field type_name
+	2, // 1: driftpursuit.networking.v1.RadarContact.entries:type_name -> driftpursuit.networking.v1.RadarContactEntry
+	3, // 2: driftpursuit.networking.v1.RadarContactEntry.position:type_name -> driftpursuit.networking.v1.Vector3
+	3, // 3: driftpursuit.networking.v1.RadarContactEntry.velocity:type_name -> driftpursuit.networking.v1.Vector3
+	4, // 4: driftpursuit.networking.v1.RadarContactEntry.suggested_tier:type_name -> driftpursuit.networking.v1.InterestTier
+	5, // [5:5] is the sub-list for method output_type
+	5, // [5:5] is the sub-list for method input_type
+	5, // [5:5] is the sub-list for extension type_name
+	5, // [5:5] is the sub-list for extension extendee
+	0, // [0:5] is the sub-list for field type_name
 }
 
-func init() { file_go_broker_internal_proto_radar_proto_init() }
-func file_go_broker_internal_proto_radar_proto_init() {
-	if File_go_broker_internal_proto_radar_proto != nil {
+func init() { file_internal_proto_radar_proto_init() }
+func file_internal_proto_radar_proto_init() {
+	if File_internal_proto_radar_proto != nil {
 		return
 	}
 	file_go_broker_internal_proto_types_proto_init()
@@ -272,17 +314,17 @@ func file_go_broker_internal_proto_radar_proto_init() {
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
-			RawDescriptor: unsafe.Slice(unsafe.StringData(file_go_broker_internal_proto_radar_proto_rawDesc), len(file_go_broker_internal_proto_radar_proto_rawDesc)),
+			RawDescriptor: unsafe.Slice(unsafe.StringData(file_internal_proto_radar_proto_rawDesc), len(file_internal_proto_radar_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   2,
+			NumMessages:   3,
 			NumExtensions: 0,
 			NumServices:   0,
 		},
-		GoTypes:           file_go_broker_internal_proto_radar_proto_goTypes,
-		DependencyIndexes: file_go_broker_internal_proto_radar_proto_depIdxs,
-		MessageInfos:      file_go_broker_internal_proto_radar_proto_msgTypes,
+		GoTypes:           file_internal_proto_radar_proto_goTypes,
+		DependencyIndexes: file_internal_proto_radar_proto_depIdxs,
+		MessageInfos:      file_internal_proto_radar_proto_msgTypes,
 	}.Build()
-	File_go_broker_internal_proto_radar_proto = out.File
-	file_go_broker_internal_proto_radar_proto_goTypes = nil
-	file_go_broker_internal_proto_radar_proto_depIdxs = nil
+	File_internal_proto_radar_proto = out.File
+	file_internal_proto_radar_proto_goTypes = nil
+	file_internal_proto_radar_proto_depIdxs = nil
 }

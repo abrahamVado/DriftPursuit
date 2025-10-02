@@ -78,9 +78,14 @@ func TestTierManagerBucketsByDistance(t *testing.T) {
 		SchemaVersion: "0.2.0",
 		Contacts: []*pb.RadarContact{
 			{
-				SchemaVersion: "0.2.0",
-				EntityId:      "far",
-				SuggestedTier: pb.InterestTier_INTEREST_TIER_RADAR,
+				SchemaVersion:  "0.2.0",
+				SourceEntityId: "radar-1",
+				Entries: []*pb.RadarContactEntry{
+					{
+						TargetEntityId: "far",
+						SuggestedTier:  pb.InterestTier_INTEREST_TIER_RADAR,
+					},
+				},
 			},
 		},
 	}
