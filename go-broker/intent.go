@@ -7,18 +7,6 @@ import (
 	"time"
 )
 
-const (
-	//1.- Define min/max ranges for analog control channels.
-	intentThrottleMin = -1.0
-	intentThrottleMax = 1.0
-	intentBrakeMin    = 0.0
-	intentBrakeMax    = 1.0
-	intentSteerMin    = -1.0
-	intentSteerMax    = 1.0
-	intentGearMin     = -1
-	intentGearMax     = 9
-)
-
 var (
 	errIntentEmptyPayload   = errors.New("empty intent payload")
 	errIntentMissingID      = errors.New("intent missing controller id")
@@ -64,18 +52,6 @@ func validateIntentPayload(payload *intentPayload) error {
 	}
 	if payload.SequenceID == 0 {
 		return fmt.Errorf("intent sequence id must be positive: %d", payload.SequenceID)
-	}
-	if payload.Throttle < intentThrottleMin || payload.Throttle > intentThrottleMax {
-		return fmt.Errorf("throttle %.2f out of range", payload.Throttle)
-	}
-	if payload.Brake < intentBrakeMin || payload.Brake > intentBrakeMax {
-		return fmt.Errorf("brake %.2f out of range", payload.Brake)
-	}
-	if payload.Steer < intentSteerMin || payload.Steer > intentSteerMax {
-		return fmt.Errorf("steer %.2f out of range", payload.Steer)
-	}
-	if payload.Gear < intentGearMin || payload.Gear > intentGearMax {
-		return fmt.Errorf("gear %d out of range", payload.Gear)
 	}
 	return nil
 }
