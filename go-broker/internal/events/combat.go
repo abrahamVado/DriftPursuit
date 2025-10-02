@@ -3,6 +3,7 @@ package events
 import (
 	"time"
 
+	"driftpursuit/broker/internal/gameplay"
 	pb "driftpursuit/broker/internal/proto/pb"
 )
 
@@ -22,30 +23,41 @@ type DamageDetails struct {
 
 // CombatTelemetry describes a combat event before protobuf serialization.
 type CombatTelemetry struct {
-	SchemaVersion    string
-	EventID          string
-	OccurredAt       time.Time
-	Kind             pb.CombatEventKind
-	AttackerEntityID string
-	DefenderEntityID string
-	Position         Vector3
-	Direction        Vector3
-	Damage           DamageDetails
-	Metadata         map[string]string
+	SchemaVersion     string
+	EventID           string
+	OccurredAt        time.Time
+	Kind              pb.CombatEventKind
+	AttackerEntityID  string
+	DefenderEntityID  string
+	AttackerLoadoutID string
+	Position          Vector3
+	Direction         Vector3
+	Damage            DamageDetails
+	Metadata          map[string]string
 }
 
 // ToProto converts the combat telemetry into the protobuf CombatEvent message.
 func (c CombatTelemetry) ToProto() *pb.CombatEvent {
 	//1.- Clean the metadata map to avoid empty keys or nil maps leaking to clients.
-	metadata := make(map[string]string, len(c.Metadata))
+	metadata := make(map[string]string, len(c.Metadata)+1)
 	for key, value := range c.Metadata {
 		if key == "" {
 			continue
 		}
 		metadata[key] = value
 	}
+	if c.AttackerLoadoutID != "" {
+		metadata["loadout"] = c.AttackerLoadoutID
+	}
 
-	//2.- Assemble the protobuf CombatEvent with normalized vectors and damage snapshot.
+	//2.- Apply the passive damage multiplier derived from the loadout catalogue.
+	multiplier := gameplay.LoadoutDamageMultiplier(c.AttackerLoadoutID)
+	if multiplier <= 0 {
+		multiplier = 1
+	}
+	damageAmount := c.Damage.Amount * multiplier
+
+	//3.- Assemble the protobuf CombatEvent with normalized vectors and damage snapshot.
 	return &pb.CombatEvent{
 		SchemaVersion:    c.SchemaVersion,
 		EventId:          c.EventID,
@@ -56,7 +68,7 @@ func (c CombatTelemetry) ToProto() *pb.CombatEvent {
 		Position:         vectorToProto(c.Position),
 		Direction:        vectorToProto(c.Direction),
 		Damage: &pb.DamageSummary{
-			Amount:   c.Damage.Amount,
+			Amount:   damageAmount,
 			Type:     c.Damage.Type,
 			Critical: c.Damage.Critical,
 		},

@@ -64,13 +64,13 @@ func wrapAngleDeg(angle float64) float64 {
 }
 
 // integrateLinear applies velocity over the timestep to update the position.
-func integrateLinear(position *pb.Vector3, velocity *pb.Vector3, step float64) {
+func integrateLinear(position *pb.Vector3, velocity *pb.Vector3, step float64, stats gameplay.VehicleStats) {
 	//1.- Skip integration when inputs are missing or invalid.
 	if position == nil || velocity == nil || step <= 0 {
 		return
 	}
-	//2.- Clamp the velocity vector to the Skiff limit to keep runtimes consistent.
-	clampVec3Magnitude(velocity, gameplay.SkiffStats().MaxSpeedMps)
+	//2.- Clamp the velocity vector to the loadout adjusted limit for parity across runtimes.
+	clampVec3Magnitude(velocity, stats.MaxSpeedMps)
 	//3.- Advance each axis using the standard Euler integration.
 	position.X += velocity.X * step
 	position.Y += velocity.Y * step
@@ -78,13 +78,13 @@ func integrateLinear(position *pb.Vector3, velocity *pb.Vector3, step float64) {
 }
 
 // integrateAngular applies angular velocity to the Euler orientation.
-func integrateAngular(orientation *pb.Orientation, angularVelocity *pb.Vector3, step float64) {
+func integrateAngular(orientation *pb.Orientation, angularVelocity *pb.Vector3, step float64, stats gameplay.VehicleStats) {
 	//1.- Require valid orientation data before attempting integration.
 	if orientation == nil || angularVelocity == nil || step <= 0 {
 		return
 	}
-	//2.- Clamp the angular velocity magnitude against the Skiff configuration.
-	clampVec3Magnitude(angularVelocity, gameplay.SkiffStats().MaxAngularSpeedDegPerSec)
+	//2.- Clamp the angular velocity magnitude against the loadout configuration.
+	clampVec3Magnitude(angularVelocity, stats.MaxAngularSpeedDegPerSec)
 	//3.- Update each Euler component in degrees per second then wrap.
 	orientation.YawDeg = wrapAngleDeg(orientation.YawDeg + angularVelocity.Y*step)
 	orientation.PitchDeg = wrapAngleDeg(orientation.PitchDeg + angularVelocity.X*step)
@@ -93,12 +93,17 @@ func integrateAngular(orientation *pb.Orientation, angularVelocity *pb.Vector3, 
 
 // IntegrateVehicle advances both linear and angular state for the vehicle.
 func IntegrateVehicle(state *pb.VehicleState, step float64) {
+	IntegrateVehicleWithStats(state, gameplay.SkiffStats(), step)
+}
+
+// IntegrateVehicleWithStats applies integration using the provided tuning parameters.
+func IntegrateVehicleWithStats(state *pb.VehicleState, stats gameplay.VehicleStats, step float64) {
 	//1.- Guard against nil or invalid timesteps for robustness.
 	if state == nil || step <= 0 {
 		return
 	}
 	//2.- Integrate translation if both position and velocity are present.
-	integrateLinear(state.Position, state.Velocity, step)
+	integrateLinear(state.Position, state.Velocity, step, stats)
 	//3.- Integrate rotation using the angular velocity channel.
-	integrateAngular(state.Orientation, state.AngularVelocity, step)
+	integrateAngular(state.Orientation, state.AngularVelocity, step, stats)
 }

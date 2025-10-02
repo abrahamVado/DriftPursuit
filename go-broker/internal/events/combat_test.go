@@ -11,15 +11,16 @@ func TestCombatTelemetryToProto(t *testing.T) {
 	//1.- Arrange a combat telemetry sample with rich data to exercise conversions.
 	occurredAt := time.UnixMilli(1723420005123)
 	telemetry := CombatTelemetry{
-		SchemaVersion:    "0.2.0",
-		EventID:          "evt-123",
-		OccurredAt:       occurredAt,
-		Kind:             pb.CombatEventKind_COMBAT_EVENT_KIND_DIRECT_HIT,
-		AttackerEntityID: "vehicle-alpha",
-		DefenderEntityID: "vehicle-bravo",
-		Position:         Vector3{X: 1.5, Y: 2.5, Z: 3.5},
-		Direction:        Vector3{X: 0.0, Y: 1.0, Z: 0.0},
-		Damage:           DamageDetails{Amount: 42.5, Type: "plasma", Critical: true},
+		SchemaVersion:     "0.2.0",
+		EventID:           "evt-123",
+		OccurredAt:        occurredAt,
+		Kind:              pb.CombatEventKind_COMBAT_EVENT_KIND_DIRECT_HIT,
+		AttackerEntityID:  "vehicle-alpha",
+		DefenderEntityID:  "vehicle-bravo",
+		AttackerLoadoutID: "skiff-tank",
+		Position:          Vector3{X: 1.5, Y: 2.5, Z: 3.5},
+		Direction:         Vector3{X: 0.0, Y: 1.0, Z: 0.0},
+		Damage:            DamageDetails{Amount: 42.5, Type: "plasma", Critical: true},
 		Metadata: map[string]string{
 			"weapon": "ion-cannon",
 			"":       "ignore-me",
@@ -54,11 +55,17 @@ func TestCombatTelemetryToProto(t *testing.T) {
 	if msg.Direction == nil || msg.Direction.Y != telemetry.Direction.Y {
 		t.Fatalf("direction mismatch: %+v", msg.Direction)
 	}
-	if msg.Damage == nil || msg.Damage.Amount != telemetry.Damage.Amount {
-		t.Fatalf("damage mismatch: %+v", msg.Damage)
+	if msg.Damage == nil {
+		t.Fatalf("expected damage payload")
+	}
+	if msg.Damage.Amount <= telemetry.Damage.Amount {
+		t.Fatalf("expected loadout boosted damage, got %.2f", msg.Damage.Amount)
 	}
 	if msg.Metadata["weapon"] != "ion-cannon" {
 		t.Fatalf("expected metadata to retain weapon entry: %+v", msg.Metadata)
+	}
+	if msg.Metadata["loadout"] != "skiff-tank" {
+		t.Fatalf("expected loadout metadata to be populated")
 	}
 	if _, exists := msg.Metadata[""]; exists {
 		t.Fatalf("expected empty metadata key to be pruned")

@@ -1,0 +1,55 @@
+{
+  "loadouts": [
+    {
+      "id": "skiff-strike",
+      "displayName": "Strike",
+      "description": "Balanced strike package pairing pulse cannons with micromissiles.",
+      "icon": "icons/strike.svg",
+      "selectable": true,
+      "weapons": [
+        { "type": "pulse-cannon", "ammo": 320 },
+        { "type": "micro-missile", "ammo": 6 }
+      ],
+      "passiveModifiers": {
+        "speedMultiplier": 1.0,
+        "agilityMultiplier": 1.0,
+        "damageMultiplier": 1.0,
+        "boostCooldownScale": 1.0
+      }
+    },
+    {
+      "id": "skiff-raider",
+      "displayName": "Raider",
+      "description": "High-speed interdiction kit with scatter lasers and extra fuel.",
+      "icon": "icons/raider.svg",
+      "selectable": true,
+      "weapons": [
+        { "type": "scatter-laser", "ammo": 240 },
+        { "type": "emp-torpedo", "ammo": 2 }
+      ],
+      "passiveModifiers": {
+        "speedMultiplier": 1.1,
+        "agilityMultiplier": 0.85,
+        "damageMultiplier": 0.9,
+        "boostCooldownScale": 0.85
+      }
+    },
+    {
+      "id": "skiff-tank",
+      "displayName": "Tank",
+      "description": "Future armored refit trading speed for heavier plasma batteries.",
+      "icon": "icons/tank.svg",
+      "selectable": false,
+      "weapons": [
+        { "type": "heavy-plasma", "ammo": 180 },
+        { "type": "flak-pod", "ammo": 8 }
+      ],
+      "passiveModifiers": {
+        "speedMultiplier": 0.85,
+        "agilityMultiplier": 0.8,
+        "damageMultiplier": 1.25,
+        "boostCooldownScale": 1.15
+      }
+    }
+  ]
+}

@@ -2,7 +2,7 @@ import assert from "node:assert";
 import {
   SnapshotInterpolator,
   SnapshotSample,
-} from "../../tunnelcave_sandbox_web/src/networking/interpolator";
+} from "./networking/interpolator";
 
 function makeSample(overrides: Partial<SnapshotSample>): SnapshotSample {
   return {

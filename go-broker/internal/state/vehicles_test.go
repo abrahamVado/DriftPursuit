@@ -14,6 +14,9 @@ func TestVehicleStoreUpsertAndDiff(t *testing.T) {
 	vehicle := &pb.VehicleState{VehicleId: "veh-1", Position: &pb.Vector3{}, Velocity: &pb.Vector3{X: 10}}
 
 	store.Upsert(vehicle)
+	if id := store.LoadoutFor("veh-1"); id == "" {
+		t.Fatalf("expected default loadout assignment")
+	}
 	diff := store.ConsumeDiff()
 	if len(diff.Updated) != 1 {
 		t.Fatalf("expected 1 updated vehicle, got %d", len(diff.Updated))
@@ -39,6 +42,29 @@ func TestVehicleStoreAdvanceMarksDirty(t *testing.T) {
 	}
 	if diff.Updated[0].Position.Y != 2.5 {
 		t.Fatalf("unexpected Y position %.2f", diff.Updated[0].Position.Y)
+	}
+}
+
+func TestVehicleStoreAppliesLoadoutModifiers(t *testing.T) {
+	control := NewVehicleStore()
+	control.Upsert(&pb.VehicleState{VehicleId: "veh-base", Position: &pb.Vector3{}, Velocity: &pb.Vector3{X: 500}})
+	control.ConsumeDiff()
+
+	store := NewVehicleStore()
+	vehicle := &pb.VehicleState{VehicleId: "veh-loadout", Position: &pb.Vector3{}, Velocity: &pb.Vector3{X: 500}}
+	store.Upsert(vehicle)
+	store.AssignLoadout("veh-loadout", "skiff-raider")
+	store.ConsumeDiff()
+
+	control.Advance(1)
+	store.Advance(1)
+	baseDiff := control.ConsumeDiff()
+	boostedDiff := store.ConsumeDiff()
+	if len(baseDiff.Updated) != 1 || len(boostedDiff.Updated) != 1 {
+		t.Fatalf("expected both stores to report updates")
+	}
+	if boostedDiff.Updated[0].Position.X <= baseDiff.Updated[0].Position.X {
+		t.Fatalf("expected loadout to increase travel distance, base %.2f loadout %.2f", baseDiff.Updated[0].Position.X, boostedDiff.Updated[0].Position.X)
 	}
 }
 
