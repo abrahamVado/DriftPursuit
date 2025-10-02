@@ -16,133 +16,14 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
-	"path/filepath"
-	"runtime"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
+	configpkg "driftpursuit/broker/internal/config"
 	"github.com/gorilla/websocket"
 )
-
-/***************
- * Test helpers
- ***************/
-
-// ensureViewerFixture makes sure ../viewer/index.html exists relative to this file.
-// If it creates the directory/file, it will clean them up after the test.
-func ensureViewerFixture(t *testing.T) {
-	t.Helper()
-
-	_, thisFile, _, ok := runtime.Caller(0)
-	if !ok {
-		t.Fatalf("runtime.Caller failed")
-	}
-	viewerDir := filepath.Clean(filepath.Join(filepath.Dir(thisFile), "..", "viewer"))
-	indexPath := filepath.Join(viewerDir, "index.html")
-
-	// Track whether we created things, so we can clean up.
-	var createdDir, createdFile bool
-
-	if _, err := os.Stat(viewerDir); os.IsNotExist(err) {
-		if err := os.MkdirAll(viewerDir, 0o755); err != nil {
-			t.Fatalf("mkdir viewer dir: %v", err)
-		}
-		createdDir = true
-	}
-	if _, err := os.Stat(indexPath); os.IsNotExist(err) {
-		if err := os.WriteFile(indexPath, []byte("<!doctype html><title>viewer</title>ok"), 0o644); err != nil {
-			t.Fatalf("write viewer/index.html: %v", err)
-		}
-		createdFile = true
-	}
-
-	// Cleanup only what we created.
-	t.Cleanup(func() {
-		if createdFile {
-			_ = os.Remove(indexPath)
-		}
-		if createdDir {
-			_ = os.Remove(viewerDir)
-		}
-	})
-}
-
-func ensureViewerMissing(t *testing.T) {
-	t.Helper()
-
-	_, thisFile, _, ok := runtime.Caller(0)
-	if !ok {
-		t.Fatalf("runtime.Caller failed")
-	}
-	viewerDir := filepath.Clean(filepath.Join(filepath.Dir(thisFile), "..", "viewer"))
-
-	info, err := os.Stat(viewerDir)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return
-		}
-		t.Fatalf("stat viewer dir: %v", err)
-	}
-	if !info.IsDir() {
-		t.Fatalf("viewer path exists but is not a directory: %s", viewerDir)
-	}
-
-	backupDir := viewerDir
-	for i := 0; ; i++ {
-		candidate := fmt.Sprintf("%s-backup-%d", viewerDir, i)
-		if _, err := os.Stat(candidate); os.IsNotExist(err) {
-			backupDir = candidate
-			break
-		}
-	}
-
-	if err := os.Rename(viewerDir, backupDir); err != nil {
-		t.Fatalf("rename viewer dir for backup: %v", err)
-	}
-
-	t.Cleanup(func() {
-		if err := os.Rename(backupDir, viewerDir); err != nil {
-			t.Fatalf("restore viewer dir: %v", err)
-		}
-	})
-}
-
-func ensureTerraSandboxFixture(t *testing.T) {
-	t.Helper()
-
-	_, thisFile, _, ok := runtime.Caller(0)
-	if !ok {
-		t.Fatalf("runtime.Caller failed")
-	}
-	sandboxDir := filepath.Clean(filepath.Join(filepath.Dir(thisFile), "..", "terra-sandbox"))
-	indexPath := filepath.Join(sandboxDir, "index.html")
-
-	var createdDir, createdFile bool
-
-	if _, err := os.Stat(sandboxDir); os.IsNotExist(err) {
-		if err := os.MkdirAll(sandboxDir, 0o755); err != nil {
-			t.Fatalf("mkdir terra-sandbox dir: %v", err)
-		}
-		createdDir = true
-	}
-	if _, err := os.Stat(indexPath); os.IsNotExist(err) {
-		if err := os.WriteFile(indexPath, []byte("<!doctype html><title>terra sandbox</title>ok"), 0o644); err != nil {
-			t.Fatalf("write terra-sandbox/index.html: %v", err)
-		}
-		createdFile = true
-	}
-
-	t.Cleanup(func() {
-		if createdFile {
-			_ = os.Remove(indexPath)
-		}
-		if createdDir {
-			_ = os.Remove(sandboxDir)
-		}
-	})
-}
 
 // generateSelfSignedCert returns temp file paths for a short-lived self-signed cert/key.
 func generateSelfSignedCert(t *testing.T) (certFile, keyFile string) {
@@ -203,21 +84,15 @@ func generateSelfSignedCert(t *testing.T) (certFile, keyFile string) {
 }
 
 /******************************
- * Tests: TLS + static viewer
+ * Tests: TLS + handler wiring
  ******************************/
 
-func TestBrokerServesViewerOverTLS(t *testing.T) {
-	ensureViewerFixture(t)
-	ensureTerraSandboxFixture(t)
-
+func TestBrokerAPIsAccessibleOverTLS(t *testing.T) {
 	certFile, keyFile := generateSelfSignedCert(t)
 
-	broker := NewBroker(defaultMaxPayloadBytes, 256, time.Now())
+	broker := NewBroker(configpkg.DefaultMaxPayloadBytes, configpkg.DefaultMaxClients, time.Now())
 
-	handler, err := buildHandler(broker)
-	if err != nil {
-		t.Fatalf("buildHandler: %v", err)
-	}
+	handler := buildHandler(broker)
 
 	srv := &http.Server{Addr: "127.0.0.1:0", Handler: handler}
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
@@ -230,7 +105,6 @@ func TestBrokerServesViewerOverTLS(t *testing.T) {
 		serverErr <- srv.ServeTLS(ln, certFile, keyFile)
 	}()
 
-	// Insecure client (ok for test)
 	client := &http.Client{
 		Transport: &http.Transport{
 			TLSClientConfig: &tls.Config{InsecureSkipVerify: true}, //nolint:gosec
@@ -238,26 +112,14 @@ func TestBrokerServesViewerOverTLS(t *testing.T) {
 		Timeout: 5 * time.Second,
 	}
 
-	u := fmt.Sprintf("https://%s/viewer/index.html", ln.Addr().String())
-	resp, err := client.Get(u)
+	resp, err := client.Get(fmt.Sprintf("https://%s/healthz", ln.Addr().String()))
 	if err != nil {
-		t.Fatalf("GET viewer: %v", err)
+		t.Fatalf("GET healthz: %v", err)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("unexpected status: %d", resp.StatusCode)
-	}
-
-	sandboxURL := fmt.Sprintf("https://%s/terra-sandbox/index.html", ln.Addr().String())
-	respSandbox, err := client.Get(sandboxURL)
-	if err != nil {
-		t.Fatalf("GET terra-sandbox: %v", err)
-	}
-	defer respSandbox.Body.Close()
-
-	if respSandbox.StatusCode != http.StatusOK {
-		t.Fatalf("unexpected terra-sandbox status: %d", respSandbox.StatusCode)
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
@@ -271,41 +133,40 @@ func TestBrokerServesViewerOverTLS(t *testing.T) {
 	}
 }
 
-func TestBuildHandlerWithoutViewer(t *testing.T) {
-	ensureViewerMissing(t)
-	ensureTerraSandboxFixture(t)
+func TestBuildHandlerRegistersRoutes(t *testing.T) {
+	broker := NewBroker(configpkg.DefaultMaxPayloadBytes, configpkg.DefaultMaxClients, time.Now())
 
-	broker := NewBroker(defaultMaxPayloadBytes, 256, time.Now())
-
-	handler, err := buildHandler(broker)
-	if err != nil {
-		t.Fatalf("buildHandler: %v", err)
-	}
-
-	srv := httptest.NewServer(handler)
+	srv := httptest.NewServer(buildHandler(broker))
 	t.Cleanup(srv.Close)
 
 	client := srv.Client()
 	client.Timeout = 5 * time.Second
 
-	respViewer, err := client.Get(srv.URL + "/viewer/index.html")
+	respHealth, err := client.Get(srv.URL + "/healthz")
 	if err != nil {
-		t.Fatalf("GET viewer: %v", err)
+		t.Fatalf("GET healthz: %v", err)
 	}
-	respViewer.Body.Close()
-
-	if respViewer.StatusCode != http.StatusNotFound {
-		t.Fatalf("expected viewer to be unavailable, got status %d", respViewer.StatusCode)
+	respHealth.Body.Close()
+	if respHealth.StatusCode != http.StatusOK {
+		t.Fatalf("expected healthz 200, got %d", respHealth.StatusCode)
 	}
 
-	respSandbox, err := client.Get(srv.URL + "/terra-sandbox/index.html")
+	respStats, err := client.Get(srv.URL + "/api/stats")
 	if err != nil {
-		t.Fatalf("GET terra-sandbox: %v", err)
+		t.Fatalf("GET stats: %v", err)
 	}
-	respSandbox.Body.Close()
+	respStats.Body.Close()
+	if respStats.StatusCode != http.StatusOK {
+		t.Fatalf("expected stats 200, got %d", respStats.StatusCode)
+	}
 
-	if respSandbox.StatusCode != http.StatusOK {
-		t.Fatalf("expected terra-sandbox to be served, got status %d", respSandbox.StatusCode)
+	respNotFound, err := client.Get(srv.URL + "/does-not-exist")
+	if err != nil {
+		t.Fatalf("GET not-found: %v", err)
+	}
+	respNotFound.Body.Close()
+	if respNotFound.StatusCode != http.StatusNotFound {
+		t.Fatalf("expected not-found 404, got %d", respNotFound.StatusCode)
 	}
 }
 
@@ -413,7 +274,7 @@ func TestStatsHandlerHonorsLocking(t *testing.T) {
 
 func TestHealthzHandlerHealthy(t *testing.T) {
 	started := time.Now().Add(-2 * time.Second)
-	broker := NewBroker(defaultMaxPayloadBytes, 5, started)
+	broker := NewBroker(configpkg.DefaultMaxPayloadBytes, 5, started)
 	broker.lock.Lock()
 	broker.stats.Clients = 3
 	broker.pendingClients = 1
@@ -455,7 +316,7 @@ func TestHealthzHandlerHealthy(t *testing.T) {
 }
 
 func TestHealthzHandlerStartupError(t *testing.T) {
-	broker := NewBroker(defaultMaxPayloadBytes, 0, time.Now())
+	broker := NewBroker(configpkg.DefaultMaxPayloadBytes, 0, time.Now())
 	broker.setStartupError(errors.New("boom"))
 
 	req := httptest.NewRequest(http.MethodGet, "/healthz", nil)
@@ -508,7 +369,7 @@ func listenOnce(conn *websocket.Conn) <-chan wsReadResult {
 
 func TestServeWSDropsInvalidMessages(t *testing.T) {
 	upgrader.CheckOrigin = func(*http.Request) bool { return true }
-	broker := NewBroker(defaultMaxPayloadBytes, 0, time.Now())
+	broker := NewBroker(configpkg.DefaultMaxPayloadBytes, 0, time.Now())
 
 	server := httptest.NewServer(http.HandlerFunc(broker.serveWS))
 	defer server.Close()
@@ -639,7 +500,7 @@ func TestServeWSRejectsOversizedMessages(t *testing.T) {
 
 func TestServeWSRejectsWhenAtCapacity(t *testing.T) {
 	// Limit to 1 client
-	b := NewBroker(defaultMaxPayloadBytes, 1, time.Now())
+	b := NewBroker(configpkg.DefaultMaxPayloadBytes, 1, time.Now())
 
 	// Pretend one client is already connected
 	existing := &Client{send: make(chan []byte, 1)}

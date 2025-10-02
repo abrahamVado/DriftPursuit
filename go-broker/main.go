@@ -3,25 +3,18 @@ package main
 import (
 	"encoding/json"
 	"errors"
-	"flag"
 	"fmt"
 	"log"
-	"mime"
 	"net"
 	"net/http"
 	"net/url"
-	"os"
-	"path/filepath"
-	"runtime"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
 
+	configpkg "driftpursuit/broker/internal/config"
 	"github.com/gorilla/websocket"
 )
-
-const defaultMaxPayloadBytes int64 = 1 << 20 // 1 MiB
 
 // Will be configured in main() after parsing flags/env.
 var upgrader = websocket.Upgrader{}
@@ -31,7 +24,7 @@ const (
 	pongWaitMultiplier = 2                // read deadline = pingInterval * multiplier
 )
 
-var pingInterval = 30 * time.Second // overridden by --ping-interval
+var pingInterval = configpkg.DefaultPingInterval
 
 // Always allow localhost for dev convenience.
 var localHosts = map[string]struct{}{
@@ -63,7 +56,7 @@ type Broker struct {
 
 func NewBroker(maxPayloadBytes int64, maxClients int, startedAt time.Time) *Broker {
 	if maxPayloadBytes <= 0 {
-		maxPayloadBytes = defaultMaxPayloadBytes
+		maxPayloadBytes = configpkg.DefaultMaxPayloadBytes
 	}
 	return &Broker{
 		clients:         make(map[*Client]bool),
@@ -80,19 +73,6 @@ type BrokerStats struct {
 
 type statsProvider interface {
 	Stats() BrokerStats
-}
-
-func intFromEnv(key string, fallback int) int {
-	raw := os.Getenv(key)
-	if raw == "" {
-		return fallback
-	}
-	value, err := strconv.Atoi(raw)
-	if err != nil || value < 0 {
-		log.Printf("invalid %s value %q: %v; falling back to %d", key, raw, err, fallback)
-		return fallback
-	}
-	return value
 }
 
 func (b *Broker) deregisterClient(client *Client) {
@@ -406,49 +386,16 @@ func healthzHandler(b *Broker) http.HandlerFunc {
 func main() {
 	startedAt := time.Now()
 
-	// allowed origins
-	allowedOriginsDefault := os.Getenv("BROKER_ALLOWED_ORIGINS")
-
-	// max payload default (env can override)
-	maxPayloadDefault := defaultMaxPayloadBytes
-	if envMax := os.Getenv("BROKER_MAX_PAYLOAD_BYTES"); envMax != "" {
-		if parsed, err := strconv.ParseInt(envMax, 10, 64); err != nil {
-			log.Printf("invalid BROKER_MAX_PAYLOAD_BYTES %q: %v", envMax, err)
-		} else if parsed <= 0 {
-			log.Printf("BROKER_MAX_PAYLOAD_BYTES must be positive, got %d", parsed)
-		} else {
-			maxPayloadDefault = parsed
-		}
+	cfg, err := configpkg.Load()
+	if err != nil {
+		log.Fatalf("failed to load configuration: %v", err)
 	}
-
-	// flags
-	allowedOriginsFlag := flag.String("allowed-origins", allowedOriginsDefault, "Comma-separated list of allowed origins for WebSocket connections")
-	addr := flag.String("addr", ":43127", "address to listen on") // default to match python client
-
-	// TLS flags
-	tlsCertDefault := os.Getenv("BROKER_TLS_CERT")
-	tlsKeyDefault := os.Getenv("BROKER_TLS_KEY")
-	tlsCert := flag.String("tls-cert", tlsCertDefault, "Path to the TLS certificate file")
-	tlsKey := flag.String("tls-key", tlsKeyDefault, "Path to the TLS private key file")
-
-	// payload + keepalive
-	maxPayloadFlag := flag.Int64("max-payload-bytes", maxPayloadDefault, "Maximum size in bytes for inbound WebSocket messages")
-	pingFlag := flag.Duration("ping-interval", pingInterval, "interval between WebSocket ping frames for connection liveness")
-
-	// capacity limit
-	maxClientsDefault := intFromEnv("BROKER_MAX_CLIENTS", 256)
-	maxClientsFlag := flag.Int("max-clients", maxClientsDefault, "Maximum number of simultaneous WebSocket clients (0 = unlimited)")
-
-	flag.Parse()
 
 	// ping interval
-	if *pingFlag <= 0 {
-		log.Fatalf("ping interval must be positive, got %v", *pingFlag)
-	}
-	pingInterval = *pingFlag
+	pingInterval = cfg.PingInterval
 
 	// origin policy
-	allowlist := parseAllowedOrigins(*allowedOriginsFlag)
+	allowlist := cfg.AllowedOrigins
 	upgrader.CheckOrigin = buildOriginChecker(allowlist)
 	if len(allowlist) > 0 {
 		log.Printf("allowing WebSocket origins: %s", strings.Join(allowlist, ", "))
@@ -457,18 +404,15 @@ func main() {
 	}
 
 	// payload policy
-	maxPayloadBytes := *maxPayloadFlag
+	maxPayloadBytes := cfg.MaxPayloadBytes
 	if maxPayloadBytes <= 0 {
-		log.Printf("invalid max-payload-bytes value %d; using default %d", maxPayloadBytes, defaultMaxPayloadBytes)
-		maxPayloadBytes = defaultMaxPayloadBytes
+		log.Printf("invalid max payload %d; using default %d", maxPayloadBytes, configpkg.DefaultMaxPayloadBytes)
+		maxPayloadBytes = configpkg.DefaultMaxPayloadBytes
 	}
 	log.Printf("maximum WebSocket payload set to %d bytes", maxPayloadBytes)
 
 	// capacity policy
-	maxClients := *maxClientsFlag
-	if maxClients < 0 {
-		maxClients = maxClientsDefault
-	}
+	maxClients := cfg.MaxClients
 	if maxClients > 0 {
 		log.Printf("limiting WebSocket clients to %d", maxClients)
 	} else {
@@ -476,83 +420,31 @@ func main() {
 	}
 
 	// TLS config sanity
-	certProvided := strings.TrimSpace(*tlsCert) != ""
-	keyProvided := strings.TrimSpace(*tlsKey) != ""
-	if certProvided != keyProvided {
-		log.Fatalf("TLS configuration error: both --tls-cert and --tls-key (or BROKER_TLS_CERT/BROKER_TLS_KEY) must be provided together")
-	}
+	certProvided := cfg.TLSCertPath != ""
 
 	broker := NewBroker(maxPayloadBytes, maxClients, startedAt)
 
 	// build handler with consistent mux
-	handler, err := buildHandler(broker)
-	if err != nil {
-		broker.setStartupError(err)
-		log.Fatalf("failed to build HTTP handler: %v", err)
-	}
+	handler := buildHandler(broker)
 
-	server := &http.Server{Addr: *addr, Handler: handler}
+	server := &http.Server{Addr: cfg.Address, Handler: handler}
 
 	if certProvided {
-		fmt.Println("Broker listening with TLS on", *addr)
-		log.Fatal(server.ListenAndServeTLS(*tlsCert, *tlsKey))
+		fmt.Println("Broker listening with TLS on", cfg.Address)
+		log.Fatal(server.ListenAndServeTLS(cfg.TLSCertPath, cfg.TLSKeyPath))
 	}
 
-	fmt.Println("Broker listening on", *addr)
+	fmt.Println("Broker listening on", cfg.Address)
 	log.Fatal(server.ListenAndServe())
 }
 
-func buildHandler(b *Broker) (http.Handler, error) {
+func buildHandler(b *Broker) http.Handler {
 	mux := http.NewServeMux()
 
-	// Register everything on the same mux
 	mux.HandleFunc("/ws", b.serveWS)
 	mux.HandleFunc("/api/stats", statsHandler(b))
 	mux.HandleFunc("/healthz", healthzHandler(b))
-	registerControlDocEndpoints(mux) // no-op; extend as needed
+	registerControlDocEndpoints(mux)
 
-	if err := mime.AddExtensionType(".js", "application/javascript"); err != nil {
-		return nil, fmt.Errorf("register js mime type: %w", err)
-	}
-
-	// serve viewer static files (resolve relative to this source file)
-	if viewerDir, err := resolveViewerDir(); err == nil {
-		mux.Handle("/viewer/", http.StripPrefix("/viewer/", http.FileServer(http.Dir(viewerDir))))
-	} else if errors.Is(err, os.ErrNotExist) {
-		log.Println("viewer directory not found; skipping /viewer/ handler registration")
-	} else {
-		return nil, err
-	}
-
-	terraSandboxDir, err := resolveTerraSandboxDir()
-	if err != nil {
-		return nil, err
-	}
-	mux.Handle("/terra-sandbox/", http.StripPrefix("/terra-sandbox/", http.FileServer(http.Dir(terraSandboxDir))))
-
-	return mux, nil
-}
-
-func resolveViewerDir() (string, error) {
-	return resolveStaticDir("viewer")
-}
-
-func resolveTerraSandboxDir() (string, error) {
-	return resolveStaticDir("terra-sandbox")
-}
-
-func resolveStaticDir(name string) (string, error) {
-	_, currentFile, _, ok := runtime.Caller(0)
-	if !ok {
-		return "", fmt.Errorf("unable to determine current file path")
-	}
-	dir := filepath.Join(filepath.Dir(currentFile), "..", name)
-	dir, err := filepath.Abs(dir)
-	if err != nil {
-		return "", err
-	}
-	if _, err := os.Stat(dir); err != nil {
-		return "", err
-	}
-	return dir, nil
+	return mux
 }
