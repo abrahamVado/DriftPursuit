@@ -6,10 +6,20 @@ import * as THREE from "three";
 import { defaultParams } from "../lib/config";
 import { createSimulation, updateSimulation, type SimulationParams } from "../lib/world";
 import type { SimulationState } from "../lib/world";
-import type { Vec3 } from "../lib/vector";
 import type { ChunkData } from "../lib/terrain";
-import { useSandboxControls } from "../lib/controls";
 import { ControlsOverlay } from "./ControlsOverlay";
+
+interface InputState {
+  throttle: number;
+  pitch: number;
+  yaw: number;
+  roll: number;
+  vertical: number;
+  boost: boolean;
+  resetRequested: boolean;
+}
+
+type AxisName = "throttle" | "pitch" | "yaw" | "roll" | "vertical";
 
 type SpinFx = {
   mesh: THREE.Object3D;
@@ -27,6 +37,29 @@ type ChainState = {
   rings: Ring[];
   activations: number[]; // 0..1 with lingering decay
 };
+
+const AXES: AxisName[] = ["throttle", "pitch", "yaw", "roll", "vertical"];
+
+const AXIS_BINDINGS: Record<string, { axis: AxisName; value: number }[]> = {
+  KeyW: [{ axis: "throttle", value: 1 }],
+  ArrowUp: [{ axis: "throttle", value: 1 }],
+  KeyS: [{ axis: "throttle", value: -1 }],
+  ArrowDown: [{ axis: "throttle", value: -1 }],
+  KeyA: [{ axis: "roll", value: -1 }],
+  KeyD: [{ axis: "roll", value: 1 }],
+  KeyQ: [{ axis: "roll", value: -1 }],
+  KeyE: [{ axis: "roll", value: 1 }],
+  KeyI: [{ axis: "pitch", value: 1 }],
+  KeyK: [{ axis: "pitch", value: -1 }],
+  ArrowLeft: [{ axis: "yaw", value: -1 }],
+  ArrowRight: [{ axis: "yaw", value: 1 }],
+  KeyJ: [{ axis: "vertical", value: -1 }],
+  KeyL: [{ axis: "vertical", value: 1 }],
+  PageDown: [{ axis: "vertical", value: -1 }],
+  PageUp: [{ axis: "vertical", value: 1 }],
+};
+
+const BOOST_KEYS = new Set(["ShiftLeft", "ShiftRight", "Space"]);
 
 function buildCraftMesh(opts?: {
   noseLen?: number;
@@ -275,9 +308,19 @@ export function SandboxCanvas() {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const simRef = useRef<SimulationState | null>(null);
   const rafRef = useRef<number>();
-  const { inputRef, setCallbacks } = useSandboxControls();
+  const inputRef = useRef<InputState>({
+    throttle: 0,
+    pitch: 0,
+    yaw: 0,
+    roll: 0,
+    vertical: 0,
+    boost: false,
+    resetRequested: false,
+  });
   const [speed, setSpeed] = useState(0);
   const [targetSpeed, setTargetSpeed] = useState(0);
+  const assistRef = useRef(true);
+  const [assistEnabled, setAssistEnabled] = useState(true);
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -653,39 +696,122 @@ export function SandboxCanvas() {
     }
 
     // ---- Input (add fire key 'M') ----
-    const removeControlCallbacks = setCallbacks({
-      onLaserToggle: (active) => {
-        if (active) {
-          if (!laserActive) {
-            laserActive = true;
-            if (!laserBeam) {
-              laserBeam = buildLaserBeam();
-              scene.add(laserBeam);
-            }
-          }
-        } else {
-          laserActive = false;
-          if (laserBeam) {
-            // hide instead of destroying so we can reuse without reallocating
-            laserBeam.visible = false;
-            (laserBeam as any).userData.spark.visible = false;
+    const activeAxisKeys = new Set<string>();
+    const activeBoostKeys = new Set<string>();
+
+    const recomputeAxes = () => {
+      const totals: Record<AxisName, number> = {
+        throttle: 0,
+        pitch: 0,
+        yaw: 0,
+        roll: 0,
+        vertical: 0,
+      };
+      for (const code of activeAxisKeys) {
+        const bindings = AXIS_BINDINGS[code];
+        if (!bindings) continue;
+        for (const binding of bindings) {
+          totals[binding.axis] += binding.value;
+        }
+      }
+      for (const axis of AXES) {
+        const value = Math.max(-1, Math.min(1, totals[axis]));
+        inputRef.current[axis] = value;
+      }
+    };
+
+    const keyDown = (event: KeyboardEvent) => {
+      const { code, repeat } = event;
+
+      if (repeat) {
+        if (AXIS_BINDINGS[code] || BOOST_KEYS.has(code)) event.preventDefault();
+        if (code === "Space") event.preventDefault();
+      }
+
+      if (code === "KeyF" && !repeat) {
+        assistRef.current = !assistRef.current;
+        setAssistEnabled(assistRef.current);
+        event.preventDefault();
+      }
+
+      if (code === "KeyR" && !repeat) {
+        inputRef.current.resetRequested = true;
+        assistRef.current = true;
+        setAssistEnabled(true);
+        activeAxisKeys.clear();
+        activeBoostKeys.clear();
+        recomputeAxes();
+        inputRef.current.boost = false;
+        event.preventDefault();
+      }
+
+      if (BOOST_KEYS.has(code)) {
+        if (!repeat) {
+          activeBoostKeys.add(code);
+          inputRef.current.boost = true;
+        }
+        event.preventDefault();
+      }
+
+      if (AXIS_BINDINGS[code]) {
+        if (!repeat) {
+          activeAxisKeys.add(code);
+          recomputeAxes();
+        }
+        event.preventDefault();
+      }
+
+      if (code === "KeyB" && !repeat) {
+        if (!laserActive) {
+          laserActive = true;
+          if (!laserBeam) {
+            laserBeam = buildLaserBeam();
+            scene.add(laserBeam);
           }
         }
-      },
-      onFireMissile: () => {
+        event.preventDefault();
+      }
+
+      if (code === "KeyM" && !repeat) {
         const front = (craftMesh as any).userData.frontRings as Ring[] | undefined;
-        const spawnWorld = new THREE.Vector3();
+        let spawnWorld = new THREE.Vector3();
         if (front && front.length > 0) front[0].mesh.getWorldPosition(spawnWorld);
         else (craftMesh as any).userData.noseRing?.getWorldPosition(spawnWorld);
 
-        const forwardDir = new THREE.Vector3(0, 0, 1).applyMatrix4(
-          new THREE.Matrix4().extractRotation(craftMesh.matrixWorld)
-        );
+        const forwardDir = new THREE.Vector3(0, 0, 1).applyMatrix4(new THREE.Matrix4().extractRotation(craftMesh.matrixWorld));
         createMissile(spawnWorld, forwardDir);
-      },
-    });
+        event.preventDefault();
+      }
+    };
+
+    const keyUp = (event: KeyboardEvent) => {
+      const { code } = event;
+
+      if (BOOST_KEYS.has(code)) {
+        activeBoostKeys.delete(code);
+        inputRef.current.boost = activeBoostKeys.size > 0;
+        event.preventDefault();
+      }
+
+      if (AXIS_BINDINGS[code]) {
+        activeAxisKeys.delete(code);
+        recomputeAxes();
+        event.preventDefault();
+      }
+
+      if (code === "KeyB") {
+        laserActive = false;
+        if (laserBeam) {
+          laserBeam.visible = false;
+          (laserBeam as any).userData.spark.visible = false;
+        }
+        event.preventDefault();
+      }
+    };
 
     window.addEventListener("resize", handleResize);
+    window.addEventListener("keydown", keyDown);
+    window.addEventListener("keyup", keyUp);
 
     const animate = () => {
       if (!simRef.current) return;
@@ -703,38 +829,18 @@ export function SandboxCanvas() {
         simRef.current,
         params,
         {
-          throttleDelta: inputRef.current.throttle,
-          rollDelta: inputRef.current.roll,
-          pitchDelta: inputRef.current.pitch,
-          yawDelta: inputRef.current.yaw,
+          throttle: inputRef.current.throttle,
+          pitch: inputRef.current.pitch,
+          yaw: inputRef.current.yaw,
+          roll: inputRef.current.roll,
+          vertical: inputRef.current.vertical,
+          boost: inputRef.current.boost,
+          assistEnabled: assistRef.current,
+          reset: inputRef.current.resetRequested,
         },
         dt
       );
-
-      if (inputRef.current.resetRoll) {
-        const { craft, band } = simRef.current;
-        const closest = band.closestS?.(craft.position);
-        const sampleFn = band.sample;
-        if (closest !== undefined && sampleFn) {
-          const sample = sampleFn(closest);
-          const tangent = sample.tangent;
-          const right = sample.right;
-          const up = sample.up;
-          craft.forward = [tangent[0], tangent[1], tangent[2]] as Vec3;
-          craft.right = [right[0], right[1], right[2]] as Vec3;
-          craft.up = [up[0], up[1], up[2]] as Vec3;
-          const speedMag = Math.hypot(craft.velocity[0], craft.velocity[1], craft.velocity[2]);
-          craft.velocity = [
-            tangent[0] * speedMag,
-            tangent[1] * speedMag,
-            tangent[2] * speedMag,
-          ] as Vec3;
-          craft.speed = speedMag;
-        }
-        craft.angularVelocity = [0, 0, 0] as Vec3;
-        craft.crashed = false;
-        inputRef.current.resetRoll = false;
-      }
+      inputRef.current.resetRequested = false;
 
       syncChunks();
 
@@ -1096,7 +1202,8 @@ if (laserBeam) {
     return () => {
       if (rafRef.current) cancelAnimationFrame(rafRef.current);
       window.removeEventListener("resize", handleResize);
-      removeControlCallbacks();
+      window.removeEventListener("keydown", keyDown);
+      window.removeEventListener("keyup", keyUp);
       renderer.dispose();
 
       // dispose chunk meshes
@@ -1119,12 +1226,12 @@ if (laserBeam) {
         }
       });
     };
-  }, [setCallbacks]);
+  }, []);
 
   return (
     <>
       <canvas ref={canvasRef} style={{ width: "100vw", height: "100vh", display: "block" }} />
-      <ControlsOverlay speed={speed} targetSpeed={targetSpeed} />
+      <ControlsOverlay speed={speed} targetSpeed={targetSpeed} assistEnabled={assistEnabled} />
     </>
   );
 }

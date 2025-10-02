@@ -9,11 +9,12 @@ import {
   dot,
   length,
   normalize,
-  rotateAroundAxis,
   scale,
   sub,
   Vec3,
-  lerp
+  lerp,
+  copy,
+  rotateAroundAxis
 } from "./vector";
 
 export interface SimulationParams {
@@ -23,15 +24,17 @@ export interface SimulationParams {
 }
 
 export interface CraftState {
+  arc: number;
   speed: number;
   targetSpeed: number;
-  position: Vec3;
+  roll: number;
+  rollRate: number;
   velocity: Vec3;
+  position: Vec3;
   forward: Vec3;
   right: Vec3;
   up: Vec3;
-  angularVelocity: Vec3;
-  crashed: boolean;
+  enteredInterior: boolean;
 }
 
 export interface SimulationState {
@@ -41,18 +44,46 @@ export interface SimulationState {
     tangentAt?: (sMeters: number) => Vec3;
     closestS?: (p: Vec3 | { x: number; y: number; z: number }) => number;
     length?: number; // getter (meters) over currently loaded rings
-    sample?: (sMeters: number) => { position: Vec3; tangent: Vec3; right: Vec3; up: Vec3 };
+    sample?: (sMeters: number) => { position: Vec3; tangent: Vec3 };
   };
   camera: CameraRig;
   craft: CraftState;
   spawn: SpawnPose;
+  assistEnabled: boolean;
+  mouth: MouthConstraint;
 }
 
 export interface PlayerInput {
-  throttleDelta: number;
-  rollDelta: number;
-  pitchDelta: number;
-  yawDelta: number;
+  throttle: number;
+  pitch: number;
+  yaw: number;
+  roll: number;
+  vertical: number;
+  boost: boolean;
+  assistEnabled: boolean;
+  reset: boolean;
+}
+
+const WORLD_UP: Vec3 = [0, 0, 1];
+const ASSIST_SPEED_LIMITS = { min: 2, max: 80 };
+const FREE_FLIGHT = {
+  throttleAccel: 45,
+  boostAccel: 55,
+  verticalAccel: 38,
+  drag: 0.45,
+  boostDrag: 0.28,
+  baseSpeedLimit: 120,
+  boostSpeedLimit: 170,
+  rollRate: Math.PI * 1.1,
+  pitchRate: Math.PI * 0.8,
+  yawRate: Math.PI * 0.6,
+};
+
+interface MouthConstraint {
+  origin: Vec3;
+  normal: Vec3;
+  radius: number;
+  cushion: number;
 }
 
 function collectRings(band: ChunkBand): RingStation[] {
@@ -90,6 +121,61 @@ function interpolateRing(rings: RingStation[], arc: number): {
   return { position, forward, right, up };
 }
 
+function applyRoll(right: Vec3, up: Vec3, forward: Vec3, roll: number) {
+  const cos = Math.cos(roll);
+  const sin = Math.sin(roll);
+  const newRight: Vec3 = [
+    right[0] * cos + up[0] * sin,
+    right[1] * cos + up[1] * sin,
+    right[2] * cos + up[2] * sin
+  ];
+  const newUp: Vec3 = [
+    up[0] * cos - right[0] * sin,
+    up[1] * cos - right[1] * sin,
+    up[2] * cos - right[2] * sin
+  ];
+  return { right: newRight, up: newUp, forward };
+}
+
+function estimateRingRadius(ring: RingStation, samples = 32): number {
+  let maxRadius = 0;
+  for (let i = 0; i < samples; i += 1) {
+    const theta = (i / samples) * Math.PI * 2;
+    const radius = ring.radius + ring.roughness(theta);
+    if (radius > maxRadius) {
+      maxRadius = radius;
+    }
+  }
+  return Math.max(0.1, maxRadius);
+}
+
+function createMouthConstraint(rings: RingStation[], craftRadius: number): MouthConstraint {
+  if (!rings.length) {
+    return {
+      origin: [0, 0, 0],
+      normal: [0, 0, 1],
+      radius: 5,
+      cushion: Math.max(0.5, craftRadius)
+    };
+  }
+
+  let earliest = rings[0];
+  for (const ring of rings) {
+    if (ring.index < earliest.index) {
+      earliest = ring;
+    }
+  }
+
+  const radius = estimateRingRadius(earliest);
+  const cushion = Math.max(0.5, craftRadius * 1.1);
+  return {
+    origin: copy(earliest.position),
+    normal: normalize(copy(earliest.frame.forward)),
+    radius,
+    cushion
+  };
+}
+
 /* ------------------------ Centerline helpers (meters <-> arc) ------------------------ */
 
 /** Convert {x,y,z} or Vec3-like into Vec3 tuple */
@@ -108,116 +194,6 @@ function arcToMeters(arc: number, ringStep: number): number {
   return arc * ringStep;
 }
 
-function clamp(value: number, min: number, max: number): number {
-  return Math.max(min, Math.min(max, value));
-}
-
-const MASS = 1;
-const GRAVITY: Vec3 = [0, -9.81 * MASS, 0];
-const MIN_SPEED = 2;
-const MAX_SPEED = 80;
-const BASE_THRUST = 12;
-const THRUST_GAIN = 6;
-const LIFT_COEF = 0.12;
-const DRAG_COEF = 0.05;
-const RADIAL_SPRING = 8;
-const RADIAL_DAMPING = 4;
-const CONTROL_DAMPING = 0.35;
-const ROLL_CONTROL = 3.5;
-const PITCH_CONTROL = 2.5;
-const YAW_CONTROL = 2.8;
-const ALIGNMENT_GAIN = 1.2;
-const RESTITUTION = 0.25;
-
-function orthonormalize(forward: Vec3, up: Vec3): { forward: Vec3; right: Vec3; up: Vec3 } {
-  const f = normalize(forward);
-  let r = cross(f, up);
-  let rLen = length(r);
-  if (rLen < 1e-5) {
-    const fallback: Vec3 = Math.abs(f[1]) < 0.99 ? [0, 1, 0] : [1, 0, 0];
-    r = cross(f, fallback);
-    rLen = length(r);
-  }
-  const invR = rLen > 0 ? 1 / rLen : 0;
-  r = scale(r, invR);
-  const u = normalize(cross(r, f));
-  return { forward: f, right: r, up: u };
-}
-
-function resolveTerrainCollision(
-  craft: CraftState,
-  rings: RingStation[],
-  craftRadius: number,
-  arc: number,
-  ringStep: number
-) {
-  if (rings.length === 0) return;
-
-  const approxIndex = Math.floor(arc);
-  let bestPenetration = 0;
-  let bestRing: RingStation | null = null;
-  let bestNormal: Vec3 | null = null;
-  let bestAlong = 0;
-  let bestClearance = 0;
-
-  for (const ring of rings) {
-    if (Math.abs(ring.index - approxIndex) > 6) continue;
-    const toCraft = sub(craft.position, ring.position);
-    const along = dot(toCraft, ring.frame.forward);
-    if (Math.abs(along) > ringStep * 3) continue;
-    const axial = scale(ring.frame.forward, along);
-    let radial = sub(toCraft, axial);
-    const radialLen = length(radial);
-    const rightComp = dot(radial, ring.frame.right);
-    const upComp = dot(radial, ring.frame.up);
-    const theta = Math.atan2(upComp, rightComp);
-    const surfaceRadius = ring.radius + ring.roughness(theta);
-    const clearance = surfaceRadius + craftRadius;
-    const penetration = clearance - radialLen;
-    if (penetration > bestPenetration) {
-      let normal: Vec3;
-      if (radialLen > 1e-4) {
-        normal = scale(radial, 1 / radialLen);
-      } else {
-        const cosT = Math.cos(theta);
-        const sinT = Math.sin(theta);
-        normal = normalize(
-          add(scale(ring.frame.right, cosT), scale(ring.frame.up, sinT))
-        );
-      }
-      bestPenetration = penetration;
-      bestRing = ring;
-      bestNormal = normal;
-      bestAlong = along;
-      bestClearance = clearance;
-    }
-  }
-
-  if (!bestRing || !bestNormal || bestPenetration <= 0) return;
-
-  const alongOffset = scale(bestRing.frame.forward, bestAlong);
-  const surfacePoint = add(
-    bestRing.position,
-    add(alongOffset, scale(bestNormal, bestClearance))
-  );
-  craft.position = surfacePoint;
-
-  const vn = dot(craft.velocity, bestNormal);
-  if (vn < 0) {
-    craft.velocity = sub(craft.velocity, scale(bestNormal, (1 + RESTITUTION) * vn));
-  }
-
-  craft.speed = length(craft.velocity);
-
-  if (bestPenetration > craftRadius * 0.6) {
-    craft.crashed = true;
-    craft.velocity = [0, 0, 0] as Vec3;
-    craft.speed = 0;
-    craft.targetSpeed = 0;
-    craft.angularVelocity = [0, 0, 0] as Vec3;
-  }
-}
-
 /* ----------------------------------- Simulation ----------------------------------- */
 
 export function createSimulation(params: SimulationParams): SimulationState {
@@ -228,6 +204,7 @@ export function createSimulation(params: SimulationParams): SimulationState {
   if (!spawn) {
     throw new Error("Failed to find spawn ring");
   }
+  const mouth = createMouthConstraint(rings, params.craftRadius);
 
   /* --- Centerline API on band (EXPOSED) -------------------------------------------
      We attach methods that the missiles use. They are meters-based so other systems
@@ -264,7 +241,7 @@ export function createSimulation(params: SimulationParams): SimulationState {
     const r = currentRings();
     const arc = metersToArc(sMeters, ringStep);
     const s = interpolateRing(r, arc);
-    return { position: s.position, tangent: s.forward, right: s.right, up: s.up };
+    return { position: s.position, tangent: s.forward };
   };
 
   // Closest arc-length (meters) to world point p
@@ -322,21 +299,79 @@ export function createSimulation(params: SimulationParams): SimulationState {
 
   /* --- End centerline API ------------------------------------------------------ */
 
-  const initialSpeed = 15;
   const craft: CraftState = {
-    speed: initialSpeed,
-    targetSpeed: initialSpeed,
-    position: [...spawn.position] as Vec3,
-    velocity: scale(spawn.forward, initialSpeed),
-    forward: [...spawn.forward] as Vec3,
-    right: [...spawn.right] as Vec3,
-    up: [...spawn.up] as Vec3,
-    angularVelocity: [0, 0, 0],
-    crashed: false
+    arc: spawn.ringIndex,
+    speed: 15,
+    targetSpeed: 15,
+    roll: spawn.rollHint,
+    rollRate: 0,
+    velocity: scale(spawn.forward, 15),
+    position: spawn.position,
+    forward: spawn.forward,
+    right: spawn.right,
+    up: spawn.up,
+    enteredInterior: true
   };
 
   const camera = createCameraRig(add(spawn.position, scale(spawn.forward, -10)));
-  return { band: band as SimulationState["band"], camera, craft, spawn };
+  return {
+    band: band as SimulationState["band"],
+    camera,
+    craft,
+    spawn,
+    assistEnabled: true,
+    mouth
+  };
+}
+
+function enforceMouthContainment(state: SimulationState, params: SimulationParams) {
+  const { mouth, craft } = state;
+  const clearance = mouth.radius - params.craftRadius;
+  const safeRadius = Math.max(0, clearance - 0.25);
+
+  const offset = sub(craft.position, mouth.origin);
+  const axial = dot(offset, mouth.normal);
+  const axialComponent = scale(mouth.normal, axial);
+  const radial = sub(offset, axialComponent);
+  const radialLength = length(radial);
+
+  let clamped = false;
+  let clampedAxial = axial;
+  let clampedRadial = radial;
+
+  if (!craft.enteredInterior && axial >= -mouth.cushion) {
+    craft.enteredInterior = true;
+  }
+
+  if (craft.enteredInterior && axial < mouth.cushion) {
+    clampedAxial = mouth.cushion;
+    clamped = true;
+    const outward = dot(craft.velocity, mouth.normal);
+    if (outward < 0) {
+      craft.velocity = add(craft.velocity, scale(mouth.normal, -outward));
+    }
+  }
+
+  const nearEntrance = axial < mouth.radius * 2;
+
+  if (nearEntrance && radialLength > safeRadius) {
+    clamped = true;
+    if (radialLength > 1e-5) {
+      const limit = safeRadius / radialLength;
+      clampedRadial = scale(radial, limit);
+      const radialNormal = normalize(radial);
+      const radialSpeed = dot(craft.velocity, radialNormal);
+      if (radialSpeed > 0) {
+        craft.velocity = sub(craft.velocity, scale(radialNormal, radialSpeed));
+      }
+    } else {
+      clampedRadial = [0, 0, 0] as Vec3;
+    }
+  }
+
+  if (clamped) {
+    craft.position = add(mouth.origin, add(scale(mouth.normal, clampedAxial), clampedRadial));
+  }
 }
 
 export function updateSimulation(
@@ -345,109 +380,136 @@ export function updateSimulation(
   input: PlayerInput,
   dt: number
 ) {
+  if (dt <= 0) return;
+
   const { craft, band } = state;
-  if (craft.crashed) {
-    updateCameraRig(state.camera, craft.position, craft.forward, craft.right, craft.up, params.camera, dt);
-    return;
+
+  if (input.reset) {
+    craft.arc = state.spawn.ringIndex;
+    craft.speed = 15;
+    craft.targetSpeed = 15;
+    craft.roll = state.spawn.rollHint;
+    craft.rollRate = 0;
+    craft.position = copy(state.spawn.position);
+    craft.forward = copy(state.spawn.forward);
+    craft.right = copy(state.spawn.right);
+    craft.up = copy(state.spawn.up);
+    craft.velocity = scale(craft.forward, craft.speed);
+    craft.enteredInterior = true;
+    state.assistEnabled = true;
   }
 
-  const closestS = band.closestS;
-  const ringStep = params.sandbox.ringStep;
-  const chunkLength = params.sandbox.chunkLength;
-  const sMeters = typeof closestS === "function" ? closestS(craft.position) : 0;
-  let centerChunk = Math.floor(sMeters / chunkLength);
-  ensureChunks(band, centerChunk);
-
-  let rings = collectRings(band);
-  if (rings.length === 0) {
-    updateCameraRig(state.camera, craft.position, craft.forward, craft.right, craft.up, params.camera, dt);
-    return;
+  if (state.assistEnabled !== input.assistEnabled) {
+    state.assistEnabled = input.assistEnabled;
+    if (state.assistEnabled) {
+      const sMeters = band.closestS
+        ? band.closestS({ x: craft.position[0], y: craft.position[1], z: craft.position[2] })
+        : craft.arc * params.sandbox.ringStep;
+      craft.arc = metersToArc(sMeters, params.sandbox.ringStep);
+      craft.roll = 0;
+      craft.rollRate = 0;
+      const rings = collectRings(band);
+      const sample = interpolateRing(rings, craft.arc);
+      craft.position = sample.position;
+      craft.forward = sample.forward;
+      craft.right = sample.right;
+      craft.up = sample.up;
+      craft.velocity = scale(craft.forward, craft.speed);
+    } else {
+      craft.velocity = scale(craft.forward, craft.speed);
+    }
   }
 
-  const arc = metersToArc(sMeters, ringStep);
-  const sample = interpolateRing(rings, arc);
+  if (state.assistEnabled) {
+    const throttleBoost = input.boost ? 0.8 : 0;
+    craft.targetSpeed = Math.max(
+      ASSIST_SPEED_LIMITS.min,
+      Math.min(
+        ASSIST_SPEED_LIMITS.max,
+        craft.targetSpeed + (input.throttle + throttleBoost) * dt * 18
+      )
+    );
+    craft.speed += (craft.targetSpeed - craft.speed) * Math.min(1, dt * 2.4);
+    craft.rollRate += input.roll * dt * 2.5;
+    craft.rollRate *= Math.pow(0.4, dt);
+    craft.roll = Math.max(-Math.PI / 3, Math.min(Math.PI / 3, craft.roll + craft.rollRate * dt));
 
-  craft.targetSpeed = clamp(
-    craft.targetSpeed + input.throttleDelta * dt * 25,
-    MIN_SPEED,
-    MAX_SPEED
-  );
-
-  // Stability towards the guide spline
-  const forwardError = cross(craft.forward, sample.forward);
-  const yawCorrection = dot(forwardError, craft.up) * ALIGNMENT_GAIN;
-  const pitchCorrection = -dot(forwardError, craft.right) * ALIGNMENT_GAIN;
-  const rollError = dot(cross(craft.up, sample.up), craft.forward) * ALIGNMENT_GAIN;
-
-  craft.angularVelocity[0] += (input.rollDelta - rollError) * ROLL_CONTROL * dt;
-  craft.angularVelocity[1] += (input.pitchDelta + pitchCorrection) * PITCH_CONTROL * dt;
-  craft.angularVelocity[2] += (input.yawDelta - yawCorrection) * YAW_CONTROL * dt;
-
-  const damping = Math.pow(CONTROL_DAMPING, dt);
-  craft.angularVelocity[0] *= damping;
-  craft.angularVelocity[1] *= damping;
-  craft.angularVelocity[2] *= damping;
-
-  const rollStep = craft.angularVelocity[0] * dt;
-  const pitchStep = craft.angularVelocity[1] * dt;
-  const yawStep = craft.angularVelocity[2] * dt;
-
-  if (Math.abs(yawStep) > 1e-5) {
-    craft.forward = rotateAroundAxis(craft.forward, craft.up, yawStep);
-    craft.right = rotateAroundAxis(craft.right, craft.up, yawStep);
-  }
-  if (Math.abs(pitchStep) > 1e-5) {
-    craft.forward = rotateAroundAxis(craft.forward, craft.right, pitchStep);
-    craft.up = rotateAroundAxis(craft.up, craft.right, pitchStep);
-  }
-  if (Math.abs(rollStep) > 1e-5) {
-    craft.right = rotateAroundAxis(craft.right, craft.forward, rollStep);
-    craft.up = rotateAroundAxis(craft.up, craft.forward, rollStep);
-  }
-
-  const basis = orthonormalize(craft.forward, craft.up);
-  craft.forward = basis.forward;
-  craft.right = basis.right;
-  craft.up = basis.up;
-
-  const speed = length(craft.velocity);
-  craft.speed = speed;
-  const speedError = craft.targetSpeed - speed;
-  const thrustMagnitude = Math.max(0, BASE_THRUST + speedError * THRUST_GAIN);
-  const thrust = scale(craft.forward, thrustMagnitude);
-  const lift = scale(craft.up, LIFT_COEF * speed * speed);
-  const drag: Vec3 = speed > 0 ? scale(craft.velocity, -DRAG_COEF * speed) : [0, 0, 0];
-
-  const toCenter = sub(craft.position, sample.position);
-  const axialOffset = dot(toCenter, sample.forward);
-  const axialComponent = scale(sample.forward, axialOffset);
-  const radial = sub(toCenter, axialComponent);
-  const radialForce = scale(radial, -RADIAL_SPRING);
-  const velAxial = dot(craft.velocity, sample.forward);
-  const radialVelocity = sub(craft.velocity, scale(sample.forward, velAxial));
-  const radialDampingForce = scale(radialVelocity, -RADIAL_DAMPING);
-
-  let totalForce = add(thrust, lift);
-  totalForce = add(totalForce, drag);
-  totalForce = add(totalForce, GRAVITY);
-  totalForce = add(totalForce, radialForce);
-  totalForce = add(totalForce, radialDampingForce);
-
-  const acceleration = scale(totalForce, 1 / MASS);
-  craft.velocity = add(craft.velocity, scale(acceleration, dt));
-  craft.position = add(craft.position, scale(craft.velocity, dt));
-  craft.speed = length(craft.velocity);
-
-  const sAfter = typeof closestS === "function" ? closestS(craft.position) : sMeters;
-  const newCenterChunk = Math.floor(sAfter / chunkLength);
-  if (newCenterChunk !== centerChunk) {
-    centerChunk = newCenterChunk;
+    craft.arc += (craft.speed * dt) / params.sandbox.ringStep;
+    const sMeters = craft.arc * params.sandbox.ringStep;
+    const centerChunk = Math.floor(sMeters / params.sandbox.chunkLength);
     ensureChunks(band, centerChunk);
+
+    const rings = collectRings(band);
+    const sample = interpolateRing(rings, craft.arc);
+    const rolled = applyRoll(sample.right, sample.up, sample.forward, craft.roll);
+
+    craft.position = sample.position;
+    craft.forward = rolled.forward;
+    craft.right = rolled.right;
+    craft.up = rolled.up;
+    craft.velocity = scale(craft.forward, craft.speed);
+  } else {
+    const yawRate = input.yaw * FREE_FLIGHT.yawRate * dt;
+    if (Math.abs(yawRate) > 0) {
+      craft.forward = rotateAroundAxis(craft.forward, WORLD_UP, yawRate);
+      craft.right = rotateAroundAxis(craft.right, WORLD_UP, yawRate);
+      craft.up = rotateAroundAxis(craft.up, WORLD_UP, yawRate);
+    }
+
+    const pitchRate = input.pitch * FREE_FLIGHT.pitchRate * dt;
+    if (Math.abs(pitchRate) > 0) {
+      craft.forward = rotateAroundAxis(craft.forward, craft.right, pitchRate);
+      craft.up = rotateAroundAxis(craft.up, craft.right, pitchRate);
+    }
+
+    const rollRate = input.roll * FREE_FLIGHT.rollRate * dt;
+    if (Math.abs(rollRate) > 0) {
+      craft.right = rotateAroundAxis(craft.right, craft.forward, rollRate);
+      craft.up = rotateAroundAxis(craft.up, craft.forward, rollRate);
+    }
+
+    const forward = normalize(craft.forward);
+    const right = normalize(cross(forward, craft.up));
+    const up = normalize(cross(right, forward));
+    craft.forward = forward;
+    craft.right = right;
+    craft.up = up;
+
+    let acceleration = scale(forward, input.throttle * FREE_FLIGHT.throttleAccel);
+    if (input.boost) {
+      acceleration = add(acceleration, scale(forward, FREE_FLIGHT.boostAccel));
+    }
+    if (input.vertical !== 0) {
+      acceleration = add(acceleration, scale(WORLD_UP, input.vertical * FREE_FLIGHT.verticalAccel));
+    }
+
+    craft.velocity = add(craft.velocity, scale(acceleration, dt));
+
+    const drag = Math.exp(-dt * (input.boost ? FREE_FLIGHT.boostDrag : FREE_FLIGHT.drag));
+    craft.velocity = scale(craft.velocity, drag);
+
+    const maxSpeed = input.boost ? FREE_FLIGHT.boostSpeedLimit : FREE_FLIGHT.baseSpeedLimit;
+    const speed = length(craft.velocity);
+    if (speed > maxSpeed) {
+      craft.velocity = scale(craft.velocity, maxSpeed / Math.max(speed, 1e-5));
+    }
+
+    craft.position = add(craft.position, scale(craft.velocity, dt));
+    craft.speed = length(craft.velocity);
+    craft.targetSpeed = craft.speed;
+    craft.roll = 0;
+    craft.rollRate = 0;
   }
 
-  rings = collectRings(band);
-  const arcAfter = metersToArc(sAfter, ringStep);
-  resolveTerrainCollision(craft, rings, params.craftRadius, arcAfter, ringStep);
+  enforceMouthContainment(state, params);
+
+  let sMeters = craft.arc * params.sandbox.ringStep;
+  if (band.closestS) {
+    sMeters = band.closestS({ x: craft.position[0], y: craft.position[1], z: craft.position[2] });
+    craft.arc = metersToArc(sMeters, params.sandbox.ringStep);
+  }
+  const centerChunk = Math.floor(sMeters / params.sandbox.chunkLength);
+  ensureChunks(band, centerChunk);
 
   updateCameraRig(state.camera, craft.position, craft.forward, craft.right, craft.up, params.camera, dt);
 }
