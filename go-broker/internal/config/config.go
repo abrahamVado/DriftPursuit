@@ -18,6 +18,11 @@ const (
 	// DefaultMaxClients bounds concurrent WebSocket connections. Zero disables the limit.
 	DefaultMaxClients = 256
 
+	// DefaultReplayDumpWindow bounds how frequently replay dump triggers may be requested.
+	DefaultReplayDumpWindow = time.Minute
+	// DefaultReplayDumpBurst sets how many replay dump requests may be made per window.
+	DefaultReplayDumpBurst = 1
+
 	// DefaultLogLevel controls verbosity for broker logs.
 	DefaultLogLevel = "info"
 	// DefaultLogPath is where structured logs are written.
@@ -34,14 +39,17 @@ const (
 
 // Config captures all runtime tunables for the broker service.
 type Config struct {
-	Address         string
-	AllowedOrigins  []string
-	MaxPayloadBytes int64
-	PingInterval    time.Duration
-	MaxClients      int
-	TLSCertPath     string
-	TLSKeyPath      string
-	Logging         LoggingConfig
+	Address          string
+	AllowedOrigins   []string
+	MaxPayloadBytes  int64
+	PingInterval     time.Duration
+	MaxClients       int
+	TLSCertPath      string
+	TLSKeyPath       string
+	AdminToken       string
+	ReplayDumpWindow time.Duration
+	ReplayDumpBurst  int
+	Logging          LoggingConfig
 }
 
 // LoggingConfig captures structured logging configuration options.
@@ -58,13 +66,16 @@ type LoggingConfig struct {
 // and returning descriptive errors for invalid overrides.
 func Load() (*Config, error) {
 	cfg := &Config{
-		Address:         getString("BROKER_ADDR", DefaultAddr),
-		AllowedOrigins:  parseList(os.Getenv("BROKER_ALLOWED_ORIGINS")),
-		MaxPayloadBytes: DefaultMaxPayloadBytes,
-		PingInterval:    DefaultPingInterval,
-		MaxClients:      DefaultMaxClients,
-		TLSCertPath:     strings.TrimSpace(os.Getenv("BROKER_TLS_CERT")),
-		TLSKeyPath:      strings.TrimSpace(os.Getenv("BROKER_TLS_KEY")),
+		Address:          getString("BROKER_ADDR", DefaultAddr),
+		AllowedOrigins:   parseList(os.Getenv("BROKER_ALLOWED_ORIGINS")),
+		MaxPayloadBytes:  DefaultMaxPayloadBytes,
+		PingInterval:     DefaultPingInterval,
+		MaxClients:       DefaultMaxClients,
+		TLSCertPath:      strings.TrimSpace(os.Getenv("BROKER_TLS_CERT")),
+		TLSKeyPath:       strings.TrimSpace(os.Getenv("BROKER_TLS_KEY")),
+		AdminToken:       strings.TrimSpace(os.Getenv("BROKER_ADMIN_TOKEN")),
+		ReplayDumpWindow: DefaultReplayDumpWindow,
+		ReplayDumpBurst:  DefaultReplayDumpBurst,
 		Logging: LoggingConfig{
 			Level:      strings.TrimSpace(getString("BROKER_LOG_LEVEL", DefaultLogLevel)),
 			Path:       strings.TrimSpace(getString("BROKER_LOG_PATH", DefaultLogPath)),
@@ -137,6 +148,24 @@ func Load() (*Config, error) {
 			problems = append(problems, fmt.Sprintf("BROKER_LOG_COMPRESS must be a boolean value, got %q", raw))
 		} else {
 			cfg.Logging.Compress = value
+		}
+	}
+
+	if raw := strings.TrimSpace(os.Getenv("BROKER_REPLAY_DUMP_WINDOW")); raw != "" {
+		duration, err := time.ParseDuration(raw)
+		if err != nil || duration <= 0 {
+			problems = append(problems, fmt.Sprintf("BROKER_REPLAY_DUMP_WINDOW must be a positive duration, got %q", raw))
+		} else {
+			cfg.ReplayDumpWindow = duration
+		}
+	}
+
+	if raw := strings.TrimSpace(os.Getenv("BROKER_REPLAY_DUMP_BURST")); raw != "" {
+		value, err := strconv.Atoi(raw)
+		if err != nil || value <= 0 {
+			problems = append(problems, fmt.Sprintf("BROKER_REPLAY_DUMP_BURST must be a positive integer, got %q", raw))
+		} else {
+			cfg.ReplayDumpBurst = value
 		}
 	}
 

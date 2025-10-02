@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -13,6 +14,7 @@ import (
 	"time"
 
 	configpkg "driftpursuit/broker/internal/config"
+	httpapi "driftpursuit/broker/internal/http"
 	"driftpursuit/broker/internal/logging"
 	"github.com/gorilla/websocket"
 )
@@ -123,6 +125,11 @@ func (b *Broker) snapshotClientCounts() (clients, pending int) {
 	return b.stats.Clients, b.pendingClients
 }
 
+// SnapshotClientCounts returns the current number of connected and pending clients.
+func (b *Broker) SnapshotClientCounts() (clients, pending int) {
+	return b.snapshotClientCounts()
+}
+
 func (b *Broker) setStartupError(err error) {
 	b.stateMu.Lock()
 	b.startupErr = err
@@ -135,6 +142,11 @@ func (b *Broker) startupError() error {
 	return b.startupErr
 }
 
+// StartupError exposes any startup failure encountered by the broker.
+func (b *Broker) StartupError() error {
+	return b.startupError()
+}
+
 func (b *Broker) uptime() time.Duration {
 	b.stateMu.RLock()
 	started := b.startedAt
@@ -143,6 +155,11 @@ func (b *Broker) uptime() time.Duration {
 		return 0
 	}
 	return time.Since(started)
+}
+
+// Uptime reports the broker uptime.
+func (b *Broker) Uptime() time.Duration {
+	return b.uptime()
 }
 
 // --- Origin allowlist helpers ---
@@ -454,7 +471,7 @@ func main() {
 	broker := NewBroker(maxPayloadBytes, maxClients, startedAt, logger)
 
 	// build handler with consistent mux
-	handler := buildHandler(broker)
+	handler := buildHandler(broker, cfg)
 
 	server := &http.Server{Addr: cfg.Address, Handler: handler}
 
@@ -472,13 +489,47 @@ func main() {
 	}
 }
 
-func buildHandler(b *Broker) http.Handler {
+func buildHandler(b *Broker, cfg *configpkg.Config) http.Handler {
 	mux := http.NewServeMux()
 
 	mux.HandleFunc("/ws", b.serveWS)
 	mux.HandleFunc("/api/stats", statsHandler(b))
 	mux.HandleFunc("/healthz", healthzHandler(b))
 	registerControlDocEndpoints(mux)
+
+	var limiter httpapi.RateLimiter
+	if cfg != nil && cfg.ReplayDumpWindow > 0 && cfg.ReplayDumpBurst > 0 {
+		limiter = httpapi.NewSlidingWindowLimiter(cfg.ReplayDumpWindow, cfg.ReplayDumpBurst, nil)
+	}
+
+	var adminToken string
+	if cfg != nil {
+		adminToken = cfg.AdminToken
+	}
+
+	opsHandlers := httpapi.NewHandlerSet(httpapi.Options{
+		Logger:    b.log,
+		Readiness: b,
+		Stats: func() (int, int) {
+			stats := b.Stats()
+			return stats.Broadcasts, stats.Clients
+		},
+		Replay: httpapi.ReplayDumperFunc(func(ctx context.Context) (string, error) {
+			payload := map[string]any{
+				"type":         "replay_dump",
+				"requested_at": time.Now().UTC().Format(time.RFC3339Nano),
+			}
+			data, err := json.Marshal(payload)
+			if err != nil {
+				return "", err
+			}
+			b.broadcast(data)
+			return "", nil
+		}),
+		AdminToken:  adminToken,
+		RateLimiter: limiter,
+	})
+	opsHandlers.Register(mux)
 
 	return logging.HTTPTraceMiddleware(b.log)(mux)
 }

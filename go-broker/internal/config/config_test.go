@@ -4,6 +4,7 @@ import (
 	"os"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestLoadDefaults(t *testing.T) {
@@ -20,6 +21,9 @@ func TestLoadDefaults(t *testing.T) {
 	t.Setenv("BROKER_LOG_MAX_BACKUPS", "")
 	t.Setenv("BROKER_LOG_MAX_AGE_DAYS", "")
 	t.Setenv("BROKER_LOG_COMPRESS", "")
+	t.Setenv("BROKER_ADMIN_TOKEN", "")
+	t.Setenv("BROKER_REPLAY_DUMP_WINDOW", "")
+	t.Setenv("BROKER_REPLAY_DUMP_BURST", "")
 
 	cfg, err := Load()
 	if err != nil {
@@ -43,6 +47,15 @@ func TestLoadDefaults(t *testing.T) {
 	}
 	if cfg.TLSCertPath != "" || cfg.TLSKeyPath != "" {
 		t.Fatalf("expected TLS paths to be empty, got cert=%q key=%q", cfg.TLSCertPath, cfg.TLSKeyPath)
+	}
+	if cfg.AdminToken != "" {
+		t.Fatalf("expected admin token to be empty by default")
+	}
+	if cfg.ReplayDumpWindow != DefaultReplayDumpWindow {
+		t.Fatalf("expected default replay dump window %v, got %v", DefaultReplayDumpWindow, cfg.ReplayDumpWindow)
+	}
+	if cfg.ReplayDumpBurst != DefaultReplayDumpBurst {
+		t.Fatalf("expected default replay dump burst %d, got %d", DefaultReplayDumpBurst, cfg.ReplayDumpBurst)
 	}
 	if cfg.Logging.Level != DefaultLogLevel {
 		t.Fatalf("expected default log level %q, got %q", DefaultLogLevel, cfg.Logging.Level)
@@ -78,6 +91,9 @@ func TestLoadOverrides(t *testing.T) {
 	t.Setenv("BROKER_LOG_MAX_BACKUPS", "4")
 	t.Setenv("BROKER_LOG_MAX_AGE_DAYS", "2")
 	t.Setenv("BROKER_LOG_COMPRESS", "false")
+	t.Setenv("BROKER_ADMIN_TOKEN", "s3cret")
+	t.Setenv("BROKER_REPLAY_DUMP_WINDOW", "2m")
+	t.Setenv("BROKER_REPLAY_DUMP_BURST", "3")
 
 	cfg, err := Load()
 	if err != nil {
@@ -120,6 +136,15 @@ func TestLoadOverrides(t *testing.T) {
 	if cfg.Logging.Compress {
 		t.Fatalf("expected log compression disabled")
 	}
+	if cfg.AdminToken != "s3cret" {
+		t.Fatalf("expected overridden admin token, got %q", cfg.AdminToken)
+	}
+	if cfg.ReplayDumpWindow != 2*time.Minute {
+		t.Fatalf("expected replay dump window 2m, got %v", cfg.ReplayDumpWindow)
+	}
+	if cfg.ReplayDumpBurst != 3 {
+		t.Fatalf("expected replay dump burst 3, got %d", cfg.ReplayDumpBurst)
+	}
 }
 
 func TestLoadReturnsValidationErrors(t *testing.T) {
@@ -132,6 +157,8 @@ func TestLoadReturnsValidationErrors(t *testing.T) {
 	t.Setenv("BROKER_LOG_MAX_BACKUPS", "-2")
 	t.Setenv("BROKER_LOG_MAX_AGE_DAYS", "-3")
 	t.Setenv("BROKER_LOG_COMPRESS", "notabool")
+	t.Setenv("BROKER_REPLAY_DUMP_WINDOW", "-")
+	t.Setenv("BROKER_REPLAY_DUMP_BURST", "0")
 
 	_, err := Load()
 	if err == nil {
@@ -147,6 +174,8 @@ func TestLoadReturnsValidationErrors(t *testing.T) {
 		"BROKER_LOG_MAX_BACKUPS",
 		"BROKER_LOG_MAX_AGE_DAYS",
 		"BROKER_LOG_COMPRESS",
+		"BROKER_REPLAY_DUMP_WINDOW",
+		"BROKER_REPLAY_DUMP_BURST",
 	} {
 		if !strings.Contains(err.Error(), want) {
 			t.Fatalf("expected error to mention %s, got %q", want, err.Error())
