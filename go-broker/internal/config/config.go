@@ -65,6 +65,7 @@ type Config struct {
         AdminToken            string
         ReplayDumpWindow      time.Duration
         ReplayDumpBurst       int
+        ReplayDirectory       string
         Logging               LoggingConfig
         StateSnapshotPath     string
         StateSnapshotInterval time.Duration
@@ -102,11 +103,12 @@ func Load() (*Config, error) {
                 AdminToken:       strings.TrimSpace(os.Getenv("BROKER_ADMIN_TOKEN")),
                 ReplayDumpWindow: DefaultReplayDumpWindow,
                 ReplayDumpBurst:  DefaultReplayDumpBurst,
+                ReplayDirectory:  strings.TrimSpace(os.Getenv("BROKER_REPLAY_DIR")),
                 Logging: LoggingConfig{
-			Level:      strings.TrimSpace(getString("BROKER_LOG_LEVEL", DefaultLogLevel)),
-			Path:       strings.TrimSpace(getString("BROKER_LOG_PATH", DefaultLogPath)),
-			MaxSizeMB:  DefaultLogMaxSizeMB,
-			MaxBackups: DefaultLogMaxBackups,
+                        Level:      strings.TrimSpace(getString("BROKER_LOG_LEVEL", DefaultLogLevel)),
+                        Path:       strings.TrimSpace(getString("BROKER_LOG_PATH", DefaultLogPath)),
+                        MaxSizeMB:  DefaultLogMaxSizeMB,
+                        MaxBackups: DefaultLogMaxBackups,
 			MaxAgeDays: DefaultLogMaxAgeDays,
 			Compress:   DefaultLogCompress,
                 },

@@ -11,6 +11,7 @@ import (
 
 	"driftpursuit/broker/internal/logging"
 	"driftpursuit/broker/internal/networking"
+	"driftpursuit/broker/internal/replay"
 )
 
 // ReadinessProvider exposes broker state required for readiness checks.
@@ -45,10 +46,12 @@ type Options struct {
 	Readiness   ReadinessProvider
 	Stats       StatsFunc
 	Snapshots   *networking.SnapshotMetrics
+	Bandwidth   *networking.BandwidthRegulator
 	Replay      ReplayDumper
 	AdminToken  string
 	RateLimiter RateLimiter
 	TimeSource  func() time.Time
+	ReplayStats func() replay.Stats
 }
 
 // HandlerSet bundles the broker operational handlers.
@@ -57,10 +60,12 @@ type HandlerSet struct {
 	readiness   ReadinessProvider
 	stats       StatsFunc
 	snapshots   *networking.SnapshotMetrics
+	bandwidth   *networking.BandwidthRegulator
 	replay      ReplayDumper
 	adminToken  string
 	rateLimiter RateLimiter
 	now         func() time.Time
+	replayStats func() replay.Stats
 }
 
 // NewHandlerSet constructs a HandlerSet using the provided options.
@@ -78,10 +83,12 @@ func NewHandlerSet(opts Options) *HandlerSet {
 		readiness:   opts.Readiness,
 		stats:       opts.Stats,
 		snapshots:   opts.Snapshots,
+		bandwidth:   opts.Bandwidth,
 		replay:      opts.Replay,
 		adminToken:  strings.TrimSpace(opts.AdminToken),
 		rateLimiter: opts.RateLimiter,
 		now:         now,
+		replayStats: opts.ReplayStats,
 	}
 }
 
@@ -172,6 +179,38 @@ func (h *HandlerSet) MetricsHandler() http.HandlerFunc {
 			for tier, count := range drops {
 				fmt.Fprintf(w, "broker_snapshot_dropped_entities_total{tier=%q} %d\n", tier.String(), count)
 			}
+		}
+		if h.bandwidth != nil {
+			usage := h.bandwidth.SnapshotUsage()
+			if len(usage) > 0 {
+				fmt.Fprintf(w, "# HELP broker_bandwidth_bytes_per_second Observed outbound bandwidth per client in bytes per second.\n")
+				fmt.Fprintf(w, "# TYPE broker_bandwidth_bytes_per_second gauge\n")
+				for clientID, sample := range usage {
+					fmt.Fprintf(w, "broker_bandwidth_bytes_per_second{client=%q} %.2f\n", clientID, sample.BytesPerSecond)
+				}
+				fmt.Fprintf(w, "# HELP broker_bandwidth_available_bytes Remaining bandwidth tokens per client.\n")
+				fmt.Fprintf(w, "# TYPE broker_bandwidth_available_bytes gauge\n")
+				for clientID, sample := range usage {
+					fmt.Fprintf(w, "broker_bandwidth_available_bytes{client=%q} %.2f\n", clientID, sample.AvailableBytes)
+				}
+				fmt.Fprintf(w, "# HELP broker_bandwidth_denied_total Total throttled deliveries per client.\n")
+				fmt.Fprintf(w, "# TYPE broker_bandwidth_denied_total counter\n")
+				for clientID, sample := range usage {
+					fmt.Fprintf(w, "broker_bandwidth_denied_total{client=%q} %d\n", clientID, sample.DeniedDeliveries)
+				}
+			}
+		}
+		if h.replayStats != nil {
+			stats := h.replayStats()
+			fmt.Fprintf(w, "# HELP broker_replay_buffer_frames Buffered replay frames awaiting flush.\n")
+			fmt.Fprintf(w, "# TYPE broker_replay_buffer_frames gauge\n")
+			fmt.Fprintf(w, "broker_replay_buffer_frames %d\n", stats.BufferedFrames)
+			fmt.Fprintf(w, "# HELP broker_replay_buffer_bytes Buffered replay payload size in bytes.\n")
+			fmt.Fprintf(w, "# TYPE broker_replay_buffer_bytes gauge\n")
+			fmt.Fprintf(w, "broker_replay_buffer_bytes %d\n", stats.BufferedBytes)
+			fmt.Fprintf(w, "# HELP broker_replay_dumps_total Replay dumps completed successfully.\n")
+			fmt.Fprintf(w, "# TYPE broker_replay_dumps_total counter\n")
+			fmt.Fprintf(w, "broker_replay_dumps_total %d\n", stats.Dumps)
 		}
 	}
 }

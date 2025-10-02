@@ -25,6 +25,7 @@ func TestLoadDefaults(t *testing.T) {
 	t.Setenv("BROKER_ADMIN_TOKEN", "")
 	t.Setenv("BROKER_REPLAY_DUMP_WINDOW", "")
 	t.Setenv("BROKER_REPLAY_DUMP_BURST", "")
+	t.Setenv("BROKER_REPLAY_DIR", "")
 	t.Setenv("BROKER_STATE_PATH", "")
 	t.Setenv("BROKER_STATE_INTERVAL", "")
 	t.Setenv("BROKER_WS_AUTH_MODE", "")
@@ -69,6 +70,9 @@ func TestLoadDefaults(t *testing.T) {
 	}
 	if cfg.ReplayDumpBurst != DefaultReplayDumpBurst {
 		t.Fatalf("expected default replay dump burst %d, got %d", DefaultReplayDumpBurst, cfg.ReplayDumpBurst)
+	}
+	if cfg.ReplayDirectory != "" {
+		t.Fatalf("expected replay directory to default to empty string")
 	}
 	if cfg.Logging.Level != DefaultLogLevel {
 		t.Fatalf("expected default log level %q, got %q", DefaultLogLevel, cfg.Logging.Level)
@@ -123,6 +127,7 @@ func TestLoadOverrides(t *testing.T) {
 	t.Setenv("BROKER_ADMIN_TOKEN", "s3cret")
 	t.Setenv("BROKER_REPLAY_DUMP_WINDOW", "2m")
 	t.Setenv("BROKER_REPLAY_DUMP_BURST", "3")
+	t.Setenv("BROKER_REPLAY_DIR", "/var/run/replays")
 	t.Setenv("BROKER_STATE_PATH", "/var/run/broker/state.json")
 	t.Setenv("BROKER_STATE_INTERVAL", "15s")
 	t.Setenv("BROKER_WS_AUTH_MODE", WSAuthModeHMAC)
@@ -185,6 +190,9 @@ func TestLoadOverrides(t *testing.T) {
 	}
 	if cfg.ReplayDumpBurst != 3 {
 		t.Fatalf("expected replay dump burst 3, got %d", cfg.ReplayDumpBurst)
+	}
+	if cfg.ReplayDirectory != "/var/run/replays" {
+		t.Fatalf("expected replay directory override, got %q", cfg.ReplayDirectory)
 	}
 	if cfg.StateSnapshotPath != "/var/run/broker/state.json" {
 		t.Fatalf("unexpected state snapshot path %q", cfg.StateSnapshotPath)

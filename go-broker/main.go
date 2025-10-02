@@ -22,6 +22,7 @@ import (
 	"driftpursuit/broker/internal/networking"
 	pb "driftpursuit/broker/internal/proto/pb"
 	"driftpursuit/broker/internal/radar"
+	"driftpursuit/broker/internal/replay"
 	"driftpursuit/broker/internal/simulation"
 	"driftpursuit/broker/internal/state"
 	"driftpursuit/broker/internal/timesync"
@@ -105,9 +106,12 @@ type Broker struct {
 	snapshotter       *StateSnapshotter
 	snapshotPublisher *networking.SnapshotPublisher
 	snapshotMetrics   *networking.SnapshotMetrics
+	bandwidth         *networking.BandwidthRegulator
 	tierManager       *networking.TierManager
 	radarEvents       chan<- *pb.RadarContact
 	radarProc         *radar.Processor
+
+	replayRecorder *replay.Recorder
 
 	intentMu        sync.RWMutex
 	intentStates    map[string]*intentPayload
@@ -166,6 +170,28 @@ func WithIntentValidator(validator *input.Validator) BrokerOption {
 	}
 }
 
+// 3.- WithBandwidthRegulator overrides the default per-client bandwidth regulator.
+func WithBandwidthRegulator(regulator *networking.BandwidthRegulator) BrokerOption {
+	return func(b *Broker) {
+		if b == nil || regulator == nil {
+			return
+		}
+		//1.- Swap in the provided regulator so tests can exercise throttling boundaries.
+		b.bandwidth = regulator
+	}
+}
+
+// 4.- WithReplayRecorder attaches a replay recorder to persist tick deltas.
+func WithReplayRecorder(recorder *replay.Recorder) BrokerOption {
+	return func(b *Broker) {
+		if b == nil || recorder == nil {
+			return
+		}
+		//1.- Capture the recorder so replay dumps persist buffered frames during shutdown hooks.
+		b.replayRecorder = recorder
+	}
+}
+
 func NewBroker(maxPayloadBytes int64, maxClients int, startedAt time.Time, logger *logging.Logger, opts ...BrokerOption) *Broker {
 	if maxPayloadBytes <= 0 {
 		maxPayloadBytes = configpkg.DefaultMaxPayloadBytes
@@ -174,6 +200,7 @@ func NewBroker(maxPayloadBytes int64, maxClients int, startedAt time.Time, logge
 		logger = logging.L()
 	}
 	snapshotMetrics := networking.NewSnapshotMetrics()
+	bandwidth := networking.NewBandwidthRegulator(networking.DefaultBandwidthLimitBytesPerSecond, nil)
 
 	broker := &Broker{
 		clients:           make(map[*Client]bool),
@@ -183,6 +210,7 @@ func NewBroker(maxPayloadBytes int64, maxClients int, startedAt time.Time, logge
 		log:               logger,
 		snapshotPublisher: networking.NewSnapshotPublisher(int(maxPayloadBytes)),
 		snapshotMetrics:   snapshotMetrics,
+		bandwidth:         bandwidth,
 		tierManager:       networking.NewTierManager(networking.DefaultTierConfig()),
 		intentStates:      make(map[string]*intentPayload),
 		lastIntentSeqs:    make(map[string]uint64),
@@ -273,6 +301,9 @@ func (b *Broker) deregisterClient(client *Client) {
 	}
 	if b.snapshotMetrics != nil && client != nil {
 		b.snapshotMetrics.ForgetClient(client.id)
+	}
+	if b.bandwidth != nil && client != nil {
+		b.bandwidth.Forget(client.id)
 	}
 	if b.intentGate != nil && client != nil {
 		b.intentGate.Forget(client.id)
@@ -394,6 +425,9 @@ func (b *Broker) enqueueSnapshot(client *Client, payload []byte) bool {
 	if b.snapshotMetrics != nil {
 		b.snapshotMetrics.ForgetClient(client.id)
 	}
+	if b.bandwidth != nil {
+		b.bandwidth.Forget(client.id)
+	}
 	return false
 }
 
@@ -425,9 +459,17 @@ func (b *Broker) publishWorldSnapshot(snapshot *pb.WorldSnapshot) {
 			continue
 		}
 		bytes := 0
-		if len(plan.Payload) > 0 && b.enqueueSnapshot(client, plan.Payload) {
-			bytes = len(plan.Payload)
-			deliveries++
+		if len(plan.Payload) > 0 {
+			if b.bandwidth != nil && !b.bandwidth.Allow(client.id, len(plan.Payload)) {
+				if b.snapshotMetrics != nil {
+					b.snapshotMetrics.Observe(client.id, 0, plan.Result.Dropped)
+				}
+				continue
+			}
+			if b.enqueueSnapshot(client, plan.Payload) {
+				bytes = len(plan.Payload)
+				deliveries++
+			}
 		}
 		if b.snapshotMetrics != nil {
 			b.snapshotMetrics.Observe(client.id, bytes, plan.Result.Dropped)
@@ -634,6 +676,14 @@ func (b *Broker) serveWS(w http.ResponseWriter, r *http.Request) {
 	client := &Client{conn: conn, send: make(chan []byte, 256), id: clientID}
 	client.log = reqLogger.With(logging.String("client_id", client.id))
 
+	b.lock.Lock()
+	if b.maxClients > 0 && b.pendingClients > 0 {
+		b.pendingClients--
+	}
+	b.clients[client] = true
+	b.stats.Clients++
+	b.lock.Unlock()
+
 	// Enforce payload limit (read side)
 	if b.maxPayloadBytes > 0 {
 		client.conn.SetReadLimit(b.maxPayloadBytes)
@@ -649,14 +699,6 @@ func (b *Broker) serveWS(w http.ResponseWriter, r *http.Request) {
 	client.conn.SetPongHandler(func(string) error {
 		return client.conn.SetReadDeadline(time.Now().Add(waitDuration))
 	})
-
-	b.lock.Lock()
-	if b.maxClients > 0 && b.pendingClients > 0 {
-		b.pendingClients--
-	}
-	b.clients[client] = true
-	b.stats.Clients++
-	b.lock.Unlock()
 
 	if snapshots := b.snapshotMessages(); len(snapshots) > 0 {
 		go b.replaySnapshots(client, snapshots)
@@ -869,6 +911,9 @@ func (b *Broker) publishWorldDiff(tick uint64, diff state.TickDiff) {
 		b.log.Error("failed to marshal world diff", logging.Error(err))
 		return
 	}
+	if b.replayRecorder != nil {
+		b.replayRecorder.RecordTick(tick, data)
+	}
 	b.broadcast(data)
 
 	if len(data) > 0 {
@@ -886,6 +931,34 @@ func (b *Broker) publishWorldDiff(tick uint64, diff state.TickDiff) {
 		}
 		b.diffMu.RUnlock()
 	}
+}
+
+// DumpReplay persists the buffered replay frames and returns the artefact path.
+func (b *Broker) DumpReplay(ctx context.Context) (string, error) {
+	if b == nil || b.replayRecorder == nil {
+		return "", fmt.Errorf("replay recorder unavailable")
+	}
+	//1.- Use the broker start time to derive a deterministic match identifier.
+	matchID := b.startedAt.UTC().Format("match-20060102T150405")
+	if matchID == "" {
+		matchID = "match"
+	}
+	//2.- Trigger the recorder roll so the buffered frames land on disk.
+	path, err := b.replayRecorder.Roll(matchID)
+	if err != nil {
+		return "", err
+	}
+	//3.- Emit a minimal notification for administrative consumers.
+	payload := map[string]any{
+		"type":         "replay_dump",
+		"location":     path,
+		"requested_at": time.Now().UTC().Format(time.RFC3339Nano),
+	}
+	data, err := json.Marshal(payload)
+	if err == nil {
+		b.broadcast(data)
+	}
+	return path, nil
 }
 
 func (b *Broker) advanceSimulation(step time.Duration) {
@@ -1181,6 +1254,14 @@ func main() {
 		}()
 	}
 
+	if cfg.ReplayDirectory != "" {
+		recorder, err := replay.NewRecorder(cfg.ReplayDirectory, nil)
+		if err != nil {
+			logger.Fatal("failed to initialise replay recorder", logging.Error(err))
+		}
+		brokerOptions = append(brokerOptions, WithReplayRecorder(recorder))
+	}
+
 	switch cfg.WSAuthMode {
 	case configpkg.WSAuthModeHMAC:
 		authenticator, err := newHMACWebsocketAuthenticator(cfg.WSHMACSecret)
@@ -1271,18 +1352,20 @@ func buildHandler(b *Broker, cfg *configpkg.Config) http.Handler {
 			return stats.Broadcasts, stats.Clients
 		},
 		Snapshots: b.snapshotMetrics,
-		Replay: httpapi.ReplayDumperFunc(func(ctx context.Context) (string, error) {
-			payload := map[string]any{
-				"type":         "replay_dump",
-				"requested_at": time.Now().UTC().Format(time.RFC3339Nano),
+		Bandwidth: b.bandwidth,
+		Replay:    httpapi.ReplayDumperFunc(b.DumpReplay),
+		ReplayStats: func() replay.Stats {
+			stats := replay.Stats{}
+			if b.replayRecorder != nil {
+				snap := b.replayRecorder.Snapshot()
+				stats.BufferedFrames = snap.BufferedFrames
+				stats.BufferedBytes = snap.BufferedBytes
+				stats.Dumps = snap.Dumps
+				stats.LastDumpURI = snap.LastDumpURI
+				stats.LastDumpTime = snap.LastDumpTime
 			}
-			data, err := json.Marshal(payload)
-			if err != nil {
-				return "", err
-			}
-			b.broadcast(data)
-			return "", nil
-		}),
+			return stats
+		},
 		AdminToken:  adminToken,
 		RateLimiter: limiter,
 	})
