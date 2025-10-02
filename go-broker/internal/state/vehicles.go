@@ -5,6 +5,8 @@ import (
 
 	pb "driftpursuit/broker/internal/proto/pb"
 	"google.golang.org/protobuf/proto"
+
+	"driftpursuit/broker/internal/physics"
 )
 
 // VehicleDiff groups updated and removed vehicle identifiers for a tick.
@@ -15,10 +17,11 @@ type VehicleDiff struct {
 
 // VehicleStore maintains the current authoritative vehicle states with dirty tracking.
 type VehicleStore struct {
-	mu      sync.RWMutex
-	states  map[string]*pb.VehicleState
-	dirty   map[string]struct{}
-	removed map[string]struct{}
+	mu       sync.RWMutex
+	states   map[string]*pb.VehicleState
+	dirty    map[string]struct{}
+	removed  map[string]struct{}
+	guidance *physics.GuidanceSpline
 }
 
 // NewVehicleStore constructs a thread-safe vehicle state container.
@@ -28,6 +31,17 @@ func NewVehicleStore() *VehicleStore {
 		dirty:   make(map[string]struct{}),
 		removed: make(map[string]struct{}),
 	}
+}
+
+// SetGuidanceSpline configures the shared spline used for flight assist alignment.
+func (s *VehicleStore) SetGuidanceSpline(spline *physics.GuidanceSpline) {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	//1.- Swap the spline reference under lock for thread safety.
+	s.guidance = spline
+	s.mu.Unlock()
 }
 
 // Upsert records or updates the vehicle state and flags it for the next diff.
@@ -93,20 +107,16 @@ func (s *VehicleStore) Advance(stepSeconds float64) {
 	}
 
 	s.mu.Lock()
-	//1.- Iterate over each vehicle and update positions using velocity * dt.
+	//1.- Iterate over each vehicle and integrate full physics state.
 	for id, vehicle := range s.states {
 		if vehicle == nil {
 			continue
 		}
-		pos := vehicle.Position
-		vel := vehicle.Velocity
-		if pos == nil || vel == nil {
-			continue
+		physics.IntegrateVehicle(vehicle, stepSeconds)
+		if vehicle.FlightAssistEnabled {
+			physics.AlignToGuidance(vehicle, s.guidance)
 		}
-		pos.X += vel.X * stepSeconds
-		pos.Y += vel.Y * stepSeconds
-		pos.Z += vel.Z * stepSeconds
-		//2.- Mark the vehicle as dirty so the diff includes the new position.
+		//2.- Mark the vehicle as dirty so the diff includes the new state.
 		s.dirty[id] = struct{}{}
 	}
 	s.mu.Unlock()
