@@ -93,7 +93,13 @@ func TestBrokerAPIsAccessibleOverTLS(t *testing.T) {
 
 	broker := NewBroker(configpkg.DefaultMaxPayloadBytes, configpkg.DefaultMaxClients, time.Now(), logging.NewTestLogger())
 
-	handler := buildHandler(broker)
+	cfg := &configpkg.Config{
+		AdminToken:       "test-token",
+		ReplayDumpWindow: configpkg.DefaultReplayDumpWindow,
+		ReplayDumpBurst:  configpkg.DefaultReplayDumpBurst,
+	}
+
+	handler := buildHandler(broker, cfg)
 
 	srv := &http.Server{Addr: "127.0.0.1:0", Handler: handler}
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
@@ -136,8 +142,13 @@ func TestBrokerAPIsAccessibleOverTLS(t *testing.T) {
 
 func TestBuildHandlerRegistersRoutes(t *testing.T) {
 	broker := NewBroker(configpkg.DefaultMaxPayloadBytes, configpkg.DefaultMaxClients, time.Now(), logging.NewTestLogger())
+	cfg := &configpkg.Config{
+		AdminToken:       "test-token",
+		ReplayDumpWindow: configpkg.DefaultReplayDumpWindow,
+		ReplayDumpBurst:  configpkg.DefaultReplayDumpBurst,
+	}
 
-	srv := httptest.NewServer(buildHandler(broker))
+	srv := httptest.NewServer(buildHandler(broker, cfg))
 	t.Cleanup(srv.Close)
 
 	client := srv.Client()
@@ -159,6 +170,46 @@ func TestBuildHandlerRegistersRoutes(t *testing.T) {
 	respStats.Body.Close()
 	if respStats.StatusCode != http.StatusOK {
 		t.Fatalf("expected stats 200, got %d", respStats.StatusCode)
+	}
+
+	respLive, err := client.Get(srv.URL + "/livez")
+	if err != nil {
+		t.Fatalf("GET livez: %v", err)
+	}
+	respLive.Body.Close()
+	if respLive.StatusCode != http.StatusOK {
+		t.Fatalf("expected livez 200, got %d", respLive.StatusCode)
+	}
+
+	respReady, err := client.Get(srv.URL + "/readyz")
+	if err != nil {
+		t.Fatalf("GET readyz: %v", err)
+	}
+	respReady.Body.Close()
+	if respReady.StatusCode != http.StatusOK {
+		t.Fatalf("expected readyz 200, got %d", respReady.StatusCode)
+	}
+
+	respMetrics, err := client.Get(srv.URL + "/metrics")
+	if err != nil {
+		t.Fatalf("GET metrics: %v", err)
+	}
+	respMetrics.Body.Close()
+	if respMetrics.StatusCode != http.StatusOK {
+		t.Fatalf("expected metrics 200, got %d", respMetrics.StatusCode)
+	}
+
+	reqReplay, err := http.NewRequest(http.MethodPost, srv.URL+"/replay/dump", nil)
+	if err != nil {
+		t.Fatalf("POST replay/dump request: %v", err)
+	}
+	respReplay, err := client.Do(reqReplay)
+	if err != nil {
+		t.Fatalf("POST replay/dump: %v", err)
+	}
+	respReplay.Body.Close()
+	if respReplay.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("expected replay/dump 401 without token, got %d", respReplay.StatusCode)
 	}
 
 	respNotFound, err := client.Get(srv.URL + "/does-not-exist")
