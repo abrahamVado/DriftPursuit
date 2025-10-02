@@ -11,9 +11,10 @@ from google.protobuf import symbol_database as _symbol_database
 _sym_db = _symbol_database.Default()
 
 
+from go_broker.internal.proto import types_pb2 as go__broker_dot_internal_dot_proto_dot_types__pb2
 
 
-DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n%go-broker/internal/proto/events.proto\x12\x1a\x64riftpursuit.networking.v1\"\xb1\x02\n\tGameEvent\x12\x16\n\x0eschema_version\x18\x01 \x01(\t\x12\x10\n\x08\x65vent_id\x18\x02 \x01(\t\x12\x16\n\x0eoccurred_at_ms\x18\x03 \x01(\x03\x12\x33\n\x04type\x18\x04 \x01(\x0e\x32%.driftpursuit.networking.v1.EventType\x12\x19\n\x11primary_entity_id\x18\x05 \x01(\t\x12\x1a\n\x12related_entity_ids\x18\x06 \x03(\t\x12\x45\n\x08metadata\x18\x07 \x03(\x0b\x32\x33.driftpursuit.networking.v1.GameEvent.MetadataEntry\x1a/\n\rMetadataEntry\x12\x0b\n\x03key\x18\x01 \x01(\t\x12\r\n\x05value\x18\x02 \x01(\t:\x02\x38\x01*\xd2\x01\n\tEventType\x12\x1a\n\x16\x45VENT_TYPE_UNSPECIFIED\x10\x00\x12\x16\n\x12\x45VENT_TYPE_SPAWNED\x10\x01\x12\x18\n\x14\x45VENT_TYPE_DESTROYED\x10\x02\x12\x18\n\x14\x45VENT_TYPE_COLLISION\x10\x03\x12!\n\x1d\x45VENT_TYPE_OBJECTIVE_CAPTURED\x10\x04\x12\x1b\n\x17\x45VENT_TYPE_SCORE_UPDATE\x10\x05\x12\x1d\n\x19\x45VENT_TYPE_SENSOR_CONTACT\x10\x06\x42R\n$build.buf.driftpursuit.networking.v1P\x01Z(driftpursuit/broker/internal/proto/pb;pbb\x06proto3')
+DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n%go-broker/internal/proto/events.proto\x12\x1a\x64riftpursuit.networking.v1\x1a$go-broker/internal/proto/types.proto\"\xb1\x02\n\tGameEvent\x12\x16\n\x0eschema_version\x18\x01 \x01(\t\x12\x10\n\x08\x65vent_id\x18\x02 \x01(\t\x12\x16\n\x0eoccurred_at_ms\x18\x03 \x01(\x03\x12\x33\n\x04type\x18\x04 \x01(\x0e\x32%.driftpursuit.networking.v1.EventType\x12\x19\n\x11primary_entity_id\x18\x05 \x01(\t\x12\x1a\n\x12related_entity_ids\x18\x06 \x03(\t\x12\x45\n\x08metadata\x18\x07 \x03(\x0b\x32\x33.driftpursuit.networking.v1.GameEvent.MetadataEntry\x1a/\n\rMetadataEntry\x12\x0b\n\x03key\x18\x01 \x01(\t\x12\r\n\x05value\x18\x02 \x01(\t:\x02\x38\x01\"\xe6\x03\n\x0b\x43ombatEvent\x12\x16\n\x0eschema_version\x18\x01 \x01(\t\x12\x10\n\x08\x65vent_id\x18\x02 \x01(\t\x12\x16\n\x0eoccurred_at_ms\x18\x03 \x01(\x03\x12\x39\n\x04kind\x18\x04 \x01(\x0e\x32+.driftpursuit.networking.v1.CombatEventKind\x12\x1a\n\x12\x61ttacker_entity_id\x18\x05 \x01(\t\x12\x1a\n\x12\x64\x65\x66\x65nder_entity_id\x18\x06 \x01(\t\x12\x35\n\x08position\x18\x07 \x01(\x0b\x32#.driftpursuit.networking.v1.Vector3\x12\x36\n\tdirection\x18\x08 \x01(\x0b\x32#.driftpursuit.networking.v1.Vector3\x12\x39\n\x06\x64\x61mage\x18\t \x01(\x0b\x32).driftpursuit.networking.v1.DamageSummary\x12G\n\x08metadata\x18\n \x03(\x0b\x32\x35.driftpursuit.networking.v1.CombatEvent.MetadataEntry\x1a/\n\rMetadataEntry\x12\x0b\n\x03key\x18\x01 \x01(\t\x12\r\n\x05value\x18\x02 \x01(\t:\x02\x38\x01\"?\n\rDamageSummary\x12\x0e\n\x06\x61mount\x18\x01 \x01(\x01\x12\x0c\n\x04type\x18\x02 \x01(\t\x12\x10\n\x08\x63ritical\x18\x03 \x01(\x08*\xd2\x01\n\tEventType\x12\x1a\n\x16\x45VENT_TYPE_UNSPECIFIED\x10\x00\x12\x16\n\x12\x45VENT_TYPE_SPAWNED\x10\x01\x12\x18\n\x14\x45VENT_TYPE_DESTROYED\x10\x02\x12\x18\n\x14\x45VENT_TYPE_COLLISION\x10\x03\x12!\n\x1d\x45VENT_TYPE_OBJECTIVE_CAPTURED\x10\x04\x12\x1b\n\x17\x45VENT_TYPE_SCORE_UPDATE\x10\x05\x12\x1d\n\x19\x45VENT_TYPE_SENSOR_CONTACT\x10\x06*\xe7\x01\n\x0f\x43ombatEventKind\x12!\n\x1d\x43OMBAT_EVENT_KIND_UNSPECIFIED\x10\x00\x12\"\n\x1e\x43OMBAT_EVENT_KIND_WEAPON_FIRED\x10\x01\x12 \n\x1c\x43OMBAT_EVENT_KIND_DIRECT_HIT\x10\x02\x12!\n\x1d\x43OMBAT_EVENT_KIND_AREA_EFFECT\x10\x03\x12$\n COMBAT_EVENT_KIND_KILL_CONFIRMED\x10\x04\x12\"\n\x1e\x43OMBAT_EVENT_KIND_SHIELD_BREAK\x10\x05\x42R\n$build.buf.driftpursuit.networking.v1P\x01Z(driftpursuit/broker/internal/proto/pb;pbb\x06proto3')
 
 _builder.BuildMessageAndEnumDescriptors(DESCRIPTOR, globals())
 _builder.BuildTopDescriptorsAndMessages(DESCRIPTOR, 'go_broker.internal.proto.events_pb2', globals())
@@ -23,10 +24,20 @@ if _descriptor._USE_C_DESCRIPTORS == False:
   DESCRIPTOR._serialized_options = b'\n$build.buf.driftpursuit.networking.v1P\001Z(driftpursuit/broker/internal/proto/pb;pb'
   _GAMEEVENT_METADATAENTRY._options = None
   _GAMEEVENT_METADATAENTRY._serialized_options = b'8\001'
-  _EVENTTYPE._serialized_start=378
-  _EVENTTYPE._serialized_end=588
-  _GAMEEVENT._serialized_start=70
-  _GAMEEVENT._serialized_end=375
-  _GAMEEVENT_METADATAENTRY._serialized_start=328
-  _GAMEEVENT_METADATAENTRY._serialized_end=375
+  _COMBATEVENT_METADATAENTRY._options = None
+  _COMBATEVENT_METADATAENTRY._serialized_options = b'8\001'
+  _EVENTTYPE._serialized_start=970
+  _EVENTTYPE._serialized_end=1180
+  _COMBATEVENTKIND._serialized_start=1183
+  _COMBATEVENTKIND._serialized_end=1414
+  _GAMEEVENT._serialized_start=108
+  _GAMEEVENT._serialized_end=413
+  _GAMEEVENT_METADATAENTRY._serialized_start=366
+  _GAMEEVENT_METADATAENTRY._serialized_end=413
+  _COMBATEVENT._serialized_start=416
+  _COMBATEVENT._serialized_end=902
+  _COMBATEVENT_METADATAENTRY._serialized_start=366
+  _COMBATEVENT_METADATAENTRY._serialized_end=413
+  _DAMAGESUMMARY._serialized_start=904
+  _DAMAGESUMMARY._serialized_end=967
 # @@protoc_insertion_point(module_scope)

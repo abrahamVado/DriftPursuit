@@ -7,6 +7,8 @@ option go_package = "driftpursuit/broker/internal/proto/pb;pb";
 option java_multiple_files = true;
 option java_package = "build.buf.driftpursuit.networking.v1";
 
+import "go-broker/internal/proto/types.proto";
+
 // Event stream emitted alongside snapshots describing discrete gameplay updates.
 message GameEvent {
   string schema_version = 1;
@@ -18,6 +20,27 @@ message GameEvent {
   map<string, string> metadata = 7;
 }
 
+// CombatEvent conveys detailed combat telemetry for analytics and HUD updates.
+message CombatEvent {
+  string schema_version = 1;
+  string event_id = 2;
+  int64 occurred_at_ms = 3;
+  CombatEventKind kind = 4;
+  string attacker_entity_id = 5;
+  string defender_entity_id = 6;
+  driftpursuit.networking.v1.Vector3 position = 7;
+  driftpursuit.networking.v1.Vector3 direction = 8;
+  DamageSummary damage = 9;
+  map<string, string> metadata = 10;
+}
+
+// DamageSummary captures the numeric and categorical breakdown of combat damage.
+message DamageSummary {
+  double amount = 1;
+  string type = 2;
+  bool critical = 3;
+}
+
 enum EventType {
   EVENT_TYPE_UNSPECIFIED = 0;
   EVENT_TYPE_SPAWNED = 1;
@@ -26,4 +49,13 @@ enum EventType {
   EVENT_TYPE_OBJECTIVE_CAPTURED = 4;
   EVENT_TYPE_SCORE_UPDATE = 5;
   EVENT_TYPE_SENSOR_CONTACT = 6;
+}
+
+enum CombatEventKind {
+  COMBAT_EVENT_KIND_UNSPECIFIED = 0;
+  COMBAT_EVENT_KIND_WEAPON_FIRED = 1;
+  COMBAT_EVENT_KIND_DIRECT_HIT = 2;
+  COMBAT_EVENT_KIND_AREA_EFFECT = 3;
+  COMBAT_EVENT_KIND_KILL_CONFIRMED = 4;
+  COMBAT_EVENT_KIND_SHIELD_BREAK = 5;
 }
