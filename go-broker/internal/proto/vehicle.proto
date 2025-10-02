@@ -1,0 +1,36 @@
+syntax = "proto3";
+
+package driftpursuit.networking.v1;
+
+import "go-broker/internal/proto/types.proto";
+
+option go_package = "driftpursuit/broker/internal/proto/pb;pb";
+option java_multiple_files = true;
+option java_package = "build.buf.driftpursuit.networking.v1";
+
+// Detailed physical and control state for a single vehicle.
+message VehicleState {
+  string schema_version = 1;
+  string vehicle_id = 2;
+  Vector3 position = 3;
+  Vector3 velocity = 4;
+  Orientation orientation = 5;
+  // Angular velocity in degrees per second around XYZ axes.
+  Vector3 angular_velocity = 6;
+  // Forward speed magnitude in meters per second.
+  double speed_mps = 7;
+  // Commanded forward thrust as a percentage between -1.0 and 1.0.
+  double throttle_pct = 8;
+  // Commanded vertical thruster input between -1.0 (down) and 1.0 (up).
+  double vertical_thrust_pct = 9;
+  // Available boost throttle expressed as a 0-1 range.
+  double boost_pct = 10;
+  // Indicates whether boost is actively firing this frame.
+  bool boost_active = 11;
+  // Indicates whether the assisted flight mode is engaged.
+  bool flight_assist_enabled = 12;
+  // Remaining energy reserve as a percentage (0-1) of capacity.
+  double energy_remaining_pct = 13;
+  // UTC timestamp for this state in milliseconds.
+  int64 updated_at_ms = 14;
+}
