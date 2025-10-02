@@ -1,0 +1,44 @@
+version: "3.9"
+
+services:
+  broker:
+    build:
+      context: ./go-broker
+    image: driftpursuit/broker:latest
+    environment:
+      BROKER_ADDR: 0.0.0.0:43127
+      BROKER_LOG_LEVEL: info
+    ports:
+      - "43127:43127"
+    networks:
+      - battleground
+
+  bot-runner:
+    build:
+      context: ./python-sim
+    image: driftpursuit/bot-runner:latest
+    depends_on:
+      - broker
+    environment:
+      BROKER_WS_URL: ws://broker:43127/ws
+      TRACE_HEADER: X-Trace-ID
+    networks:
+      - battleground
+
+  web-client:
+    build:
+      context: ./tunnelcave_sandbox_web
+    image: driftpursuit/web-client:latest
+    depends_on:
+      - broker
+    environment:
+      NODE_ENV: production
+      NEXT_PUBLIC_BROKER_URL: ws://broker:43127/ws
+    ports:
+      - "3000:3000"
+    networks:
+      - battleground
+
+networks:
+  battleground:
+    driver: bridge

@@ -1,14 +1,17 @@
 # Battle Royale Broker
 
-This repository hosts the Go WebSocket broker that powers the Battle Royale prototype. The broker fan-outs telemetry between gameplay clients and exposes lightweight operational endpoints.
+This repository hosts the Go WebSocket broker that powers the Battle Royale prototype. The broker fan-outs telemetry between gameplay clients and exposes lightweight operational endpoints. A Python bot runner and the web client live alongside the broker code so the entire prototype can be containerised together.
 
 All runtime tuning is controlled through environment variables. See [docs/configuration.md](docs/configuration.md) for the complete list and defaults.
 
 ## Prerequisites
 
-- Go 1.20 or newer
+- Go 1.20 or newer (for local Go development)
+- Docker 24+ with the Compose plugin (for container workflows)
 
 ## Running Locally
+
+### Native Go workflow
 
 ```bash
 cd go-broker
@@ -25,6 +28,38 @@ Health and monitoring endpoints:
 
 Structured JSON logs are emitted to a rotating file (default `broker.log`) and include a `trace_id` field. See [docs/tracing.md](docs/tracing.md) for guidance on propagating the `X-Trace-ID` header across bots and web clients.
 
+### Docker Compose stack
+
+Spin up the full prototype — broker, bot runner, and web client — with Compose:
+
+```bash
+docker compose build
+docker compose up
+```
+
+The services share the `battleground` network defined in [`docker-compose.yml`](docker-compose.yml):
+
+- **broker** — exposed on `localhost:43127`; environment variables can be overridden via Compose or a `.env` file (for example `BROKER_ALLOWED_ORIGINS`).
+- **bot-runner** — connects to the broker using `BROKER_WS_URL=ws://broker:43127/ws` and forwards the trace header defined by `TRACE_HEADER`.
+- **web-client** — exposed on `localhost:3000` with `NEXT_PUBLIC_BROKER_URL` pointing at the broker service.
+
+Stop the stack with `docker compose down`. Use `docker compose logs -f <service>` to inspect container output.
+
+### Building individual images
+
+To build any image separately without Compose:
+
+```bash
+# Go broker
+docker build -t driftpursuit/broker:local go-broker
+
+# Python bot runner
+docker build -t driftpursuit/bot-runner:local python-sim
+
+# Web client
+docker build -t driftpursuit/web-client:local tunnelcave_sandbox_web
+```
+
 ## Development
 
 Run the unit tests to validate protocol handling and configuration parsing:
@@ -34,7 +69,14 @@ cd go-broker
 go test ./...
 ```
 
+## Continuous Integration
+
+The [`Docker images`](.github/workflows/docker-images.yml) workflow builds all production containers on every push and pull request to ensure the Dockerfiles stay healthy.
+
 ## Repository Layout
 
 - `go-broker/` — the WebSocket broker service and tests.
+- `python-sim/` — Python bot runner assets and Dockerfile.
+- `tunnelcave_sandbox_web/` — the web client application and Dockerfile.
 - `docs/` — configuration reference material for operators.
+- `docker-compose.yml` — orchestration for the broker, bot runner, and web client.
