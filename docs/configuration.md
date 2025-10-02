@@ -11,6 +11,12 @@ The Battle Royale broker is configured entirely through environment variables. E
 | `BROKER_MAX_CLIENTS` | `256` | Soft cap on concurrent WebSocket clients. Use `0` to remove the limit entirely. |
 | `BROKER_TLS_CERT` | *(empty)* | Path to a PEM-encoded TLS certificate. Must be provided together with `BROKER_TLS_KEY` to enable TLS. |
 | `BROKER_TLS_KEY` | *(empty)* | Path to the PEM-encoded TLS private key. Must be provided with `BROKER_TLS_CERT`. |
+| `BROKER_LOG_LEVEL` | `info` | Minimum severity emitted by the structured logger (`debug`, `info`, `warn`, `error`). |
+| `BROKER_LOG_PATH` | `broker.log` | Filesystem path for the rotating JSON log file. |
+| `BROKER_LOG_MAX_SIZE_MB` | `100` | Maximum size (in megabytes) of the active log file before rotation occurs. |
+| `BROKER_LOG_MAX_BACKUPS` | `10` | Number of rotated log files to retain on disk. |
+| `BROKER_LOG_MAX_AGE_DAYS` | `7` | Maximum age in days for rotated log files before they are purged. |
+| `BROKER_LOG_COMPRESS` | `true` | When `true`, rotated log files are gzip-compressed to save space. |
 
 ## Usage Tips
 
