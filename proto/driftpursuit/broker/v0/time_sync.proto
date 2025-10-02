@@ -1,0 +1,19 @@
+syntax = "proto3";
+
+package driftpursuit.broker.v0;
+
+option go_package = "driftpursuit/broker/internal/proto/pb";
+
+message TimeSyncRequest {
+  string client_id = 1;
+}
+
+message TimeSyncUpdate {
+  int64 server_timestamp_ms = 1;
+  int64 simulated_timestamp_ms = 2;
+  int64 recommended_offset_ms = 3;
+}
+
+service TimeSyncService {
+  rpc StreamTimeSync(TimeSyncRequest) returns (stream TimeSyncUpdate);
+}

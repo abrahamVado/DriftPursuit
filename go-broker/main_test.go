@@ -1,8 +1,8 @@
 package main
 
 import (
-	"context"
-	"crypto/rand"
+        "context"
+        "crypto/rand"
 	"crypto/rsa"
 	"crypto/tls"
 	"crypto/x509"
@@ -18,11 +18,12 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
-	"sort"
-	"strings"
-	"sync"
-	"testing"
-	"time"
+        "sort"
+        "strings"
+        "sync"
+        "sync/atomic"
+        "testing"
+        "time"
 
 	configpkg "driftpursuit/broker/internal/config"
 	"driftpursuit/broker/internal/logging"
@@ -953,5 +954,24 @@ func TestHandleStructuredMessageRejectsIntentRegression(t *testing.T) {
 	}
 	if got, want := stored.SequenceID, uint64(2); got != want {
 		t.Fatalf("intent sequence mutated: got %d want %d", got, want)
+	}
+}
+
+func TestBrokerTimeSyncSnapshot(t *testing.T) {
+	logger := logging.NewTestLogger()
+	startedAt := time.Now().Add(-123 * time.Millisecond)
+	broker := NewBroker(configpkg.DefaultMaxPayloadBytes, configpkg.DefaultMaxClients, startedAt, logger)
+
+	atomic.StoreInt64(&broker.simulatedElapsedNs, (123 * time.Millisecond).Nanoseconds())
+
+	serverMs, simulatedMs, offsetMs := broker.TimeSyncSnapshot()
+
+	expectedSim := startedAt.UTC().Add(123 * time.Millisecond).UnixMilli()
+	if simulatedMs != expectedSim {
+		t.Fatalf("expected simulated timestamp %d, got %d", expectedSim, simulatedMs)
+	}
+
+	if abs := absInt64(offsetMs); abs > 10 {
+		t.Fatalf("expected offset within 10ms, got %d (server=%d simulated=%d)", offsetMs, serverMs, simulatedMs)
 	}
 }

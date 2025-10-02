@@ -17,6 +17,8 @@ const (
 	DefaultMaxPayloadBytes int64 = 1 << 20
 	// DefaultMaxClients bounds concurrent WebSocket connections. Zero disables the limit.
 	DefaultMaxClients = 256
+	// DefaultGRPCAddr is the default TCP address for the time sync gRPC server.
+	DefaultGRPCAddr = ":43128"
 
 	// DefaultReplayDumpWindow bounds how frequently replay dump triggers may be requested.
 	DefaultReplayDumpWindow = time.Minute
@@ -43,6 +45,7 @@ const (
 // Config captures all runtime tunables for the broker service.
 type Config struct {
 	Address               string
+	GRPCAddress           string
 	AllowedOrigins        []string
 	MaxPayloadBytes       int64
 	PingInterval          time.Duration
@@ -72,6 +75,7 @@ type LoggingConfig struct {
 func Load() (*Config, error) {
 	cfg := &Config{
 		Address:          getString("BROKER_ADDR", DefaultAddr),
+		GRPCAddress:      getString("BROKER_GRPC_ADDR", DefaultGRPCAddr),
 		AllowedOrigins:   parseList(os.Getenv("BROKER_ALLOWED_ORIGINS")),
 		MaxPayloadBytes:  DefaultMaxPayloadBytes,
 		PingInterval:     DefaultPingInterval,
