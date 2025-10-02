@@ -1,5 +1,5 @@
 import type { RingStation } from "./terrain";
-import { add, cross, length, scale, Vec3 } from "./vector";
+import { add, normalize, scale, Vec3 } from "./vector";
 
 function radialDistance(ring: RingStation, angle: number): number {
   const radius = ring.radius + ring.roughness(angle);
@@ -45,55 +45,32 @@ export interface SpawnPose {
 }
 
 export function chooseSpawn(rings: RingStation[], craftRadius: number): SpawnPose | null {
-  const safetyPadding = 0.75;
   let bestScore = -Infinity;
-  let bestPose: SpawnPose | null = null;
+  let best: { ring: RingStation; clearance: RingClearance } | null = null;
   for (const ring of rings) {
     const clearance = analyzeRing(ring);
-    const angle = clearance.bestAngle;
-    const surfaceForward = radialDistance(ring, angle);
-    const surfaceBackward = radialDistance(ring, angle + Math.PI);
-    const forwardRoom = surfaceForward - (craftRadius + safetyPadding);
-    const backwardRoom = surfaceBackward - (craftRadius + safetyPadding);
-    if (forwardRoom <= 0 || backwardRoom <= 0) {
+    const margin = clearance.minDiameter * 0.5 - craftRadius;
+    if (margin < 0.5) {
       continue;
     }
-
-    let radial = add(
-      scale(ring.frame.right, Math.cos(angle)),
-      scale(ring.frame.up, Math.sin(angle))
-    );
-    const radialLen = length(radial);
-    if (radialLen > 1e-5) {
-      radial = scale(radial, 1 / radialLen);
-    } else {
-      radial = ring.frame.up;
-    }
-
-    const offset = (forwardRoom - backwardRoom) * 0.5;
-    const position = add(ring.position, scale(radial, offset));
-    const forward = ring.frame.forward;
-    let right = cross(forward, radial);
-    const rightLen = length(right);
-    if (rightLen > 1e-5) {
-      right = scale(right, 1 / rightLen);
-    } else {
-      right = ring.frame.right;
-    }
-    let up = cross(right, forward);
-    const upLen = length(up);
-    if (upLen > 1e-5) {
-      up = scale(up, 1 / upLen);
-    } else {
-      up = ring.frame.up;
-    }
-
-    const balancedClearance = Math.min(forwardRoom, backwardRoom);
-    const score = balancedClearance + clearance.meanDiameter - clearance.stdDiameter * 0.35;
+    const score = clearance.meanDiameter - clearance.stdDiameter * 0.5 + margin * 2;
     if (score > bestScore) {
       bestScore = score;
-      bestPose = { ringIndex: ring.index, position, forward, right, up, rollHint: angle };
+      best = { ring, clearance };
     }
   }
-  return bestPose;
+  if (!best) {
+    return null;
+  }
+  const { ring, clearance } = best;
+  const angle = clearance.bestAngle;
+  const offset = add(
+    scale(ring.frame.right, Math.cos(angle) * (clearance.minDiameter * 0.25)),
+    scale(ring.frame.up, Math.sin(angle) * (clearance.minDiameter * 0.25))
+  );
+  const position = add(ring.position, offset);
+  const forward = ring.frame.forward;
+  const right = normalize(scale(ring.frame.right, Math.cos(angle)));
+  const up = normalize(scale(ring.frame.up, Math.sin(angle)));
+  return { ringIndex: ring.index, position, forward, right, up, rollHint: angle };
 }
