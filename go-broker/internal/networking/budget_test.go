@@ -43,6 +43,42 @@ func TestBudgetPlannerKeepsEssentialTiers(t *testing.T) {
 	}
 }
 
+func TestBudgetPlannerPreservesReconciliationMetadata(t *testing.T) {
+	//1.- Prepare a world snapshot carrying reconciliation metadata at both the envelope and entity layers.
+	alpha := &pb.EntitySnapshot{SchemaVersion: "1.0.0", EntityId: "alpha", Active: true, TickId: 77, Keyframe: true}
+	bravo := &pb.EntitySnapshot{SchemaVersion: "1.0.0", EntityId: "bravo", Active: true, TickId: 76, Keyframe: false}
+	source := &pb.WorldSnapshot{SchemaVersion: "1.0.0", CapturedAtMs: 321, TickId: 77, Keyframe: true, Entities: []*pb.EntitySnapshot{alpha, bravo}}
+
+	buckets := TierBuckets{
+		pb.InterestTier_INTEREST_TIER_SELF:   {alpha},
+		pb.InterestTier_INTEREST_TIER_NEARBY: {bravo},
+	}
+
+	//2.- Execute the planner with an ample budget so every entity survives filtering.
+	planner := NewBudgetPlanner(0)
+	result := planner.Plan("observer", source, buckets)
+
+	//3.- Assert that the world-level metadata flows through untouched for client reconciliation buffers.
+	if result.Snapshot.GetTickId() != source.GetTickId() {
+		t.Fatalf("tick id mismatch: got %d, want %d", result.Snapshot.GetTickId(), source.GetTickId())
+	}
+	if result.Snapshot.GetKeyframe() != source.GetKeyframe() {
+		t.Fatalf("keyframe flag mismatch: got %v, want %v", result.Snapshot.GetKeyframe(), source.GetKeyframe())
+	}
+
+	//4.- Validate that per-entity reconciliation metadata persists after cloning and budgeting.
+	preserved := map[string]*pb.EntitySnapshot{}
+	for _, entity := range result.Snapshot.GetEntities() {
+		preserved[entity.GetEntityId()] = entity
+	}
+	if entity := preserved[alpha.GetEntityId()]; entity == nil || entity.GetTickId() != alpha.GetTickId() || entity.GetKeyframe() != alpha.GetKeyframe() {
+		t.Fatalf("alpha reconciliation metadata lost: %+v", entity)
+	}
+	if entity := preserved[bravo.GetEntityId()]; entity == nil || entity.GetTickId() != bravo.GetTickId() || entity.GetKeyframe() != bravo.GetKeyframe() {
+		t.Fatalf("bravo reconciliation metadata lost: %+v", entity)
+	}
+}
+
 func TestBudgetPlannerUnlimitedBudgetIncludesAll(t *testing.T) {
 	source := &pb.WorldSnapshot{SchemaVersion: "1.0.0", CapturedAtMs: 42}
 	buckets := TierBuckets{

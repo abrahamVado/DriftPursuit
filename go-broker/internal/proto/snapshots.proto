@@ -21,6 +21,10 @@ message EntitySnapshot {
   // Optional radar cross section in square meters. Zero implies unknown.
   double radar_cross_section = 9;
   int64 captured_at_ms = 10;
+  // Authoritative simulation tick identifier for reconciliation.
+  uint64 tick_id = 11;
+  // Marks the snapshot as a keyframe suitable for hard correction.
+  bool keyframe = 12;
 }
 
 // SnapshotComponent labels portions of the entity payload so schedulers can shed
@@ -48,6 +52,10 @@ message WorldSnapshot {
   repeated EntitySnapshot entities = 3;
   repeated TierAssignment assignments = 4;
   repeated SnapshotComponentPriority component_priorities = 5;
+  // Authoritative simulation tick identifier for the aggregated state.
+  uint64 tick_id = 6;
+  // Indicates that every entity snapshot should be treated as a keyframe.
+  bool keyframe = 7;
 }
 
 // Observer state communicated by gameplay clients to seed tier calculations.

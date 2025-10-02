@@ -85,6 +85,8 @@ func (p *BudgetPlanner) Plan(observerID string, source *pb.WorldSnapshot, bucket
 		Snapshot: &pb.WorldSnapshot{
 			SchemaVersion:       source.GetSchemaVersion(),
 			CapturedAtMs:        source.GetCapturedAtMs(),
+			TickId:              source.GetTickId(),
+			Keyframe:            source.GetKeyframe(),
 			ComponentPriorities: defaultComponentPriorities(),
 		},
 		BytesByTier: make(map[pb.InterestTier]int),
