@@ -23,12 +23,31 @@ message EntitySnapshot {
   int64 captured_at_ms = 10;
 }
 
+// SnapshotComponent labels portions of the entity payload so schedulers can shed
+// lower priority data first when bandwidth runs short.
+enum SnapshotComponent {
+  SNAPSHOT_COMPONENT_UNSPECIFIED = 0;
+  SNAPSHOT_COMPONENT_RADAR = 1;
+  SNAPSHOT_COMPONENT_COSMETICS = 2;
+  SNAPSHOT_COMPONENT_ORIENTATION = 3;
+  SNAPSHOT_COMPONENT_VELOCITY = 4;
+  SNAPSHOT_COMPONENT_NEARBY = 5;
+}
+
+// Priority assigned to a snapshot component. Lower values should be dropped
+// before higher priority components.
+message SnapshotComponentPriority {
+  SnapshotComponent component = 1;
+  uint32 priority = 2;
+}
+
 // Aggregated world state replayed on connect and after broker restarts.
 message WorldSnapshot {
   string schema_version = 1;
   int64 captured_at_ms = 2;
   repeated EntitySnapshot entities = 3;
   repeated TierAssignment assignments = 4;
+  repeated SnapshotComponentPriority component_priorities = 5;
 }
 
 // Observer state communicated by gameplay clients to seed tier calculations.
