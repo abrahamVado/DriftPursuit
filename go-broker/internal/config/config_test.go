@@ -9,12 +9,13 @@ import (
 
 func TestLoadDefaults(t *testing.T) {
 	t.Setenv("BROKER_ADDR", "")
-	t.Setenv("BROKER_ALLOWED_ORIGINS", "")
-	t.Setenv("BROKER_MAX_PAYLOAD_BYTES", "")
-	t.Setenv("BROKER_PING_INTERVAL", "")
-	t.Setenv("BROKER_MAX_CLIENTS", "")
-	t.Setenv("BROKER_TLS_CERT", "")
-	t.Setenv("BROKER_TLS_KEY", "")
+        t.Setenv("BROKER_ALLOWED_ORIGINS", "")
+        t.Setenv("BROKER_MAX_PAYLOAD_BYTES", "")
+        t.Setenv("BROKER_PING_INTERVAL", "")
+        t.Setenv("BROKER_MAX_CLIENTS", "")
+        t.Setenv("BROKER_GRPC_ADDR", "")
+        t.Setenv("BROKER_TLS_CERT", "")
+        t.Setenv("BROKER_TLS_KEY", "")
 	t.Setenv("BROKER_LOG_LEVEL", "")
 	t.Setenv("BROKER_LOG_PATH", "")
 	t.Setenv("BROKER_LOG_MAX_SIZE_MB", "")
@@ -32,9 +33,12 @@ func TestLoadDefaults(t *testing.T) {
 		t.Fatalf("Load() returned error: %v", err)
 	}
 
-	if cfg.Address != DefaultAddr {
-		t.Fatalf("expected default addr %q, got %q", DefaultAddr, cfg.Address)
-	}
+        if cfg.Address != DefaultAddr {
+                t.Fatalf("expected default addr %q, got %q", DefaultAddr, cfg.Address)
+        }
+        if cfg.GRPCAddress != DefaultGRPCAddr {
+                t.Fatalf("expected default gRPC addr %q, got %q", DefaultGRPCAddr, cfg.GRPCAddress)
+        }
 	if cfg.AllowedOrigins != nil {
 		t.Fatalf("expected no allowed origins, got %#v", cfg.AllowedOrigins)
 	}
@@ -90,7 +94,8 @@ func TestLoadOverrides(t *testing.T) {
 	t.Setenv("BROKER_ALLOWED_ORIGINS", "https://example.com, https://demo.local")
 	t.Setenv("BROKER_MAX_PAYLOAD_BYTES", "2048")
 	t.Setenv("BROKER_PING_INTERVAL", "45s")
-	t.Setenv("BROKER_MAX_CLIENTS", "12")
+        t.Setenv("BROKER_MAX_CLIENTS", "12")
+        t.Setenv("BROKER_GRPC_ADDR", "127.0.0.1:50051")
 	t.Setenv("BROKER_TLS_CERT", "/tmp/cert.pem")
 	t.Setenv("BROKER_TLS_KEY", "/tmp/key.pem")
 	t.Setenv("BROKER_LOG_LEVEL", "debug")
@@ -122,9 +127,12 @@ func TestLoadOverrides(t *testing.T) {
 	if cfg.PingInterval.String() != "45s" {
 		t.Fatalf("expected ping interval 45s, got %v", cfg.PingInterval)
 	}
-	if cfg.MaxClients != 12 {
-		t.Fatalf("expected max clients 12, got %d", cfg.MaxClients)
-	}
+        if cfg.MaxClients != 12 {
+                t.Fatalf("expected max clients 12, got %d", cfg.MaxClients)
+        }
+        if cfg.GRPCAddress != "127.0.0.1:50051" {
+                t.Fatalf("unexpected grpc address %q", cfg.GRPCAddress)
+        }
 	if cfg.TLSCertPath != "/tmp/cert.pem" || cfg.TLSKeyPath != "/tmp/key.pem" {
 		t.Fatalf("unexpected TLS paths cert=%q key=%q", cfg.TLSCertPath, cfg.TLSKeyPath)
 	}

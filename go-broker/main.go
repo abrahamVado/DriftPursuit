@@ -22,7 +22,9 @@ import (
 	"driftpursuit/broker/internal/radar"
 	"driftpursuit/broker/internal/simulation"
 	"driftpursuit/broker/internal/state"
+	"driftpursuit/broker/internal/timesync"
 	"github.com/gorilla/websocket"
+	"google.golang.org/grpc"
 	"google.golang.org/protobuf/encoding/protojson"
 )
 
@@ -34,7 +36,12 @@ const (
 	pongWaitMultiplier = 2                // read deadline = pingInterval * multiplier
 )
 
+const (
+	driftWarnThresholdMs int64 = 50
+)
+
 var pingInterval = configpkg.DefaultPingInterval
+var timeSyncInterval = time.Second
 
 // Always allow localhost for dev convenience.
 var localHosts = map[string]struct{}{
@@ -68,6 +75,13 @@ type worldDiffEnvelope struct {
 	Events      []*pb.GameEvent         `json:"events,omitempty"`
 }
 
+type timeSyncEnvelope struct {
+	Type                 string `json:"type"`
+	ServerTimestampMs    int64  `json:"server_timestamp_ms"`
+	SimulatedTimestampMs int64  `json:"simulated_timestamp_ms"`
+	RecommendedOffsetMs  int64  `json:"recommended_offset_ms"`
+}
+
 type Broker struct {
 	clients         map[*Client]bool
 	lock            sync.RWMutex
@@ -95,8 +109,9 @@ type Broker struct {
 	intentStates   map[string]*intentPayload
 	lastIntentSeqs map[string]uint64
 
-	world       *state.WorldState
-	tickCounter uint64
+	world              *state.WorldState
+	tickCounter        uint64
+	simulatedElapsedNs int64
 }
 
 var errRecoveryInProgress = errors.New("state recovery in progress")
@@ -220,6 +235,77 @@ func (b *Broker) broadcast(msg []byte) {
 			}
 		}
 	}
+}
+
+func (b *Broker) TimeSyncSnapshot() (int64, int64, int64) {
+	if b == nil {
+		return 0, 0, 0
+	}
+
+	//1.- Capture the current wall-clock timestamp so clients can correlate updates.
+	now := time.Now().UTC()
+
+	//2.- Translate the accumulated simulation nanoseconds into an absolute timestamp.
+	elapsedNs := atomic.LoadInt64(&b.simulatedElapsedNs)
+	simulated := b.startedAt.Add(time.Duration(elapsedNs))
+
+	serverMs := now.UnixMilli()
+	simulatedMs := simulated.UTC().UnixMilli()
+	offsetMs := simulatedMs - serverMs
+	return serverMs, simulatedMs, offsetMs
+}
+
+func (b *Broker) marshalTimeSyncEnvelope() ([]byte, int64) {
+	if b == nil {
+		return nil, 0
+	}
+
+	//1.- Derive the authoritative timestamps representing wall and simulation clocks.
+	serverMs, simulatedMs, offsetMs := b.TimeSyncSnapshot()
+
+	//2.- Marshal the payload so transports can fan it out without duplicating logic.
+	payload, err := json.Marshal(timeSyncEnvelope{
+		Type:                 "time_sync",
+		ServerTimestampMs:    serverMs,
+		SimulatedTimestampMs: simulatedMs,
+		RecommendedOffsetMs:  offsetMs,
+	})
+	if err != nil {
+		if b.log != nil {
+			b.log.Error("failed to marshal time sync payload", logging.Error(err))
+		}
+		return nil, offsetMs
+	}
+	return payload, offsetMs
+}
+
+func (b *Broker) LogTimeDrift(channel, target string, offsetMs int64) {
+	if b == nil || b.log == nil {
+		return
+	}
+
+	//1.- Populate shared context for downstream log aggregation.
+	fields := []logging.Field{
+		logging.String("channel", channel),
+		logging.String("target", target),
+		logging.Int64("offset_ms", offsetMs),
+	}
+
+	//2.- Escalate to warnings when the skew exceeds the configured tolerance.
+	if abs := absInt64(offsetMs); abs >= driftWarnThresholdMs {
+		b.log.Warn("time drift exceeds tolerance", append(fields, logging.Int64("tolerance_ms", driftWarnThresholdMs))...)
+		return
+	}
+
+	//3.- Emit lower-severity telemetry so operators can monitor the typical drift envelope.
+	b.log.Debug("time drift sample", fields...)
+}
+
+func absInt64(value int64) int64 {
+	if value < 0 {
+		return -value
+	}
+	return value
 }
 
 func (b *Broker) enqueueSnapshot(client *Client, payload []byte) bool {
@@ -546,9 +632,11 @@ func (b *Broker) serveWS(w http.ResponseWriter, r *http.Request) {
 
 	// writer (handles errors + periodic ping)
 	go func() {
-		ticker := time.NewTicker(pingInterval)
+		pingTicker := time.NewTicker(pingInterval)
+		syncTicker := time.NewTicker(timeSyncInterval)
 		defer func() {
-			ticker.Stop()
+			pingTicker.Stop()
+			syncTicker.Stop()
 			_ = client.conn.Close()
 		}()
 		for {
@@ -568,13 +656,33 @@ func (b *Broker) serveWS(w http.ResponseWriter, r *http.Request) {
 					b.deregisterClient(client)
 					return
 				}
-			case <-ticker.C:
+			case <-pingTicker.C:
 				// Send ping periodically; pong handler extends read deadline
 				if err := client.conn.WriteControl(websocket.PingMessage, []byte{}, time.Now().Add(writeWait)); err != nil {
 					client.log.Warn("ping failure", logging.Error(err))
 					b.deregisterClient(client)
 					return
 				}
+			case <-syncTicker.C:
+				//1.- Build and queue the time-sync envelope for this client.
+				payload, offsetMs := b.marshalTimeSyncEnvelope()
+				if len(payload) == 0 {
+					continue
+				}
+
+				if err := client.conn.SetWriteDeadline(time.Now().Add(writeWait)); err != nil {
+					client.log.Error("failed to set write deadline for time sync", logging.Error(err))
+					b.deregisterClient(client)
+					return
+				}
+				if err := client.conn.WriteMessage(websocket.TextMessage, payload); err != nil {
+					client.log.Error("time sync write error", logging.Error(err))
+					b.deregisterClient(client)
+					return
+				}
+
+				//2.- Emit structured drift metrics whenever an update is delivered.
+				b.LogTimeDrift("websocket", client.id, offsetMs)
 			}
 		}
 	}()
@@ -684,13 +792,16 @@ func (b *Broker) advanceSimulation(step time.Duration) {
 		return
 	}
 
+	//1.- Track total simulated time so clock sync can compare against wall clock drift.
+	atomic.AddInt64(&b.simulatedElapsedNs, step.Nanoseconds())
+
 	diff := b.world.AdvanceTick(step)
 	if !diff.HasChanges() {
 		return
 	}
 
 	tick := atomic.AddUint64(&b.tickCounter, 1)
-	//1.- Publish the diff after incrementing the authoritative tick counter.
+	//2.- Publish the diff after incrementing the authoritative tick counter.
 	b.publishWorldDiff(tick, diff)
 }
 
@@ -960,6 +1071,22 @@ func main() {
 	}
 
 	broker := NewBroker(maxPayloadBytes, maxClients, startedAt, logger, brokerOptions...)
+
+	grpcServer := grpc.NewServer()
+	timeSyncService := timesync.NewService(broker, timeSyncInterval)
+	pb.RegisterTimeSyncServiceServer(grpcServer, timeSyncService)
+
+	go func() {
+		listener, err := net.Listen("tcp", cfg.GRPCAddress)
+		if err != nil {
+			logger.Fatal("failed to start gRPC listener", logging.Error(err), logging.String("address", cfg.GRPCAddress))
+		}
+		logger.Info("gRPC time sync server listening", logging.String("address", cfg.GRPCAddress))
+		if err := grpcServer.Serve(listener); err != nil {
+			logger.Fatal("gRPC server terminated", logging.Error(err))
+		}
+	}()
+	defer grpcServer.GracefulStop()
 
 	simCtx, simCancel := context.WithCancel(context.Background())
 	simLoop := simulation.NewLoop(60, broker.advanceSimulation)
