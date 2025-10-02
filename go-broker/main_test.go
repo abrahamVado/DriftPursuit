@@ -22,6 +22,7 @@ import (
 	"time"
 
 	configpkg "driftpursuit/broker/internal/config"
+	"driftpursuit/broker/internal/logging"
 	"github.com/gorilla/websocket"
 )
 
@@ -90,7 +91,7 @@ func generateSelfSignedCert(t *testing.T) (certFile, keyFile string) {
 func TestBrokerAPIsAccessibleOverTLS(t *testing.T) {
 	certFile, keyFile := generateSelfSignedCert(t)
 
-	broker := NewBroker(configpkg.DefaultMaxPayloadBytes, configpkg.DefaultMaxClients, time.Now())
+	broker := NewBroker(configpkg.DefaultMaxPayloadBytes, configpkg.DefaultMaxClients, time.Now(), logging.NewTestLogger())
 
 	handler := buildHandler(broker)
 
@@ -134,7 +135,7 @@ func TestBrokerAPIsAccessibleOverTLS(t *testing.T) {
 }
 
 func TestBuildHandlerRegistersRoutes(t *testing.T) {
-	broker := NewBroker(configpkg.DefaultMaxPayloadBytes, configpkg.DefaultMaxClients, time.Now())
+	broker := NewBroker(configpkg.DefaultMaxPayloadBytes, configpkg.DefaultMaxClients, time.Now(), logging.NewTestLogger())
 
 	srv := httptest.NewServer(buildHandler(broker))
 	t.Cleanup(srv.Close)
@@ -274,7 +275,7 @@ func TestStatsHandlerHonorsLocking(t *testing.T) {
 
 func TestHealthzHandlerHealthy(t *testing.T) {
 	started := time.Now().Add(-2 * time.Second)
-	broker := NewBroker(configpkg.DefaultMaxPayloadBytes, 5, started)
+	broker := NewBroker(configpkg.DefaultMaxPayloadBytes, 5, started, logging.NewTestLogger())
 	broker.lock.Lock()
 	broker.stats.Clients = 3
 	broker.pendingClients = 1
@@ -316,7 +317,7 @@ func TestHealthzHandlerHealthy(t *testing.T) {
 }
 
 func TestHealthzHandlerStartupError(t *testing.T) {
-	broker := NewBroker(configpkg.DefaultMaxPayloadBytes, 0, time.Now())
+	broker := NewBroker(configpkg.DefaultMaxPayloadBytes, 0, time.Now(), logging.NewTestLogger())
 	broker.setStartupError(errors.New("boom"))
 
 	req := httptest.NewRequest(http.MethodGet, "/healthz", nil)
@@ -369,7 +370,7 @@ func listenOnce(conn *websocket.Conn) <-chan wsReadResult {
 
 func TestServeWSDropsInvalidMessages(t *testing.T) {
 	upgrader.CheckOrigin = func(*http.Request) bool { return true }
-	broker := NewBroker(configpkg.DefaultMaxPayloadBytes, 0, time.Now())
+	broker := NewBroker(configpkg.DefaultMaxPayloadBytes, 0, time.Now(), logging.NewTestLogger())
 
 	server := httptest.NewServer(http.HandlerFunc(broker.serveWS))
 	defer server.Close()
@@ -421,7 +422,7 @@ func TestServeWSDropsInvalidMessages(t *testing.T) {
 
 func TestServeWSRejectsOversizedMessages(t *testing.T) {
 	upgrader.CheckOrigin = func(*http.Request) bool { return true }
-	broker := NewBroker(64, 0, time.Now()) // very small limit for the test
+	broker := NewBroker(64, 0, time.Now(), logging.NewTestLogger()) // very small limit for the test
 
 	server := httptest.NewServer(http.HandlerFunc(broker.serveWS))
 	defer server.Close()
@@ -500,7 +501,7 @@ func TestServeWSRejectsOversizedMessages(t *testing.T) {
 
 func TestServeWSRejectsWhenAtCapacity(t *testing.T) {
 	// Limit to 1 client
-	b := NewBroker(configpkg.DefaultMaxPayloadBytes, 1, time.Now())
+	b := NewBroker(configpkg.DefaultMaxPayloadBytes, 1, time.Now(), logging.NewTestLogger())
 
 	// Pretend one client is already connected
 	existing := &Client{send: make(chan []byte, 1)}

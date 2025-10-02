@@ -4,15 +4,16 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log"
 	"net"
 	"net/http"
 	"net/url"
+	"os"
 	"strings"
 	"sync"
 	"time"
 
 	configpkg "driftpursuit/broker/internal/config"
+	"driftpursuit/broker/internal/logging"
 	"github.com/gorilla/websocket"
 )
 
@@ -37,6 +38,7 @@ type Client struct {
 	conn *websocket.Conn
 	send chan []byte
 	id   string
+	log  *logging.Logger
 }
 
 type Broker struct {
@@ -52,17 +54,22 @@ type Broker struct {
 	stateMu    sync.RWMutex
 	startedAt  time.Time
 	startupErr error
+	log        *logging.Logger
 }
 
-func NewBroker(maxPayloadBytes int64, maxClients int, startedAt time.Time) *Broker {
+func NewBroker(maxPayloadBytes int64, maxClients int, startedAt time.Time, logger *logging.Logger) *Broker {
 	if maxPayloadBytes <= 0 {
 		maxPayloadBytes = configpkg.DefaultMaxPayloadBytes
+	}
+	if logger == nil {
+		logger = logging.L()
 	}
 	return &Broker{
 		clients:         make(map[*Client]bool),
 		maxPayloadBytes: maxPayloadBytes,
 		maxClients:      maxClients,
 		startedAt:       startedAt,
+		log:             logger,
 	}
 }
 
@@ -153,12 +160,15 @@ func parseAllowedOrigins(raw string) []string {
 	return origins
 }
 
-func buildOriginChecker(allowlist []string) func(*http.Request) bool {
+func buildOriginChecker(logger *logging.Logger, allowlist []string) func(*http.Request) bool {
+	if logger == nil {
+		logger = logging.L()
+	}
 	allowed := make(map[string]struct{}, len(allowlist))
 	for _, origin := range allowlist {
 		u, err := url.Parse(origin)
 		if err != nil || u.Scheme == "" || u.Host == "" {
-			log.Printf("ignoring invalid allowed origin %q: %v", origin, err)
+			logger.Warn("ignoring invalid allowed origin", logging.String("origin", origin), logging.Error(err))
 			continue
 		}
 		key := strings.ToLower(u.Scheme + "://" + u.Host)
@@ -174,7 +184,7 @@ func buildOriginChecker(allowlist []string) func(*http.Request) bool {
 
 		originURL, err := url.Parse(originHeader)
 		if err != nil || originURL.Host == "" {
-			log.Printf("rejecting request with invalid origin %q: %v", originHeader, err)
+			logger.Warn("rejecting request with invalid origin", logging.String("origin", originHeader), logging.Error(err))
 			return false
 		}
 
@@ -188,7 +198,7 @@ func buildOriginChecker(allowlist []string) func(*http.Request) bool {
 			return true
 		}
 
-		log.Printf("rejecting request from disallowed origin %q", originHeader)
+		logger.Warn("rejecting request from disallowed origin", logging.String("origin", originHeader))
 		return false
 	}
 }
@@ -201,12 +211,17 @@ type inboundEnvelope struct {
 }
 
 func (b *Broker) serveWS(w http.ResponseWriter, r *http.Request) {
+	ctx, baseLogger, _ := logging.WithTrace(r.Context(), logging.LoggerFromContext(r.Context()), logging.TraceIDFromContext(r.Context()))
+	reqLogger := baseLogger.With(logging.String("remote_addr", r.RemoteAddr))
+	ctx = logging.ContextWithLogger(ctx, reqLogger)
+	r = r.WithContext(ctx)
+
 	// Capacity pre-check
 	if b.maxClients > 0 {
 		b.lock.Lock()
 		if len(b.clients)+b.pendingClients >= b.maxClients {
 			b.lock.Unlock()
-			log.Printf("refusing websocket connection from %s: client limit %d reached", r.RemoteAddr, b.maxClients)
+			reqLogger.Warn("refusing websocket connection: client limit reached", logging.Int("max_clients", b.maxClients))
 			http.Error(w, "service unavailable: client limit reached", http.StatusServiceUnavailable)
 			return
 		}
@@ -223,10 +238,11 @@ func (b *Broker) serveWS(w http.ResponseWriter, r *http.Request) {
 			}
 			b.lock.Unlock()
 		}
-		log.Println("upgrade:", err)
+		reqLogger.Error("websocket upgrade failed", logging.Error(err))
 		return
 	}
 	client := &Client{conn: conn, send: make(chan []byte, 256), id: r.RemoteAddr}
+	client.log = reqLogger.With(logging.String("client_id", client.id))
 
 	// Enforce payload limit (read side)
 	if b.maxPayloadBytes > 0 {
@@ -236,7 +252,7 @@ func (b *Broker) serveWS(w http.ResponseWriter, r *http.Request) {
 	// Keepalive: read deadline & pong handler
 	waitDuration := time.Duration(pongWaitMultiplier) * pingInterval
 	if err := client.conn.SetReadDeadline(time.Now().Add(waitDuration)); err != nil {
-		log.Printf("set initial read deadline for %s: %v", client.id, err)
+		client.log.Error("failed to set initial read deadline", logging.Error(err))
 		_ = client.conn.Close()
 		return
 	}
@@ -263,35 +279,36 @@ func (b *Broker) serveWS(w http.ResponseWriter, r *http.Request) {
 			if err != nil {
 				// Better logging on exits
 				if ne, ok := err.(net.Error); ok && ne.Timeout() {
-					log.Printf("read deadline exceeded for %s: %v", client.id, err)
+					client.log.Warn("read deadline exceeded", logging.Error(err))
 				} else if websocket.IsCloseError(err, websocket.CloseMessageTooBig) || errors.Is(err, websocket.ErrReadLimit) {
-					log.Printf("closing connection %s due to oversized payload: %v", client.id, err)
+					client.log.Warn("closing connection due to oversized payload", logging.Error(err))
 				} else if websocket.IsUnexpectedCloseError(err, websocket.CloseGoingAway, websocket.CloseNormalClosure) {
-					log.Printf("unexpected close for %s: %v", client.id, err)
+					client.log.Warn("unexpected websocket close", logging.Error(err))
 				} else {
-					log.Printf("read error from %s: %v", client.id, err)
+					client.log.Error("read error", logging.Error(err))
 				}
 				break
 			}
 
 			// Extend read deadline after every frame
 			if err := client.conn.SetReadDeadline(time.Now().Add(waitDuration)); err != nil {
-				log.Printf("failed to extend read deadline for %s: %v", client.id, err)
+				client.log.Error("failed to extend read deadline", logging.Error(err))
 				break
 			}
 
 			if messageType != websocket.TextMessage {
-				log.Printf("dropping non-text message from %s", client.id)
+				client.log.Debug("dropping non-text message")
 				continue
 			}
 
+			// Ensure inbound payload is JSON
 			var envelope inboundEnvelope
 			if err := json.Unmarshal(msg, &envelope); err != nil {
-				log.Printf("dropping invalid message from %s: %v", client.id, err)
+				client.log.Debug("dropping invalid JSON message", logging.Error(err))
 				continue
 			}
 			if envelope.Type == "" || envelope.ID == "" {
-				log.Printf("dropping message from %s with missing type or id", client.id)
+				client.log.Debug("dropping message with missing type or id")
 				continue
 			}
 
@@ -314,19 +331,19 @@ func (b *Broker) serveWS(w http.ResponseWriter, r *http.Request) {
 					return
 				}
 				if err := client.conn.SetWriteDeadline(time.Now().Add(writeWait)); err != nil {
-					log.Printf("set write deadline for %s: %v", client.id, err)
+					client.log.Error("failed to set write deadline", logging.Error(err))
 					b.deregisterClient(client)
 					return
 				}
 				if err := client.conn.WriteMessage(websocket.TextMessage, msg); err != nil {
-					log.Printf("write error for %s: %v", client.id, err)
+					client.log.Error("write error", logging.Error(err))
 					b.deregisterClient(client)
 					return
 				}
 			case <-ticker.C:
 				// Send ping periodically; pong handler extends read deadline
 				if err := client.conn.WriteControl(websocket.PingMessage, []byte{}, time.Now().Add(writeWait)); err != nil {
-					log.Printf("ping failure for %s: %v", client.id, err)
+					client.log.Warn("ping failure", logging.Error(err))
 					b.deregisterClient(client)
 					return
 				}
@@ -334,13 +351,13 @@ func (b *Broker) serveWS(w http.ResponseWriter, r *http.Request) {
 		}
 	}()
 }
-
 func statsHandler(provider statsProvider) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		logger := logging.LoggerFromContext(r.Context()).With(logging.String("handler", "stats"))
 		stats := provider.Stats()
 		w.Header().Set("Content-Type", "application/json")
 		if err := json.NewEncoder(w).Encode(stats); err != nil {
-			log.Printf("encode stats: %v", err)
+			logger.Error("encode stats response failed", logging.Error(err))
 			http.Error(w, "internal server error", http.StatusInternalServerError)
 			return
 		}
@@ -356,6 +373,7 @@ func healthzHandler(b *Broker) http.HandlerFunc {
 	}
 
 	return func(w http.ResponseWriter, r *http.Request) {
+		logger := logging.LoggerFromContext(r.Context()).With(logging.String("handler", "healthz"))
 		clients, pending := b.snapshotClientCounts()
 		uptime := b.uptime().Seconds()
 		status := "ok"
@@ -376,7 +394,7 @@ func healthzHandler(b *Broker) http.HandlerFunc {
 			PendingClients: pending,
 		}
 		if err := json.NewEncoder(w).Encode(resp); err != nil {
-			log.Printf("encode healthz response: %v", err)
+			logger.Error("encode healthz response failed", logging.Error(err))
 		}
 	}
 }
@@ -388,54 +406,70 @@ func main() {
 
 	cfg, err := configpkg.Load()
 	if err != nil {
-		log.Fatalf("failed to load configuration: %v", err)
+		fmt.Fprintf(os.Stderr, "failed to load configuration: %v\n", err)
+		os.Exit(1)
 	}
+
+	logger, err := logging.New(cfg.Logging)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "failed to initialize structured logger: %v\n", err)
+		os.Exit(1)
+	}
+	defer func() {
+		_ = logger.Sync()
+	}()
 
 	// ping interval
 	pingInterval = cfg.PingInterval
 
 	// origin policy
 	allowlist := cfg.AllowedOrigins
-	upgrader.CheckOrigin = buildOriginChecker(allowlist)
+	originLogger := logger.With(logging.String("component", "origin-check"))
+	upgrader.CheckOrigin = buildOriginChecker(originLogger, allowlist)
 	if len(allowlist) > 0 {
-		log.Printf("allowing WebSocket origins: %s", strings.Join(allowlist, ", "))
+		logger.Info("allowing WebSocket origins", logging.Strings("origins", allowlist))
 	} else {
-		log.Println("no allowed origins configured; permitting only local development origins")
+		logger.Info("no allowed origins configured; permitting only local development origins")
 	}
 
 	// payload policy
 	maxPayloadBytes := cfg.MaxPayloadBytes
 	if maxPayloadBytes <= 0 {
-		log.Printf("invalid max payload %d; using default %d", maxPayloadBytes, configpkg.DefaultMaxPayloadBytes)
+		logger.Warn("invalid max payload provided; using default", logging.Int64("configured_bytes", maxPayloadBytes), logging.Int64("default_bytes", configpkg.DefaultMaxPayloadBytes))
 		maxPayloadBytes = configpkg.DefaultMaxPayloadBytes
 	}
-	log.Printf("maximum WebSocket payload set to %d bytes", maxPayloadBytes)
+	logger.Info("maximum WebSocket payload configured", logging.Int64("bytes", maxPayloadBytes))
 
 	// capacity policy
 	maxClients := cfg.MaxClients
 	if maxClients > 0 {
-		log.Printf("limiting WebSocket clients to %d", maxClients)
+		logger.Info("limiting WebSocket clients", logging.Int("max_clients", maxClients))
 	} else {
-		log.Println("no limit configured for WebSocket clients")
+		logger.Info("no limit configured for WebSocket clients")
 	}
 
 	// TLS config sanity
 	certProvided := cfg.TLSCertPath != ""
 
-	broker := NewBroker(maxPayloadBytes, maxClients, startedAt)
+	broker := NewBroker(maxPayloadBytes, maxClients, startedAt, logger)
 
 	// build handler with consistent mux
 	handler := buildHandler(broker)
 
 	server := &http.Server{Addr: cfg.Address, Handler: handler}
 
+	logger.Info("broker listening", logging.String("address", cfg.Address), logging.Bool("tls", certProvided))
+
 	if certProvided {
-		fmt.Println("Broker listening with TLS on", cfg.Address)
-		log.Fatal(server.ListenAndServeTLS(cfg.TLSCertPath, cfg.TLSKeyPath))
+		if err := server.ListenAndServeTLS(cfg.TLSCertPath, cfg.TLSKeyPath); err != nil {
+			logger.Fatal("broker server terminated", logging.Error(err))
+		}
+		return
 	}
 
-	fmt.Println("Broker listening on", cfg.Address)
-	log.Fatal(server.ListenAndServe())
+	if err := server.ListenAndServe(); err != nil {
+		logger.Fatal("broker server terminated", logging.Error(err))
+	}
 }
 
 func buildHandler(b *Broker) http.Handler {
@@ -446,5 +480,5 @@ func buildHandler(b *Broker) http.Handler {
 	mux.HandleFunc("/healthz", healthzHandler(b))
 	registerControlDocEndpoints(mux)
 
-	return mux
+	return logging.HTTPTraceMiddleware(b.log)(mux)
 }

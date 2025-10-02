@@ -17,6 +17,19 @@ const (
 	DefaultMaxPayloadBytes int64 = 1 << 20
 	// DefaultMaxClients bounds concurrent WebSocket connections. Zero disables the limit.
 	DefaultMaxClients = 256
+
+	// DefaultLogLevel controls verbosity for broker logs.
+	DefaultLogLevel = "info"
+	// DefaultLogPath is where structured logs are written.
+	DefaultLogPath = "broker.log"
+	// DefaultLogMaxSizeMB caps the size of a single log file before rotation.
+	DefaultLogMaxSizeMB = 100
+	// DefaultLogMaxBackups limits retained rotated log files.
+	DefaultLogMaxBackups = 10
+	// DefaultLogMaxAgeDays controls how long rotated log files are kept on disk.
+	DefaultLogMaxAgeDays = 7
+	// DefaultLogCompress toggles gzip compression for rotated log files.
+	DefaultLogCompress = true
 )
 
 // Config captures all runtime tunables for the broker service.
@@ -28,6 +41,17 @@ type Config struct {
 	MaxClients      int
 	TLSCertPath     string
 	TLSKeyPath      string
+	Logging         LoggingConfig
+}
+
+// LoggingConfig captures structured logging configuration options.
+type LoggingConfig struct {
+	Level      string
+	Path       string
+	MaxSizeMB  int
+	MaxBackups int
+	MaxAgeDays int
+	Compress   bool
 }
 
 // Load reads the broker configuration from environment variables, applying sane defaults
@@ -41,6 +65,14 @@ func Load() (*Config, error) {
 		MaxClients:      DefaultMaxClients,
 		TLSCertPath:     strings.TrimSpace(os.Getenv("BROKER_TLS_CERT")),
 		TLSKeyPath:      strings.TrimSpace(os.Getenv("BROKER_TLS_KEY")),
+		Logging: LoggingConfig{
+			Level:      strings.TrimSpace(getString("BROKER_LOG_LEVEL", DefaultLogLevel)),
+			Path:       strings.TrimSpace(getString("BROKER_LOG_PATH", DefaultLogPath)),
+			MaxSizeMB:  DefaultLogMaxSizeMB,
+			MaxBackups: DefaultLogMaxBackups,
+			MaxAgeDays: DefaultLogMaxAgeDays,
+			Compress:   DefaultLogCompress,
+		},
 	}
 
 	var problems []string
@@ -69,6 +101,42 @@ func Load() (*Config, error) {
 			problems = append(problems, fmt.Sprintf("BROKER_MAX_CLIENTS must be a non-negative integer, got %q", raw))
 		} else {
 			cfg.MaxClients = value
+		}
+	}
+
+	if raw := strings.TrimSpace(os.Getenv("BROKER_LOG_MAX_SIZE_MB")); raw != "" {
+		value, err := strconv.Atoi(raw)
+		if err != nil || value <= 0 {
+			problems = append(problems, fmt.Sprintf("BROKER_LOG_MAX_SIZE_MB must be a positive integer, got %q", raw))
+		} else {
+			cfg.Logging.MaxSizeMB = value
+		}
+	}
+
+	if raw := strings.TrimSpace(os.Getenv("BROKER_LOG_MAX_BACKUPS")); raw != "" {
+		value, err := strconv.Atoi(raw)
+		if err != nil || value < 0 {
+			problems = append(problems, fmt.Sprintf("BROKER_LOG_MAX_BACKUPS must be a non-negative integer, got %q", raw))
+		} else {
+			cfg.Logging.MaxBackups = value
+		}
+	}
+
+	if raw := strings.TrimSpace(os.Getenv("BROKER_LOG_MAX_AGE_DAYS")); raw != "" {
+		value, err := strconv.Atoi(raw)
+		if err != nil || value < 0 {
+			problems = append(problems, fmt.Sprintf("BROKER_LOG_MAX_AGE_DAYS must be a non-negative integer, got %q", raw))
+		} else {
+			cfg.Logging.MaxAgeDays = value
+		}
+	}
+
+	if raw := strings.TrimSpace(os.Getenv("BROKER_LOG_COMPRESS")); raw != "" {
+		value, err := strconv.ParseBool(raw)
+		if err != nil {
+			problems = append(problems, fmt.Sprintf("BROKER_LOG_COMPRESS must be a boolean value, got %q", raw))
+		} else {
+			cfg.Logging.Compress = value
 		}
 	}
 

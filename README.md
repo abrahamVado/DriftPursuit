@@ -23,6 +23,8 @@ Health and monitoring endpoints:
 - `GET /api/stats` — JSON statistics about broadcast totals and active clients.
 - `GET /api/controls` — metadata describing available in-game controls.
 
+Structured JSON logs are emitted to a rotating file (default `broker.log`) and include a `trace_id` field. See [docs/tracing.md](docs/tracing.md) for guidance on propagating the `X-Trace-ID` header across bots and web clients.
+
 ## Development
 
 Run the unit tests to validate protocol handling and configuration parsing:

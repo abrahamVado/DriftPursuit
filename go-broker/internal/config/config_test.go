@@ -14,6 +14,12 @@ func TestLoadDefaults(t *testing.T) {
 	t.Setenv("BROKER_MAX_CLIENTS", "")
 	t.Setenv("BROKER_TLS_CERT", "")
 	t.Setenv("BROKER_TLS_KEY", "")
+	t.Setenv("BROKER_LOG_LEVEL", "")
+	t.Setenv("BROKER_LOG_PATH", "")
+	t.Setenv("BROKER_LOG_MAX_SIZE_MB", "")
+	t.Setenv("BROKER_LOG_MAX_BACKUPS", "")
+	t.Setenv("BROKER_LOG_MAX_AGE_DAYS", "")
+	t.Setenv("BROKER_LOG_COMPRESS", "")
 
 	cfg, err := Load()
 	if err != nil {
@@ -38,6 +44,24 @@ func TestLoadDefaults(t *testing.T) {
 	if cfg.TLSCertPath != "" || cfg.TLSKeyPath != "" {
 		t.Fatalf("expected TLS paths to be empty, got cert=%q key=%q", cfg.TLSCertPath, cfg.TLSKeyPath)
 	}
+	if cfg.Logging.Level != DefaultLogLevel {
+		t.Fatalf("expected default log level %q, got %q", DefaultLogLevel, cfg.Logging.Level)
+	}
+	if cfg.Logging.Path != DefaultLogPath {
+		t.Fatalf("expected default log path %q, got %q", DefaultLogPath, cfg.Logging.Path)
+	}
+	if cfg.Logging.MaxSizeMB != DefaultLogMaxSizeMB {
+		t.Fatalf("expected default log max size %d, got %d", DefaultLogMaxSizeMB, cfg.Logging.MaxSizeMB)
+	}
+	if cfg.Logging.MaxBackups != DefaultLogMaxBackups {
+		t.Fatalf("expected default log max backups %d, got %d", DefaultLogMaxBackups, cfg.Logging.MaxBackups)
+	}
+	if cfg.Logging.MaxAgeDays != DefaultLogMaxAgeDays {
+		t.Fatalf("expected default log max age %d, got %d", DefaultLogMaxAgeDays, cfg.Logging.MaxAgeDays)
+	}
+	if cfg.Logging.Compress != DefaultLogCompress {
+		t.Fatalf("expected default log compress %t, got %t", DefaultLogCompress, cfg.Logging.Compress)
+	}
 }
 
 func TestLoadOverrides(t *testing.T) {
@@ -48,6 +72,12 @@ func TestLoadOverrides(t *testing.T) {
 	t.Setenv("BROKER_MAX_CLIENTS", "12")
 	t.Setenv("BROKER_TLS_CERT", "/tmp/cert.pem")
 	t.Setenv("BROKER_TLS_KEY", "/tmp/key.pem")
+	t.Setenv("BROKER_LOG_LEVEL", "debug")
+	t.Setenv("BROKER_LOG_PATH", "/var/log/broker.log")
+	t.Setenv("BROKER_LOG_MAX_SIZE_MB", "512")
+	t.Setenv("BROKER_LOG_MAX_BACKUPS", "4")
+	t.Setenv("BROKER_LOG_MAX_AGE_DAYS", "2")
+	t.Setenv("BROKER_LOG_COMPRESS", "false")
 
 	cfg, err := Load()
 	if err != nil {
@@ -72,6 +102,24 @@ func TestLoadOverrides(t *testing.T) {
 	if cfg.TLSCertPath != "/tmp/cert.pem" || cfg.TLSKeyPath != "/tmp/key.pem" {
 		t.Fatalf("unexpected TLS paths cert=%q key=%q", cfg.TLSCertPath, cfg.TLSKeyPath)
 	}
+	if cfg.Logging.Level != "debug" {
+		t.Fatalf("expected overridden log level debug, got %q", cfg.Logging.Level)
+	}
+	if cfg.Logging.Path != "/var/log/broker.log" {
+		t.Fatalf("unexpected log path %q", cfg.Logging.Path)
+	}
+	if cfg.Logging.MaxSizeMB != 512 {
+		t.Fatalf("expected log max size 512, got %d", cfg.Logging.MaxSizeMB)
+	}
+	if cfg.Logging.MaxBackups != 4 {
+		t.Fatalf("expected log max backups 4, got %d", cfg.Logging.MaxBackups)
+	}
+	if cfg.Logging.MaxAgeDays != 2 {
+		t.Fatalf("expected log max age 2, got %d", cfg.Logging.MaxAgeDays)
+	}
+	if cfg.Logging.Compress {
+		t.Fatalf("expected log compression disabled")
+	}
 }
 
 func TestLoadReturnsValidationErrors(t *testing.T) {
@@ -80,6 +128,10 @@ func TestLoadReturnsValidationErrors(t *testing.T) {
 	t.Setenv("BROKER_MAX_CLIENTS", "-1")
 	t.Setenv("BROKER_TLS_CERT", "/tmp/cert.pem")
 	t.Setenv("BROKER_TLS_KEY", "")
+	t.Setenv("BROKER_LOG_MAX_SIZE_MB", "-1")
+	t.Setenv("BROKER_LOG_MAX_BACKUPS", "-2")
+	t.Setenv("BROKER_LOG_MAX_AGE_DAYS", "-3")
+	t.Setenv("BROKER_LOG_COMPRESS", "notabool")
 
 	_, err := Load()
 	if err == nil {
@@ -91,6 +143,10 @@ func TestLoadReturnsValidationErrors(t *testing.T) {
 		"BROKER_PING_INTERVAL",
 		"BROKER_MAX_CLIENTS",
 		"BROKER_TLS_CERT",
+		"BROKER_LOG_MAX_SIZE_MB",
+		"BROKER_LOG_MAX_BACKUPS",
+		"BROKER_LOG_MAX_AGE_DAYS",
+		"BROKER_LOG_COMPRESS",
 	} {
 		if !strings.Contains(err.Error(), want) {
 			t.Fatalf("expected error to mention %s, got %q", want, err.Error())
