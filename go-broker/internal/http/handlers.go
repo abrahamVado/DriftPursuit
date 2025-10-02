@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"driftpursuit/broker/internal/logging"
+	"driftpursuit/broker/internal/networking"
 )
 
 // ReadinessProvider exposes broker state required for readiness checks.
@@ -43,6 +44,7 @@ type Options struct {
 	Logger      *logging.Logger
 	Readiness   ReadinessProvider
 	Stats       StatsFunc
+	Snapshots   *networking.SnapshotMetrics
 	Replay      ReplayDumper
 	AdminToken  string
 	RateLimiter RateLimiter
@@ -54,6 +56,7 @@ type HandlerSet struct {
 	logger      *logging.Logger
 	readiness   ReadinessProvider
 	stats       StatsFunc
+	snapshots   *networking.SnapshotMetrics
 	replay      ReplayDumper
 	adminToken  string
 	rateLimiter RateLimiter
@@ -74,6 +77,7 @@ func NewHandlerSet(opts Options) *HandlerSet {
 		logger:      logger,
 		readiness:   opts.Readiness,
 		stats:       opts.Stats,
+		snapshots:   opts.Snapshots,
 		replay:      opts.Replay,
 		adminToken:  strings.TrimSpace(opts.AdminToken),
 		rateLimiter: opts.RateLimiter,
@@ -155,6 +159,20 @@ func (h *HandlerSet) MetricsHandler() http.HandlerFunc {
 		fmt.Fprintf(w, "# HELP broker_broadcasts_total Total broadcast payloads delivered.\n")
 		fmt.Fprintf(w, "# TYPE broker_broadcasts_total counter\n")
 		fmt.Fprintf(w, "broker_broadcasts_total %d\n", broadcasts)
+		if h.snapshots != nil {
+			bytes := h.snapshots.BytesPerClient()
+			fmt.Fprintf(w, "# HELP broker_snapshot_bytes_per_client Last encoded world snapshot size per client in bytes.\n")
+			fmt.Fprintf(w, "# TYPE broker_snapshot_bytes_per_client gauge\n")
+			for clientID, size := range bytes {
+				fmt.Fprintf(w, "broker_snapshot_bytes_per_client{client=%q} %d\n", clientID, size)
+			}
+			drops := h.snapshots.DropCounts()
+			fmt.Fprintf(w, "# HELP broker_snapshot_dropped_entities_total Total dropped entities per interest tier due to budgeting.\n")
+			fmt.Fprintf(w, "# TYPE broker_snapshot_dropped_entities_total counter\n")
+			for tier, count := range drops {
+				fmt.Fprintf(w, "broker_snapshot_dropped_entities_total{tier=%q} %d\n", tier.String(), count)
+			}
+		}
 	}
 }
 
