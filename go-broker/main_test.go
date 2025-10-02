@@ -32,6 +32,7 @@ import (
 	configpkg "driftpursuit/broker/internal/config"
 	"driftpursuit/broker/internal/input"
 	"driftpursuit/broker/internal/logging"
+	"driftpursuit/broker/internal/networking"
 	pb "driftpursuit/broker/internal/proto/pb"
 	"driftpursuit/broker/internal/state"
 	"github.com/gorilla/websocket"
@@ -601,6 +602,9 @@ func TestServeWSRequiresAuthTokenWhenConfigured(t *testing.T) {
 		t.Fatalf("dial websocket with token: %v", err)
 	}
 	defer conn.Close()
+
+	//1.- Allow the server goroutine time to register the authenticated client before inspecting state.
+	time.Sleep(50 * time.Millisecond)
 
 	broker.lock.RLock()
 	var found bool
@@ -1399,5 +1403,48 @@ func TestBrokerSubscribeStateDiffs(t *testing.T) {
 		}
 	case <-time.After(time.Second):
 		t.Fatal("timed out waiting for diff event")
+	}
+}
+
+func TestPublishWorldSnapshotHonoursBandwidthThrottle(t *testing.T) {
+	logger := logging.NewTestLogger()
+	current := time.Unix(0, 0)
+	clock := func() time.Time { return current }
+	regulator := networking.NewBandwidthRegulator(1, clock)
+
+	broker := NewBroker(configpkg.DefaultMaxPayloadBytes, configpkg.DefaultMaxClients, time.Now(), logger, WithBandwidthRegulator(regulator))
+	client := &Client{id: "client-1", send: make(chan []byte, 1)}
+	broker.lock.Lock()
+	broker.clients[client] = true
+	broker.lock.Unlock()
+
+	broker.tierManager.UpdateObserver(client.id, &pb.ObserverState{ObserverId: client.id, Position: &pb.Vector3{}})
+	entity := &pb.EntitySnapshot{SchemaVersion: "1.0.0", EntityId: "target", Active: true, Position: &pb.Vector3{}}
+	broker.tierManager.UpdateEntity(entity)
+
+	snapshot := &pb.WorldSnapshot{SchemaVersion: "1.0.0", CapturedAtMs: 1}
+	plan, err := broker.snapshotPublisher.Build(client.id, snapshot, broker.tierManager.Buckets(client.id))
+	if err != nil {
+		t.Fatalf("snapshot build failed: %v", err)
+	}
+	if len(plan.Payload) <= 1 {
+		t.Fatalf("expected payload size to exceed throttle capacity, got %d", len(plan.Payload))
+	}
+
+	broker.publishWorldSnapshot(snapshot)
+
+	if len(client.send) != 0 {
+		t.Fatalf("expected throttled client to receive no payloads")
+	}
+
+	usage := regulator.SnapshotUsage()
+	sample, ok := usage[client.id]
+	if !ok || sample.DeniedDeliveries == 0 {
+		t.Fatalf("expected bandwidth regulator to record a denied delivery: %+v", usage)
+	}
+
+	sizes := broker.snapshotMetrics.BytesPerClient()
+	if sizes[client.id] != 0 {
+		t.Fatalf("expected bytes gauge to report throttled payload size 0, got %d", sizes[client.id])
 	}
 }

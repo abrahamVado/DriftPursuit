@@ -13,6 +13,7 @@ import (
 	"driftpursuit/broker/internal/logging"
 	"driftpursuit/broker/internal/networking"
 	pb "driftpursuit/broker/internal/proto/pb"
+	"driftpursuit/broker/internal/replay"
 )
 
 type stubReadiness struct {
@@ -111,13 +112,28 @@ func TestMetricsHandlerOutputsPrometheusFormat(t *testing.T) {
 	readiness := &stubReadiness{clients: 2, pending: 1, uptime: 90 * time.Second}
 	metrics := networking.NewSnapshotMetrics()
 	metrics.Observe("client-1", 256, map[pb.InterestTier]int{pb.InterestTier_INTEREST_TIER_RADAR: 3})
+	current := time.Unix(0, 0)
+	clock := func() time.Time { return current }
+	bandwidth := networking.NewBandwidthRegulator(100, clock)
+	if !bandwidth.Allow("client-1", 100) {
+		t.Fatalf("initial bandwidth allowance failed")
+	}
+	if bandwidth.Allow("client-1", 10) {
+		t.Fatalf("expected bandwidth request to be throttled")
+	}
+	current = current.Add(time.Second)
+	replayStats := func() replay.Stats {
+		return replay.Stats{BufferedFrames: 3, BufferedBytes: 2048, Dumps: 2}
+	}
 	handlers := NewHandlerSet(Options{
 		Logger:    logging.NewTestLogger(),
 		Readiness: readiness,
 		Stats: func() (int, int) {
 			return 4, 2
 		},
-		Snapshots: metrics,
+		Snapshots:   metrics,
+		Bandwidth:   bandwidth,
+		ReplayStats: replayStats,
 	})
 
 	rr := httptest.NewRecorder()
@@ -135,6 +151,10 @@ func TestMetricsHandlerOutputsPrometheusFormat(t *testing.T) {
 		"broker_uptime_seconds 90",
 		"broker_snapshot_bytes_per_client{client=\"client-1\"} 256",
 		"broker_snapshot_dropped_entities_total{tier=\"INTEREST_TIER_RADAR\"} 3",
+		"broker_bandwidth_bytes_per_second{client=\"client-1\"} 100.00",
+		"broker_bandwidth_denied_total{client=\"client-1\"} 1",
+		"broker_replay_buffer_frames 3",
+		"broker_replay_dumps_total 2",
 	} {
 		if !strings.Contains(body, substr) {
 			t.Fatalf("metrics missing %q:\n%s", substr, body)
