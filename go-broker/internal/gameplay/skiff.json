@@ -1,0 +1,11 @@
+{
+  "maxSpeedMps": 120.0,
+  "maxAngularSpeedDegPerSec": 180.0,
+  "forwardAccelerationMps2": 32.0,
+  "reverseAccelerationMps2": 22.0,
+  "strafeAccelerationMps2": 18.0,
+  "verticalAccelerationMps2": 16.0,
+  "boostAccelerationMps2": 48.0,
+  "boostDurationSeconds": 3.5,
+  "boostCooldownSeconds": 9.0
+}
