@@ -24,6 +24,8 @@ func TestLoadDefaults(t *testing.T) {
 	t.Setenv("BROKER_ADMIN_TOKEN", "")
 	t.Setenv("BROKER_REPLAY_DUMP_WINDOW", "")
 	t.Setenv("BROKER_REPLAY_DUMP_BURST", "")
+	t.Setenv("BROKER_STATE_PATH", "")
+	t.Setenv("BROKER_STATE_INTERVAL", "")
 
 	cfg, err := Load()
 	if err != nil {
@@ -75,6 +77,12 @@ func TestLoadDefaults(t *testing.T) {
 	if cfg.Logging.Compress != DefaultLogCompress {
 		t.Fatalf("expected default log compress %t, got %t", DefaultLogCompress, cfg.Logging.Compress)
 	}
+	if cfg.StateSnapshotPath != "" {
+		t.Fatalf("expected state snapshot path to be empty by default")
+	}
+	if cfg.StateSnapshotInterval != DefaultStateSnapshotInterval {
+		t.Fatalf("expected default state snapshot interval %v, got %v", DefaultStateSnapshotInterval, cfg.StateSnapshotInterval)
+	}
 }
 
 func TestLoadOverrides(t *testing.T) {
@@ -94,6 +102,8 @@ func TestLoadOverrides(t *testing.T) {
 	t.Setenv("BROKER_ADMIN_TOKEN", "s3cret")
 	t.Setenv("BROKER_REPLAY_DUMP_WINDOW", "2m")
 	t.Setenv("BROKER_REPLAY_DUMP_BURST", "3")
+	t.Setenv("BROKER_STATE_PATH", "/var/run/broker/state.json")
+	t.Setenv("BROKER_STATE_INTERVAL", "15s")
 
 	cfg, err := Load()
 	if err != nil {
@@ -145,6 +155,12 @@ func TestLoadOverrides(t *testing.T) {
 	if cfg.ReplayDumpBurst != 3 {
 		t.Fatalf("expected replay dump burst 3, got %d", cfg.ReplayDumpBurst)
 	}
+	if cfg.StateSnapshotPath != "/var/run/broker/state.json" {
+		t.Fatalf("unexpected state snapshot path %q", cfg.StateSnapshotPath)
+	}
+	if cfg.StateSnapshotInterval != 15*time.Second {
+		t.Fatalf("expected state snapshot interval 15s, got %v", cfg.StateSnapshotInterval)
+	}
 }
 
 func TestLoadReturnsValidationErrors(t *testing.T) {
@@ -159,6 +175,7 @@ func TestLoadReturnsValidationErrors(t *testing.T) {
 	t.Setenv("BROKER_LOG_COMPRESS", "notabool")
 	t.Setenv("BROKER_REPLAY_DUMP_WINDOW", "-")
 	t.Setenv("BROKER_REPLAY_DUMP_BURST", "0")
+	t.Setenv("BROKER_STATE_INTERVAL", "-1s")
 
 	_, err := Load()
 	if err == nil {
@@ -176,6 +193,7 @@ func TestLoadReturnsValidationErrors(t *testing.T) {
 		"BROKER_LOG_COMPRESS",
 		"BROKER_REPLAY_DUMP_WINDOW",
 		"BROKER_REPLAY_DUMP_BURST",
+		"BROKER_STATE_INTERVAL",
 	} {
 		if !strings.Contains(err.Error(), want) {
 			t.Fatalf("expected error to mention %s, got %q", want, err.Error())

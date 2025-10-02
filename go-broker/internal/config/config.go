@@ -35,21 +35,26 @@ const (
 	DefaultLogMaxAgeDays = 7
 	// DefaultLogCompress toggles gzip compression for rotated log files.
 	DefaultLogCompress = true
+
+	// DefaultStateSnapshotInterval controls how frequently state snapshots are persisted.
+	DefaultStateSnapshotInterval = 30 * time.Second
 )
 
 // Config captures all runtime tunables for the broker service.
 type Config struct {
-	Address          string
-	AllowedOrigins   []string
-	MaxPayloadBytes  int64
-	PingInterval     time.Duration
-	MaxClients       int
-	TLSCertPath      string
-	TLSKeyPath       string
-	AdminToken       string
-	ReplayDumpWindow time.Duration
-	ReplayDumpBurst  int
-	Logging          LoggingConfig
+	Address               string
+	AllowedOrigins        []string
+	MaxPayloadBytes       int64
+	PingInterval          time.Duration
+	MaxClients            int
+	TLSCertPath           string
+	TLSKeyPath            string
+	AdminToken            string
+	ReplayDumpWindow      time.Duration
+	ReplayDumpBurst       int
+	Logging               LoggingConfig
+	StateSnapshotPath     string
+	StateSnapshotInterval time.Duration
 }
 
 // LoggingConfig captures structured logging configuration options.
@@ -84,6 +89,8 @@ func Load() (*Config, error) {
 			MaxAgeDays: DefaultLogMaxAgeDays,
 			Compress:   DefaultLogCompress,
 		},
+		StateSnapshotPath:     strings.TrimSpace(os.Getenv("BROKER_STATE_PATH")),
+		StateSnapshotInterval: DefaultStateSnapshotInterval,
 	}
 
 	var problems []string
@@ -166,6 +173,15 @@ func Load() (*Config, error) {
 			problems = append(problems, fmt.Sprintf("BROKER_REPLAY_DUMP_BURST must be a positive integer, got %q", raw))
 		} else {
 			cfg.ReplayDumpBurst = value
+		}
+	}
+
+	if raw := strings.TrimSpace(os.Getenv("BROKER_STATE_INTERVAL")); raw != "" {
+		duration, err := time.ParseDuration(raw)
+		if err != nil || duration <= 0 {
+			problems = append(problems, fmt.Sprintf("BROKER_STATE_INTERVAL must be a positive duration, got %q", raw))
+		} else {
+			cfg.StateSnapshotInterval = duration
 		}
 	}
 

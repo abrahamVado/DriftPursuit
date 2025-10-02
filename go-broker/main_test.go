@@ -16,6 +16,9 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"path/filepath"
+	"reflect"
+	"sort"
 	"strings"
 	"sync"
 	"testing"
@@ -419,6 +422,18 @@ func listenOnce(conn *websocket.Conn) <-chan wsReadResult {
 	return ch
 }
 
+func waitForBrokerRecovery(t *testing.T, broker *Broker) {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if !broker.isRecovering() {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatal("broker did not finish recovery in time")
+}
+
 func TestServeWSDropsInvalidMessages(t *testing.T) {
 	upgrader.CheckOrigin = func(*http.Request) bool { return true }
 	broker := NewBroker(configpkg.DefaultMaxPayloadBytes, 0, time.Now(), logging.NewTestLogger())
@@ -543,6 +558,132 @@ func TestServeWSRejectsOversizedMessages(t *testing.T) {
 		}
 	case <-time.After(time.Second):
 		t.Fatal("timed out waiting for broadcast after oversized message")
+	}
+}
+
+func TestBrokerSnapshotRecovery(t *testing.T) {
+	upgrader.CheckOrigin = func(*http.Request) bool { return true }
+	tmpDir := t.TempDir()
+	snapshotPath := filepath.Join(tmpDir, "state.json")
+
+	logger := logging.NewTestLogger()
+
+	// Seed snapshot with initial state.
+	seedSnapshotter, err := NewStateSnapshotter(snapshotPath, time.Hour, logger)
+	if err != nil {
+		t.Fatalf("NewStateSnapshotter (seed): %v", err)
+	}
+	broker := NewBroker(configpkg.DefaultMaxPayloadBytes, 0, time.Now(), logger, WithSnapshotter(seedSnapshotter))
+	waitForBrokerRecovery(t, broker)
+
+	initial := []byte(`{"type":"match_state","id":"abc","score":1}`)
+	seedSnapshotter.Record("match_state", initial)
+	if err := seedSnapshotter.Flush(); err != nil {
+		t.Fatalf("seed snapshot flush: %v", err)
+	}
+	if err := seedSnapshotter.Close(); err != nil {
+		t.Fatalf("seed snapshot close: %v", err)
+	}
+
+	// Restart broker with delayed snapshot load to exercise recovery behaviour.
+	recoveringSnapshotter, err := NewStateSnapshotter(snapshotPath, time.Hour, logger, WithSnapshotReplayDelay(time.Second))
+	if err != nil {
+		t.Fatalf("NewStateSnapshotter (recovering): %v", err)
+	}
+	defer func() { _ = recoveringSnapshotter.Close() }()
+
+	recoveringBroker := NewBroker(configpkg.DefaultMaxPayloadBytes, 0, time.Now(), logger, WithSnapshotter(recoveringSnapshotter))
+
+	cfg := &configpkg.Config{
+		AdminToken:       "test-token",
+		ReplayDumpWindow: configpkg.DefaultReplayDumpWindow,
+		ReplayDumpBurst:  configpkg.DefaultReplayDumpBurst,
+	}
+	server := httptest.NewServer(buildHandler(recoveringBroker, cfg))
+	defer server.Close()
+
+	// Ready endpoint should report recovery in progress.
+	respReady, err := server.Client().Get(server.URL + "/readyz")
+	if err != nil {
+		t.Fatalf("GET readyz during recovery: %v", err)
+	}
+	if respReady.StatusCode != http.StatusServiceUnavailable {
+		t.Fatalf("expected readyz 503 during recovery, got %d", respReady.StatusCode)
+	}
+	var readyPayload struct {
+		Status  string `json:"status"`
+		Message string `json:"message"`
+	}
+	if err := json.NewDecoder(respReady.Body).Decode(&readyPayload); err != nil {
+		t.Fatalf("decode readyz payload: %v", err)
+	}
+	respReady.Body.Close()
+	if !strings.Contains(readyPayload.Message, "recovery") {
+		t.Fatalf("expected ready message to mention recovery, got %+v", readyPayload)
+	}
+
+	wsURL := "ws" + strings.TrimPrefix(server.URL, "http") + "/ws"
+	conn, resp, err := websocket.DefaultDialer.Dial(wsURL, nil)
+	if err == nil {
+		conn.Close()
+		t.Fatal("expected websocket dial to fail during recovery")
+	}
+	if resp == nil || resp.StatusCode != http.StatusServiceUnavailable {
+		t.Fatalf("expected websocket rejection with 503, got resp=%v err=%v", resp, err)
+	}
+	if resp != nil && resp.Body != nil {
+		resp.Body.Close()
+	}
+
+	waitForBrokerRecovery(t, recoveringBroker)
+
+	// Ready endpoint should now be healthy.
+	respReady2, err := server.Client().Get(server.URL + "/readyz")
+	if err != nil {
+		t.Fatalf("GET readyz after recovery: %v", err)
+	}
+	if respReady2.StatusCode != http.StatusOK {
+		t.Fatalf("expected readyz 200 after recovery, got %d", respReady2.StatusCode)
+	}
+	respReady2.Body.Close()
+
+	snapshots := recoveringSnapshotter.StateMessages()
+	if len(snapshots) != 2 {
+		t.Fatalf("expected two snapshot messages, got %d", len(snapshots))
+	}
+
+	conn, _, err = websocket.DefaultDialer.Dial(wsURL, nil)
+	if err != nil {
+		t.Fatalf("dial websocket after recovery: %v", err)
+	}
+	defer conn.Close()
+	if err := conn.SetReadDeadline(time.Now().Add(time.Second)); err != nil {
+		t.Fatalf("set read deadline: %v", err)
+	}
+	var receivedTypes []string
+	for i := 0; i < 2; i++ {
+		if err := conn.SetReadDeadline(time.Now().Add(time.Second)); err != nil {
+			t.Fatalf("set read deadline %d: %v", i, err)
+		}
+		_, payload, err := conn.ReadMessage()
+		if err != nil {
+			t.Fatalf("read snapshot message %d: %v", i, err)
+		}
+		var envelope struct {
+			Type   string `json:"type"`
+			Status string `json:"status"`
+		}
+		if err := json.Unmarshal(payload, &envelope); err != nil {
+			t.Fatalf("decode snapshot message %d: %v", i, err)
+		}
+		receivedTypes = append(receivedTypes, envelope.Type)
+		if envelope.Type == "system_status" && envelope.Status != "recovered" {
+			t.Fatalf("unexpected system status payload: %+v", envelope)
+		}
+	}
+	sort.Strings(receivedTypes)
+	if !reflect.DeepEqual(receivedTypes, []string{"match_state", "system_status"}) {
+		t.Fatalf("expected replay types match_state and system_status, got %v", receivedTypes)
 	}
 }
 
