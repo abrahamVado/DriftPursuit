@@ -7,6 +7,7 @@ from tunnelcave_sandbox.src.generation import (
     generate_loop_tube,
     load_generator_settings,
 )
+from tunnelcave_sandbox.src.world import SPAWN_TAG
 
 
 # //1.- Loop generation should respect configured radius limits and produce rooms.
@@ -18,6 +19,7 @@ def test_generate_loop_tube_respects_constraints():
     assert min(result.profile.radii) >= settings.clearance.min_radius_m
     assert max(result.profile.radii) <= settings.clearance.max_radius_m
     assert result.profile.room_indices
+    assert result.descriptor.tagged(SPAWN_TAG)
 
 
 # //2.- Loop generation should close the path to form a loop structure.

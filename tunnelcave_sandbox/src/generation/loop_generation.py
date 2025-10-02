@@ -9,6 +9,7 @@ from .config import GenerationSeeds
 from .divergence_free import DivergenceFreeField, integrate_streamline
 from .swept_tube import SweptTube, build_swept_tube
 from .settings import GeneratorSettings
+from ..world import WorldDescriptor, build_loop_descriptor
 
 
 # //1.- Describe the generated loop profile for downstream validation and metrics.
@@ -23,6 +24,7 @@ class LoopProfile:
 class LoopGenerationResult:
     tube: SweptTube
     profile: LoopProfile
+    descriptor: WorldDescriptor
 
 
 # //3.- Compute total steps ensuring the loop meets the configured length target.
@@ -92,7 +94,8 @@ def generate_loop_tube(
     radii, rooms = _build_radius_profile(path_length=len(closed_path), seeds=seeds, settings=settings)
     tube = _tube_from_profile(closed_path, radii)
     profile = LoopProfile(radii=tuple(radii), room_indices=tuple(rooms))
-    return LoopGenerationResult(tube=tube, profile=profile)
+    descriptor = build_loop_descriptor(closed_path, profile.radii, profile.room_indices)
+    return LoopGenerationResult(tube=tube, profile=profile, descriptor=descriptor)
 
 
 # //8.- Validate generated tube against clearance constraints producing diagnostics.
