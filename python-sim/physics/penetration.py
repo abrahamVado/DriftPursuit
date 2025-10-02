@@ -79,3 +79,34 @@ def advance_body(
         corrected_velocity = state.velocity
 
     return BodyState(position=corrected_position, velocity=corrected_velocity)
+
+
+def advance_surface_bound_body(
+    state: BodyState,
+    field: SignedDistanceField,
+    *,
+    radius: float,
+    dt: float,
+    normal_epsilon: float = 1e-3,
+) -> BodyState:
+    """Advance a body while constraining it to remain attached to the surface."""
+
+    # //1.- Reuse the standard integrator to resolve any downward penetration first.
+    advanced = advance_body(state, field, radius=radius, dt=dt, normal_epsilon=normal_epsilon)
+    _, clearance = field.sphere_intersection(advanced.position, radius)
+    if clearance <= 0.0:
+        # //2.- Already touching or intersecting the surface so no additional clamping is required.
+        return advanced
+
+    # //3.- Project the body back onto the surface to stop it from leaving the ground plane.
+    normal = field.surface_normal(advanced.position, epsilon=normal_epsilon)
+    corrected_position = _add(advanced.position, _scale(normal, -clearance))
+
+    # //4.- Remove any upward velocity so the next frame remains glued to the track.
+    upward_speed = _dot(advanced.velocity, normal)
+    if upward_speed > 0.0:
+        corrected_velocity = _add(advanced.velocity, _scale(normal, -upward_speed))
+    else:
+        corrected_velocity = advanced.velocity
+
+    return BodyState(position=corrected_position, velocity=corrected_velocity)

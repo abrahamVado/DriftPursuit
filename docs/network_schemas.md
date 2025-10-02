@@ -49,6 +49,15 @@ The generated bindings streamline deserialisation in each language:
 - **Python** — `vehicle_pb2.VehicleState.FromString` provides the strongly typed view needed by automation tools.
 - **TypeScript** — The ts-proto bindings expose `VehicleState.encode`, `VehicleState.decode`, and JSON helpers so browser and Node clients can validate their payloads before delivery.
 
+## Ground vehicle roster status
+
+Ground vehicles are intentionally absent from the live roster until the shared
+surface-bound physics stack is production ready. Placeholder configuration entries
+live alongside the Skiff stats so UI experiments can enumerate the future roster
+without allowing selection. The client marks those entries as non-selectable and
+provides explanatory messaging while the drivetrain, suspension, and balance data
+are still under development.
+
 //3.- Capture pilot intent frames
 
 Real-time control streams follow the `Intent` schema so the broker can enforce limits before forwarding commands downstream.
