@@ -270,6 +270,9 @@ func TestStatsHandlerReturnsJSON(t *testing.T) {
 	if !reflect.DeepEqual(resp.IntentDrops, fake.stats.IntentDrops) {
 		t.Fatalf("unexpected intent drops: got %+v want %+v", resp.IntentDrops, fake.stats.IntentDrops)
 	}
+	if !reflect.DeepEqual(resp.IntentValidation, fake.stats.IntentValidation) {
+		t.Fatalf("unexpected intent validation: got %+v want %+v", resp.IntentValidation, fake.stats.IntentValidation)
+	}
 	fake.mu.Lock()
 	defer fake.mu.Unlock()
 	if fake.calls != 1 {
@@ -961,6 +964,109 @@ func TestHandleStructuredMessageRejectsIntentRegression(t *testing.T) {
 	}
 }
 
+func TestHandleStructuredMessageRejectsIntentOutOfRange(t *testing.T) {
+	//1.- Build a baseline broker that uses the default validator configuration.
+	broker := NewBroker(configpkg.DefaultMaxPayloadBytes, configpkg.DefaultMaxClients, time.Now(), logging.NewTestLogger())
+
+	envelope := inboundEnvelope{Type: "intent", ID: "pilot-range"}
+	//2.- Craft a payload that violates the throttle range envelope.
+	raw, err := json.Marshal(map[string]any{
+		"type":           "intent",
+		"id":             "pilot-range",
+		"schema_version": "0.1.0",
+		"sequence_id":    1,
+		"throttle":       1.5,
+		"brake":          0.1,
+		"steer":          0.0,
+		"handbrake":      false,
+		"gear":           2,
+		"boost":          false,
+	})
+	if err != nil {
+		t.Fatalf("marshal intent: %v", err)
+	}
+
+	if consumed := broker.handleStructuredMessage(nil, envelope, raw); !consumed {
+		t.Fatalf("intent should be consumed even when rejected")
+	}
+	if stored := broker.intentForController("pilot-range"); stored != nil {
+		t.Fatalf("out-of-range intent should not be stored")
+	}
+
+	stats := broker.Stats()
+	key := fmt.Sprintf("%s|%s", envelope.ID, envelope.ID)
+	counters, ok := stats.IntentValidation[key]
+	if !ok {
+		t.Fatalf("expected validation counters for %s", key)
+	}
+	if counters.Violations[input.ValidationReasonThrottleRange] == 0 {
+		t.Fatalf("expected throttle range violation in stats, got %+v", counters)
+	}
+}
+
+func TestHandleStructuredMessageRejectsIntentDelta(t *testing.T) {
+	//1.- Initialise the broker with the default validator.
+	broker := NewBroker(configpkg.DefaultMaxPayloadBytes, configpkg.DefaultMaxClients, time.Now(), logging.NewTestLogger())
+
+	envelope := inboundEnvelope{Type: "intent", ID: "pilot-delta"}
+	//2.- Seed the validator with a valid baseline frame.
+	raw1, err := json.Marshal(map[string]any{
+		"type":           "intent",
+		"id":             "pilot-delta",
+		"schema_version": "0.1.0",
+		"sequence_id":    1,
+		"throttle":       0.0,
+		"brake":          0.0,
+		"steer":          0.0,
+		"handbrake":      false,
+		"gear":           1,
+		"boost":          false,
+	})
+	if err != nil {
+		t.Fatalf("marshal intent#1: %v", err)
+	}
+	if consumed := broker.handleStructuredMessage(nil, envelope, raw1); !consumed {
+		t.Fatalf("first intent should be consumed")
+	}
+
+	raw2, err := json.Marshal(map[string]any{
+		"type":           "intent",
+		"id":             "pilot-delta",
+		"schema_version": "0.1.0",
+		"sequence_id":    2,
+		"throttle":       1.0,
+		"brake":          0.0,
+		"steer":          0.0,
+		"handbrake":      false,
+		"gear":           1,
+		"boost":          false,
+	})
+	if err != nil {
+		t.Fatalf("marshal intent#2: %v", err)
+	}
+	if consumed := broker.handleStructuredMessage(nil, envelope, raw2); !consumed {
+		t.Fatalf("second intent should be consumed even when rejected")
+	}
+
+	stored := broker.intentForController("pilot-delta")
+	if stored == nil {
+		t.Fatalf("intent missing after delta test")
+	}
+	if got, want := stored.Throttle, 0.0; got != want {
+		t.Fatalf("throttle changed despite rejection: got %.2f want %.2f", got, want)
+	}
+
+	stats := broker.Stats()
+	key := fmt.Sprintf("%s|%s", envelope.ID, envelope.ID)
+	counters, ok := stats.IntentValidation[key]
+	if !ok {
+		t.Fatalf("expected validation counters for %s", key)
+	}
+	if counters.Violations[input.ValidationReasonThrottleDelta] == 0 {
+		t.Fatalf("expected throttle delta violation, got %+v", counters)
+	}
+}
+
 type intentClock struct {
 	mu  sync.Mutex
 	now time.Time
@@ -1041,6 +1147,150 @@ func TestHandleStructuredMessageRateLimitsIntent(t *testing.T) {
 	drops := stats.IntentDrops[client.id]
 	if drops.RateLimited != 1 {
 		t.Fatalf("rate limited drops = %d, want 1", drops.RateLimited)
+	}
+}
+
+func TestHandleStructuredMessageEnforcesIntentCooldown(t *testing.T) {
+	base := time.Unix(0, 0)
+	clock := &intentClock{now: base}
+	cfg := input.DefaultControlConstraints
+	cfg.InvalidBurstLimit = 2
+	cfg.CooldownDuration = 200 * time.Millisecond
+	//1.- Construct a validator with a short cooldown window so the test runs quickly.
+	validator := input.NewValidator(cfg, logging.NewTestLogger(), input.WithValidatorClock(clock))
+	gate := input.NewGate(input.Config{}, logging.NewTestLogger(), input.WithClock(clock))
+	//2.- Provision a broker that uses the customised gate and validator.
+	broker := NewBroker(configpkg.DefaultMaxPayloadBytes, configpkg.DefaultMaxClients, time.Now(), logging.NewTestLogger(), WithIntentGate(gate), WithIntentValidator(validator))
+
+	envelope := inboundEnvelope{Type: "intent", ID: "pilot-cool"}
+
+	//3.- Accept an initial baseline frame to seed the delta calculations.
+	rawValid, err := json.Marshal(map[string]any{
+		"type":           "intent",
+		"id":             "pilot-cool",
+		"schema_version": "0.1.0",
+		"sequence_id":    1,
+		"throttle":       0.0,
+		"brake":          0.0,
+		"steer":          0.0,
+		"handbrake":      false,
+		"gear":           1,
+		"boost":          false,
+	})
+	if err != nil {
+		t.Fatalf("marshal baseline intent: %v", err)
+	}
+	if consumed := broker.handleStructuredMessage(nil, envelope, rawValid); !consumed {
+		t.Fatalf("baseline intent should be consumed")
+	}
+
+	//4.- Deliver repeated delta spikes to trigger the cooldown threshold.
+	rawSpike, err := json.Marshal(map[string]any{
+		"type":           "intent",
+		"id":             "pilot-cool",
+		"schema_version": "0.1.0",
+		"sequence_id":    2,
+		"throttle":       1.0,
+		"brake":          0.0,
+		"steer":          0.0,
+		"handbrake":      false,
+		"gear":           1,
+		"boost":          false,
+	})
+	if err != nil {
+		t.Fatalf("marshal spike intent#1: %v", err)
+	}
+	if consumed := broker.handleStructuredMessage(nil, envelope, rawSpike); !consumed {
+		t.Fatalf("spike intent#1 should be consumed")
+	}
+
+	rawSpike2, err := json.Marshal(map[string]any{
+		"type":           "intent",
+		"id":             "pilot-cool",
+		"schema_version": "0.1.0",
+		"sequence_id":    3,
+		"throttle":       1.0,
+		"brake":          0.0,
+		"steer":          0.0,
+		"handbrake":      false,
+		"gear":           1,
+		"boost":          false,
+	})
+	if err != nil {
+		t.Fatalf("marshal spike intent#2: %v", err)
+	}
+	if consumed := broker.handleStructuredMessage(nil, envelope, rawSpike2); !consumed {
+		t.Fatalf("spike intent#2 should be consumed")
+	}
+
+	stats := broker.Stats()
+	key := fmt.Sprintf("%s|%s", envelope.ID, envelope.ID)
+	counters, ok := stats.IntentValidation[key]
+	if !ok {
+		t.Fatalf("expected validation counters for %s", key)
+	}
+	if counters.Cooldowns != 1 {
+		t.Fatalf("expected 1 cooldown activation, got %+v", counters)
+	}
+
+	//5.- Attempt a compliant frame during the cooldown and confirm it is rejected.
+	rawDuringCooldown, err := json.Marshal(map[string]any{
+		"type":           "intent",
+		"id":             "pilot-cool",
+		"schema_version": "0.1.0",
+		"sequence_id":    4,
+		"throttle":       0.2,
+		"brake":          0.0,
+		"steer":          0.0,
+		"handbrake":      false,
+		"gear":           1,
+		"boost":          false,
+	})
+	if err != nil {
+		t.Fatalf("marshal cooldown intent: %v", err)
+	}
+	if consumed := broker.handleStructuredMessage(nil, envelope, rawDuringCooldown); !consumed {
+		t.Fatalf("cooldown intent should be consumed")
+	}
+	stored := broker.intentForController("pilot-cool")
+	if stored == nil {
+		t.Fatalf("intent missing after cooldown attempt")
+	}
+	if got, want := stored.SequenceID, uint64(1); got != want {
+		t.Fatalf("sequence advanced during cooldown: got %d want %d", got, want)
+	}
+
+	//6.- Fast-forward beyond the cooldown interval and verify the next frame is accepted.
+	clock.Advance(cfg.CooldownDuration)
+
+	rawPostCooldown, err := json.Marshal(map[string]any{
+		"type":           "intent",
+		"id":             "pilot-cool",
+		"schema_version": "0.1.0",
+		"sequence_id":    5,
+		"throttle":       0.2,
+		"brake":          0.0,
+		"steer":          0.0,
+		"handbrake":      false,
+		"gear":           1,
+		"boost":          false,
+	})
+	if err != nil {
+		t.Fatalf("marshal post-cooldown intent: %v", err)
+	}
+	if consumed := broker.handleStructuredMessage(nil, envelope, rawPostCooldown); !consumed {
+		t.Fatalf("post-cooldown intent should be consumed")
+	}
+
+	stored = broker.intentForController("pilot-cool")
+	if stored == nil {
+		t.Fatalf("intent missing after post-cooldown")
+	}
+	if got, want := stored.SequenceID, uint64(5); got != want {
+		t.Fatalf("unexpected sequence after cooldown: got %d want %d", got, want)
+	}
+	if got, want := stored.Throttle, 0.2; got != want {
+		t.Fatalf("unexpected throttle after cooldown: got %.2f want %.2f", got, want)
 	}
 }
 

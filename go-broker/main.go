@@ -106,10 +106,11 @@ type Broker struct {
 	radarEvents       chan<- *pb.RadarContact
 	radarProc         *radar.Processor
 
-	intentMu       sync.RWMutex
-	intentStates   map[string]*intentPayload
-	lastIntentSeqs map[string]uint64
-	intentGate     *input.Gate
+	intentMu        sync.RWMutex
+	intentStates    map[string]*intentPayload
+	lastIntentSeqs  map[string]uint64
+	intentGate      *input.Gate
+	intentValidator *input.Validator
 
 	world              *state.WorldState
 	tickCounter        uint64
@@ -145,6 +146,16 @@ func WithIntentGate(gate *input.Gate) BrokerOption {
 			return
 		}
 		b.intentGate = gate
+	}
+}
+
+// 2.- WithIntentValidator lets tests override the default intent validator implementation.
+func WithIntentValidator(validator *input.Validator) BrokerOption {
+	return func(b *Broker) {
+		if b == nil || validator == nil {
+			return
+		}
+		b.intentValidator = validator
 	}
 }
 
@@ -187,6 +198,14 @@ func NewBroker(maxPayloadBytes int64, maxClients int, startedAt time.Time, logge
 		}, gateLogger)
 	}
 
+	if broker.intentValidator == nil {
+		validatorLogger := logger
+		if validatorLogger != nil {
+			validatorLogger = validatorLogger.With(logging.String("component", "intent_validator"))
+		}
+		broker.intentValidator = input.NewValidator(input.DefaultControlConstraints, validatorLogger)
+	}
+
 	if broker.radarProc == nil {
 		broker.radarProc = radar.NewProcessor(broker.radarEvents)
 	}
@@ -217,9 +236,10 @@ func (b *Broker) vehicleState(vehicleID string) *pb.VehicleState {
 }
 
 type BrokerStats struct {
-	Broadcasts  int                           `json:"broadcasts"`
-	Clients     int                           `json:"clients"`
-	IntentDrops map[string]input.DropCounters `json:"intent_drops,omitempty"`
+	Broadcasts       int                                 `json:"broadcasts"`
+	Clients          int                                 `json:"clients"`
+	IntentDrops      map[string]input.DropCounters       `json:"intent_drops,omitempty"`
+	IntentValidation map[string]input.ValidationCounters `json:"intent_validation,omitempty"`
 }
 
 type statsProvider interface {
@@ -244,6 +264,9 @@ func (b *Broker) deregisterClient(client *Client) {
 	}
 	if b.intentGate != nil && client != nil {
 		b.intentGate.Forget(client.id)
+	}
+	if b.intentValidator != nil && client != nil {
+		b.intentValidator.Forget(client.id)
 	}
 }
 
@@ -415,6 +438,9 @@ func (b *Broker) Stats() BrokerStats {
 	b.lock.RUnlock()
 	if b.intentGate != nil {
 		stats.IntentDrops = b.intentGate.Metrics()
+	}
+	if b.intentValidator != nil {
+		stats.IntentValidation = b.intentValidator.Metrics()
 	}
 	return stats
 }
@@ -933,6 +959,37 @@ func (b *Broker) handleStructuredMessage(client *Client, envelope inboundEnvelop
 		if client != nil && client.id != "" {
 			clientID = client.id
 		}
+		//3.- Compose the control snapshot once so downstream validators share identical values.
+		controls := input.Controls{Throttle: payload.Throttle, Brake: payload.Brake, Steer: payload.Steer, Gear: payload.Gear}
+		if validator := b.intentValidator; validator != nil {
+			//4.- Run range, delta, and cooldown checks before advancing broker state.
+			decision := validator.Validate(clientID, payload.ControllerID, controls)
+			if !decision.Accepted {
+				logger := b.log
+				if client != nil && client.log != nil {
+					logger = client.log
+				}
+				if logger != nil {
+					fields := []logging.Field{
+						logging.String("reason", string(decision.Reason)),
+						logging.Field{Key: "client_id", Value: clientID},
+						logging.Field{Key: "controller_id", Value: payload.ControllerID},
+					}
+					if decision.Cooldown > 0 {
+						fields = append(fields, logging.Field{Key: "cooldown_ms", Value: decision.Cooldown.Milliseconds()})
+					}
+					if decision.Warn {
+						logger.Warn("intent validation warning", fields...)
+					} else {
+						logger.Debug("dropping intent due to validation", fields...)
+					}
+				}
+				if decision.Disconnect && client != nil && client.conn != nil {
+					_ = client.conn.Close()
+				}
+				return true
+			}
+		}
 		if gate := b.intentGate; gate != nil {
 			//2.- Evaluate the freshness and sequencing guards before mutating broker state.
 			frame := input.Frame{ClientID: clientID, SequenceID: payload.SequenceID}
@@ -965,6 +1022,10 @@ func (b *Broker) handleStructuredMessage(client *Client, envelope inboundEnvelop
 				client.log.Debug("dropping intent", logging.Error(err))
 			}
 			return true
+		}
+		if validator := b.intentValidator; validator != nil {
+			//5.- Persist the accepted controls so the next frame can be delta-checked.
+			validator.Commit(clientID, payload.ControllerID, controls)
 		}
 		return true
 	case "game_event":
