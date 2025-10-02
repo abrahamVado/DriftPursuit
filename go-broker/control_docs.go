@@ -24,28 +24,53 @@ type ControlDoc struct {
 //     keep documentation in sync.
 var defaultControlDocs = []ControlDoc{
 	{
-		ID:          "manual-toggle",
-		Label:       "Manual Control",
-		Description: "Engage viewer-driven manual control so keyboard movement is applied on top of telemetry.",
-		Shortcut:    "Button / keyboard M",
+		ID:          "assist-toggle",
+		Label:       "Flight Assist",
+		Description: "Toggle between guided tunnel-follow assist and unrestricted free-flight.",
+		Shortcut:    "Keyboard F",
 	},
-        {
-                ID:          "accelerate-forward",
-                Label:       "Forward Acceleration",
-                Description: "Toggle a scripted thrust curve that pushes the aircraft down the runway.",
-                Shortcut:    "Button / keyboard T",
-        },
-        {
-                ID:          "reroute-waypoints",
-                Label:       "Cycle Autopilot Route",
-                Description: "Send preset waypoint loops to the simulator using the set_waypoints command.",
-                Shortcut:    "Button",
-        },
-        {
-                ID:          "keyboard",
-                Label:       "Flight Keys",
-                Description: "WASD for planar movement, RF/Space/Shift for altitude, QE for yaw, arrow keys for pitch and roll.",
-        },
+	{
+		ID:          "throttle",
+		Label:       "Throttle",
+		Description: "Adjust forward thrust to climb the cave stream or slow to a hover.",
+		Shortcut:    "W / S, Arrow Up / Arrow Down",
+	},
+	{
+		ID:          "yaw",
+		Label:       "Yaw",
+		Description: "Twist around the vertical axis for tight corridor turns.",
+		Shortcut:    "J / L, Arrow Left / Arrow Right",
+	},
+	{
+		ID:          "pitch",
+		Label:       "Pitch",
+		Description: "Tilt the nose to dive deeper or level back toward the horizon.",
+		Shortcut:    "I / K, Arrow Up / Arrow Down",
+	},
+	{
+		ID:          "roll",
+		Label:       "Roll",
+		Description: "Bank the craft with precision tunnel banking inputs.",
+		Shortcut:    "A / D, Q / E",
+	},
+	{
+		ID:          "vertical-thrust",
+		Label:       "Vertical Thrust",
+		Description: "Slide up or down along world-up to thread vertical shafts.",
+		Shortcut:    "N / M, PageUp / PageDown",
+	},
+	{
+		ID:          "boost",
+		Label:       "Boost",
+		Description: "Hold for an auxiliary thruster burst when you need extra speed.",
+		Shortcut:    "Shift / Space",
+	},
+	{
+		ID:          "reset",
+		Label:       "Reset Craft",
+		Description: "Respawn at the last safe ring if you clip the cave mouth.",
+		Shortcut:    "Keyboard R",
+	},
 }
 
 // registerControlDocEndpoints registers the HTTP handlers used by the viewer to

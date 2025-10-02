@@ -3,7 +3,21 @@ import { createChunkBand, ensureChunks, type ChunkBand } from "./streaming";
 import { chooseSpawn, type SpawnPose } from "./probe";
 import type { RingStation } from "./terrain";
 import { createCameraRig, type CameraParams, type CameraRig, updateCameraRig } from "./camera";
-import { add, cross, length, normalize, scale, Vec3, lerp, copy, rotateAroundAxis } from "./vector";
+import {
+  add,
+  cross,
+  dot,
+  length,
+  normalize,
+  scale,
+  sub,
+  Vec3,
+  lerp,
+  copy,
+  rotateAroundAxis
+} from "./vector";
+
+/* -------------------------------- Types -------------------------------- */
 
 export interface SimulationParams {
   sandbox: SandboxParams;
@@ -22,6 +36,7 @@ export interface CraftState {
   forward: Vec3;
   right: Vec3;
   up: Vec3;
+  enteredInterior: boolean;
 }
 
 export interface SimulationState {
@@ -37,6 +52,7 @@ export interface SimulationState {
   craft: CraftState;
   spawn: SpawnPose;
   assistEnabled: boolean;
+  mouth: MouthConstraint;
 }
 
 export interface PlayerInput {
@@ -64,6 +80,15 @@ const FREE_FLIGHT = {
   pitchRate: Math.PI * 0.8,
   yawRate: Math.PI * 0.6,
 };
+
+interface MouthConstraint {
+  origin: Vec3;
+  normal: Vec3;
+  radius: number;
+  cushion: number;
+}
+
+/* ---------------------- Ring collection & interpolation ---------------------- */
 
 function collectRings(band: ChunkBand): RingStation[] {
   const rings: RingStation[] = [];
@@ -116,20 +141,56 @@ function applyRoll(right: Vec3, up: Vec3, forward: Vec3, roll: number) {
   return { right: newRight, up: newUp, forward };
 }
 
+/* -------------------------- Mouth/entrance constraint -------------------------- */
+
+function estimateRingRadius(ring: RingStation, samples = 32): number {
+  let maxRadius = 0;
+  for (let i = 0; i < samples; i += 1) {
+    const theta = (i / samples) * Math.PI * 2;
+    const radius = ring.radius + ring.roughness(theta);
+    if (radius > maxRadius) {
+      maxRadius = radius;
+    }
+  }
+  return Math.max(0.1, maxRadius);
+}
+
+function createMouthConstraint(rings: RingStation[], craftRadius: number): MouthConstraint {
+  if (!rings.length) {
+    return {
+      origin: [0, 0, 0],
+      normal: [0, 0, 1],
+      radius: 5,
+      cushion: Math.max(0.5, craftRadius)
+    };
+  }
+
+  let earliest = rings[0];
+  for (const ring of rings) {
+    if (ring.index < earliest.index) earliest = ring;
+  }
+
+  const radius = estimateRingRadius(earliest);
+  const cushion = Math.max(0.5, craftRadius * 1.1);
+  return {
+    origin: copy(earliest.position),
+    normal: normalize(copy(earliest.frame.forward)),
+    radius,
+    cushion
+  };
+}
+
 /* ------------------------ Centerline helpers (meters <-> arc) ------------------------ */
 
-/** Convert {x,y,z} or Vec3-like into Vec3 tuple */
 function toVec3(p: Vec3 | { x: number; y: number; z: number }): Vec3 {
   if (Array.isArray(p)) return p as Vec3;
   return [p.x, p.y, p.z];
 }
 
-/** Map meters -> arc units using ringStep (meters between ring indices) */
 function metersToArc(sMeters: number, ringStep: number): number {
   return sMeters / ringStep;
 }
 
-/** Map arc units -> meters using ringStep */
 function arcToMeters(arc: number, ringStep: number): number {
   return arc * ringStep;
 }
@@ -144,20 +205,14 @@ export function createSimulation(params: SimulationParams): SimulationState {
   if (!spawn) {
     throw new Error("Failed to find spawn ring");
   }
+  const mouth = createMouthConstraint(rings, params.craftRadius);
 
-  /* --- Centerline API on band (EXPOSED) -------------------------------------------
-     We attach methods that the missiles use. They are meters-based so other systems
-     can treat them as true arc-length. Internally we just convert to your 'arc'
-     (ring index space) and reuse interpolateRing().
-  ------------------------------------------------------------------------------- */
-  // Recompute a fresh rings array whenever we sample; chunks are streaming.
+  // Attach meters-based centerline API on band
   function currentRings(): RingStation[] {
     return collectRings(band);
   }
+  const ringStep = params.sandbox.ringStep;
 
-  const ringStep = params.sandbox.ringStep; // meters per ring index step
-
-  // Point at arc-length s (meters)
   (band as any).centerAt = (sMeters: number): Vec3 => {
     const r = currentRings();
     if (r.length === 0) return [0, 0, 0];
@@ -166,16 +221,14 @@ export function createSimulation(params: SimulationParams): SimulationState {
     return sample.position;
   };
 
-  // Unit tangent at arc-length s (meters)
   (band as any).tangentAt = (sMeters: number): Vec3 => {
     const r = currentRings();
     if (r.length === 0) return [0, 0, 1];
     const arc = metersToArc(sMeters, ringStep);
     const sample = interpolateRing(r, arc);
-    return sample.forward; // already unit-length
+    return sample.forward;
   };
 
-  // Convenience sampler
   (band as any).sample = (sMeters: number) => {
     const r = currentRings();
     const arc = metersToArc(sMeters, ringStep);
@@ -183,13 +236,12 @@ export function createSimulation(params: SimulationParams): SimulationState {
     return { position: s.position, tangent: s.forward };
   };
 
-  // Closest arc-length (meters) to world point p
   (band as any).closestS = (p: Vec3 | { x: number; y: number; z: number }): number => {
     const r = currentRings();
     if (r.length === 0) return 0;
     const P = toVec3(p);
 
-    // Coarse search over ring stations (cheap at spawn time)
+    // Coarse nearest ring
     let bestIdx = 0;
     let bestD2 = Infinity;
     for (let i = 0; i < r.length; i++) {
@@ -199,7 +251,7 @@ export function createSimulation(params: SimulationParams): SimulationState {
       if (d2 < bestD2) { bestD2 = d2; bestIdx = i; }
     }
 
-    // Optional small local refine between bestIdx and its neighbor to get sub-ring precision
+    // Local refine to sub-ring precision
     const i0 = Math.max(0, bestIdx - 1);
     const i1 = Math.min(r.length - 1, bestIdx + 1);
     let bestArc = r[bestIdx].index;
@@ -223,7 +275,6 @@ export function createSimulation(params: SimulationParams): SimulationState {
     return arcToMeters(bestArc, ringStep);
   };
 
-  // Expose a dynamic 'length' in meters for the currently loaded span
   Object.defineProperty(band, "length", {
     configurable: true,
     enumerable: true,
@@ -236,8 +287,6 @@ export function createSimulation(params: SimulationParams): SimulationState {
     }
   });
 
-  /* --- End centerline API ------------------------------------------------------ */
-
   const craft: CraftState = {
     arc: spawn.ringIndex,
     speed: 15,
@@ -248,12 +297,74 @@ export function createSimulation(params: SimulationParams): SimulationState {
     position: spawn.position,
     forward: spawn.forward,
     right: spawn.right,
-    up: spawn.up
+    up: spawn.up,
+    enteredInterior: true
   };
 
   const camera = createCameraRig(add(spawn.position, scale(spawn.forward, -10)));
-  return { band: band as SimulationState["band"], camera, craft, spawn, assistEnabled: true };
+  return {
+    band: band as SimulationState["band"],
+    camera,
+    craft,
+    spawn,
+    assistEnabled: true,
+    mouth
+  };
 }
+
+/* ------------------------------- Constraints ------------------------------- */
+
+function enforceMouthContainment(state: SimulationState, params: SimulationParams) {
+  const { mouth, craft } = state;
+  const clearance = mouth.radius - params.craftRadius;
+  const safeRadius = Math.max(0, clearance - 0.25);
+
+  const offset = sub(craft.position, mouth.origin);
+  const axial = dot(offset, mouth.normal);
+  const axialComponent = scale(mouth.normal, axial);
+  const radial = sub(offset, axialComponent);
+  const radialLength = length(radial);
+
+  let clamped = false;
+  let clampedAxial = axial;
+  let clampedRadial = radial;
+
+  if (!craft.enteredInterior && axial >= -mouth.cushion) {
+    craft.enteredInterior = true;
+  }
+
+  if (craft.enteredInterior && axial < mouth.cushion) {
+    clampedAxial = mouth.cushion;
+    clamped = true;
+    const outward = dot(craft.velocity, mouth.normal);
+    if (outward < 0) {
+      craft.velocity = add(craft.velocity, scale(mouth.normal, -outward));
+    }
+  }
+
+  const nearEntrance = axial < mouth.radius * 2;
+
+  if (nearEntrance && radialLength > safeRadius) {
+    clamped = true;
+    if (radialLength > 1e-5) {
+      const limit = safeRadius / radialLength;
+      clampedRadial = scale(radial, limit);
+      const radialNormal = normalize(radial);
+      const radialSpeed = dot(craft.velocity, radialNormal);
+      if (radialSpeed > 0) {
+        craft.velocity = sub(craft.velocity, scale(radialNormal, radialSpeed));
+      }
+    } else {
+      clampedRadial = [0, 0, 0] as Vec3;
+    }
+  }
+
+  if (clamped) {
+    craft.position = add(mouth.origin, add(scale(mouth.normal, clampedAxial), clampedRadial));
+  }
+}
+
+/* ------------------------------- Tick / Update ------------------------------- */
 
 export function updateSimulation(
   state: SimulationState,
@@ -265,6 +376,7 @@ export function updateSimulation(
 
   const { craft, band } = state;
 
+  // Reset
   if (input.reset) {
     craft.arc = state.spawn.ringIndex;
     craft.speed = 15;
@@ -276,9 +388,11 @@ export function updateSimulation(
     craft.right = copy(state.spawn.right);
     craft.up = copy(state.spawn.up);
     craft.velocity = scale(craft.forward, craft.speed);
+    craft.enteredInterior = true;
     state.assistEnabled = true;
   }
 
+  // Toggle assist mode (synchronize pose when re-enabling)
   if (state.assistEnabled !== input.assistEnabled) {
     state.assistEnabled = input.assistEnabled;
     if (state.assistEnabled) {
@@ -301,6 +415,7 @@ export function updateSimulation(
   }
 
   if (state.assistEnabled) {
+    // Rail-following assist (existing behavior, smoothed)
     const throttleBoost = input.boost ? 0.8 : 0;
     craft.targetSpeed = Math.max(
       ASSIST_SPEED_LIMITS.min,
@@ -329,6 +444,7 @@ export function updateSimulation(
     craft.up = rolled.up;
     craft.velocity = scale(craft.forward, craft.speed);
   } else {
+    // Free-flight integration
     const yawRate = input.yaw * FREE_FLIGHT.yawRate * dt;
     if (Math.abs(yawRate) > 0) {
       craft.forward = rotateAroundAxis(craft.forward, WORLD_UP, yawRate);
@@ -348,6 +464,7 @@ export function updateSimulation(
       craft.up = rotateAroundAxis(craft.up, craft.forward, rollRate);
     }
 
+    // Re-orthonormalize axes
     const forward = normalize(craft.forward);
     const right = normalize(cross(forward, craft.up));
     const up = normalize(cross(right, forward));
@@ -355,6 +472,7 @@ export function updateSimulation(
     craft.right = right;
     craft.up = up;
 
+    // Acceleration (forward + optional boost + vertical up)
     let acceleration = scale(forward, input.throttle * FREE_FLIGHT.throttleAccel);
     if (input.boost) {
       acceleration = add(acceleration, scale(forward, FREE_FLIGHT.boostAccel));
@@ -365,15 +483,18 @@ export function updateSimulation(
 
     craft.velocity = add(craft.velocity, scale(acceleration, dt));
 
+    // Drag
     const drag = Math.exp(-dt * (input.boost ? FREE_FLIGHT.boostDrag : FREE_FLIGHT.drag));
     craft.velocity = scale(craft.velocity, drag);
 
+    // Clamp speed
     const maxSpeed = input.boost ? FREE_FLIGHT.boostSpeedLimit : FREE_FLIGHT.baseSpeedLimit;
     const speed = length(craft.velocity);
     if (speed > maxSpeed) {
       craft.velocity = scale(craft.velocity, maxSpeed / Math.max(speed, 1e-5));
     }
 
+    // Integrate position
     craft.position = add(craft.position, scale(craft.velocity, dt));
     craft.speed = length(craft.velocity);
     craft.targetSpeed = craft.speed;
@@ -381,6 +502,10 @@ export function updateSimulation(
     craft.rollRate = 0;
   }
 
+  // Keep player from clipping the cave mouth on spawn/exit
+  enforceMouthContainment(state, params);
+
+  // Streaming: derive center chunk from world position (via closestS)
   let sMeters = craft.arc * params.sandbox.ringStep;
   if (band.closestS) {
     sMeters = band.closestS({ x: craft.position[0], y: craft.position[1], z: craft.position[2] });
@@ -389,6 +514,6 @@ export function updateSimulation(
   const centerChunk = Math.floor(sMeters / params.sandbox.chunkLength);
   ensureChunks(band, centerChunk);
 
+  // Camera follows world-space transform
   updateCameraRig(state.camera, craft.position, craft.forward, craft.right, craft.up, params.camera, dt);
 }
-  
