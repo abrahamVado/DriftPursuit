@@ -26,7 +26,9 @@ import (
 
 	configpkg "driftpursuit/broker/internal/config"
 	"driftpursuit/broker/internal/logging"
+	pb "driftpursuit/broker/internal/proto/pb"
 	"github.com/gorilla/websocket"
+	"google.golang.org/protobuf/encoding/protojson"
 )
 
 // generateSelfSignedCert returns temp file paths for a short-lived self-signed cert/key.
@@ -724,5 +726,53 @@ func TestServeWSRejectsWhenAtCapacity(t *testing.T) {
 	}
 	if pending != 0 {
 		t.Fatalf("expected pending clients to be 0, got %d", pending)
+	}
+}
+
+func TestHandleStructuredMessageStoresVehicleState(t *testing.T) {
+	broker := NewBroker(configpkg.DefaultMaxPayloadBytes, configpkg.DefaultMaxClients, time.Now(), logging.NewTestLogger())
+
+	envelope := inboundEnvelope{Type: "vehicle_state", ID: "veh-001"}
+	payload := &pb.VehicleState{
+		SchemaVersion:       "0.2.0",
+		Position:            &pb.Vector3{X: 1, Y: 2, Z: 3},
+		Velocity:            &pb.Vector3{X: 4, Y: 5, Z: 6},
+		Orientation:         &pb.Orientation{YawDeg: 10, PitchDeg: 5, RollDeg: 1},
+		AngularVelocity:     &pb.Vector3{X: 0.1, Y: 0.2, Z: 0.3},
+		SpeedMps:            123.4,
+		ThrottlePct:         0.5,
+		VerticalThrustPct:   -0.25,
+		BoostPct:            0.9,
+		BoostActive:         true,
+		FlightAssistEnabled: true,
+		EnergyRemainingPct:  0.75,
+		UpdatedAtMs:         123456789,
+	}
+
+	raw, err := protojson.Marshal(payload)
+	if err != nil {
+		t.Fatalf("Marshal vehicle_state: %v", err)
+	}
+
+	consumed := broker.handleStructuredMessage(nil, envelope, raw)
+	if consumed {
+		t.Fatalf("vehicle_state should be broadcast, got consumed")
+	}
+
+	stored := broker.vehicleState("veh-001")
+	if stored == nil {
+		t.Fatalf("vehicle_state not stored")
+	}
+	if got, want := stored.GetVehicleId(), "veh-001"; got != want {
+		t.Fatalf("vehicle_state id = %q, want %q", got, want)
+	}
+
+	stored.SpeedMps = 1.0
+	fresh := broker.vehicleState("veh-001")
+	if fresh == nil {
+		t.Fatalf("vehicle_state clone missing")
+	}
+	if got, want := fresh.GetSpeedMps(), 123.4; got != want {
+		t.Fatalf("vehicle_state clone mutated: got %.1f want %.1f", got, want)
 	}
 }

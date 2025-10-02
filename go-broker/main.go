@@ -20,6 +20,7 @@ import (
 	pb "driftpursuit/broker/internal/proto/pb"
 	"github.com/gorilla/websocket"
 	"google.golang.org/protobuf/encoding/protojson"
+	"google.golang.org/protobuf/proto"
 )
 
 // Will be configured in main() after parsing flags/env.
@@ -64,6 +65,9 @@ type Broker struct {
 
 	snapshotter *StateSnapshotter
 	tierManager *networking.TierManager
+
+	vehicleMu     sync.RWMutex
+	vehicleStates map[string]*pb.VehicleState
 }
 
 var errRecoveryInProgress = errors.New("state recovery in progress")
@@ -91,6 +95,7 @@ func NewBroker(maxPayloadBytes int64, maxClients int, startedAt time.Time, logge
 		startedAt:       startedAt,
 		log:             logger,
 		tierManager:     networking.NewTierManager(networking.DefaultTierConfig()),
+		vehicleStates:   make(map[string]*pb.VehicleState),
 	}
 	for _, opt := range opts {
 		if opt != nil {
@@ -105,6 +110,36 @@ func NewBroker(maxPayloadBytes int64, maxClients int, startedAt time.Time, logge
 	}
 
 	return broker
+}
+
+func (b *Broker) storeVehicleState(state *pb.VehicleState) {
+	if b == nil || state == nil || state.VehicleId == "" {
+		return
+	}
+	clone, ok := proto.Clone(state).(*pb.VehicleState)
+	if !ok {
+		return
+	}
+	b.vehicleMu.Lock()
+	b.vehicleStates[clone.VehicleId] = clone
+	b.vehicleMu.Unlock()
+}
+
+func (b *Broker) vehicleState(vehicleID string) *pb.VehicleState {
+	if b == nil || vehicleID == "" {
+		return nil
+	}
+	b.vehicleMu.RLock()
+	defer b.vehicleMu.RUnlock()
+	state, ok := b.vehicleStates[vehicleID]
+	if !ok {
+		return nil
+	}
+	clone, ok := proto.Clone(state).(*pb.VehicleState)
+	if !ok {
+		return nil
+	}
+	return clone
 }
 
 type BrokerStats struct {
@@ -531,6 +566,18 @@ func (b *Broker) handleStructuredMessage(client *Client, envelope inboundEnvelop
 			snapshot.EntityId = envelope.ID
 		}
 		b.tierManager.UpdateEntity(&snapshot)
+	case "vehicle_state":
+		var state pb.VehicleState
+		if err := unmarshal.Unmarshal(raw, &state); err != nil {
+			if client != nil {
+				client.log.Debug("failed to decode vehicle_state", logging.Error(err))
+			}
+			return false
+		}
+		if state.VehicleId == "" {
+			state.VehicleId = envelope.ID
+		}
+		b.storeVehicleState(&state)
 	case "radar_frame":
 		var frame pb.RadarFrame
 		if err := unmarshal.Unmarshal(raw, &frame); err != nil {
