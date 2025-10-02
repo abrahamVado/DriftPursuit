@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"time"
 )
 
 const (
@@ -36,6 +37,7 @@ type intentPayload struct {
 	Handbrake     bool    `json:"handbrake"`
 	Gear          int32   `json:"gear"`
 	Boost         bool    `json:"boost"`
+	SentAtMs      int64   `json:"sent_at_ms,omitempty"`
 }
 
 // decodeIntentPayload parses a websocket frame into a structured payload.
@@ -76,6 +78,15 @@ func validateIntentPayload(payload *intentPayload) error {
 		return fmt.Errorf("gear %d out of range", payload.Gear)
 	}
 	return nil
+}
+
+// SentAt converts the optional capture timestamp into a time.Time instance.
+func (payload *intentPayload) SentAt() time.Time {
+	//1.- Treat missing or zero timestamps as unset so freshness derives from arrival time.
+	if payload == nil || payload.SentAtMs == 0 {
+		return time.Time{}
+	}
+	return time.UnixMilli(payload.SentAtMs)
 }
 
 // storeIntentPayload caches the most recent intent and enforces monotonic sequence ids.
