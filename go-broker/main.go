@@ -18,6 +18,7 @@ import (
 	"driftpursuit/broker/internal/logging"
 	"driftpursuit/broker/internal/networking"
 	pb "driftpursuit/broker/internal/proto/pb"
+	"driftpursuit/broker/internal/radar"
 	"github.com/gorilla/websocket"
 	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/proto"
@@ -65,6 +66,8 @@ type Broker struct {
 
 	snapshotter *StateSnapshotter
 	tierManager *networking.TierManager
+	radarEvents chan<- *pb.RadarContact
+	radarProc   *radar.Processor
 
 	vehicleMu     sync.RWMutex
 	vehicleStates map[string]*pb.VehicleState
@@ -78,6 +81,17 @@ type BrokerOption func(*Broker)
 func WithSnapshotter(snapshotter *StateSnapshotter) BrokerOption {
 	return func(b *Broker) {
 		b.snapshotter = snapshotter
+	}
+}
+
+// WithRadarEventChannel wires the broker to forward bundled radar contacts to the supplied channel.
+func WithRadarEventChannel(events chan<- *pb.RadarContact) BrokerOption {
+	return func(b *Broker) {
+		if b == nil || events == nil {
+			return
+		}
+		b.radarEvents = events
+		b.radarProc = radar.NewProcessor(events)
 	}
 }
 
@@ -101,6 +115,10 @@ func NewBroker(maxPayloadBytes int64, maxClients int, startedAt time.Time, logge
 		if opt != nil {
 			opt(broker)
 		}
+	}
+
+	if broker.radarProc == nil {
+		broker.radarProc = radar.NewProcessor(broker.radarEvents)
 	}
 
 	if broker.snapshotter != nil {
@@ -587,6 +605,9 @@ func (b *Broker) handleStructuredMessage(client *Client, envelope inboundEnvelop
 			return false
 		}
 		b.tierManager.ApplyRadarFrame(&frame)
+		if b.radarProc != nil {
+			b.radarProc.Process(&frame)
+		}
 	case "world_snapshot":
 		var snapshot pb.WorldSnapshot
 		if err := unmarshal.Unmarshal(raw, &snapshot); err != nil {

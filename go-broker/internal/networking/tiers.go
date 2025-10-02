@@ -169,14 +169,19 @@ func (m *TierManager) ApplyRadarFrame(frame *pb.RadarFrame) {
 		return
 	}
 	m.mu.Lock()
-	for _, contact := range frame.Contacts {
-		if contact == nil || contact.EntityId == "" {
+	for _, contact := range frame.GetContacts() {
+		if contact == nil {
 			continue
 		}
-		if contact.SuggestedTier == pb.InterestTier_INTEREST_TIER_UNSPECIFIED {
-			continue
+		for _, entry := range contact.GetEntries() {
+			if entry == nil || entry.GetTargetEntityId() == "" {
+				continue
+			}
+			if entry.GetSuggestedTier() == pb.InterestTier_INTEREST_TIER_UNSPECIFIED {
+				continue
+			}
+			m.radarHints[entry.GetTargetEntityId()] = entry.GetSuggestedTier()
 		}
-		m.radarHints[contact.EntityId] = contact.SuggestedTier
 	}
 	m.recomputeLocked()
 	m.mu.Unlock()
