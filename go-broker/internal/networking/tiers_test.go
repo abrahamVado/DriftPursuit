@@ -4,10 +4,13 @@ import (
 	"testing"
 
 	pb "driftpursuit/broker/internal/proto/pb"
+	"google.golang.org/protobuf/proto"
 )
 
 func TestTierManagerBucketsByDistance(t *testing.T) {
-	manager := NewTierManager(DefaultTierConfig())
+	cfg := DefaultTierConfig()
+	cfg.ChunkRadius = 12
+	manager := NewTierManager(cfg)
 
 	observer := &pb.ObserverState{
 		SchemaVersion: "0.2.0",
@@ -122,6 +125,66 @@ func TestTierManagerRemoveObserver(t *testing.T) {
 	manager.RemoveObserver("client-2")
 	if buckets := manager.Buckets("client-2"); buckets != nil {
 		t.Fatalf("expected nil buckets after removal")
+	}
+}
+
+func TestTierManagerHonoursChunkRadius(t *testing.T) {
+	cfg := DefaultTierConfig()
+	cfg.ArcChunkDegrees = 45
+	cfg.ChunkRadius = 3
+	manager := NewTierManager(cfg)
+
+	observer := &pb.ObserverState{
+		SchemaVersion: "0.2.0",
+		ObserverId:    "observer-3",
+		Position:      &pb.Vector3{X: 100, Y: 0},
+		NearbyRangeM:  500,
+		RadarRangeM:   2000,
+	}
+	manager.UpdateObserver("client-3", observer)
+
+	near := &pb.EntitySnapshot{
+		SchemaVersion: "0.2.0",
+		EntityId:      "east",
+		Active:        true,
+		Position:      &pb.Vector3{X: 100, Y: 0},
+	}
+	north := &pb.EntitySnapshot{
+		SchemaVersion: "0.2.0",
+		EntityId:      "north",
+		Active:        true,
+		Position:      &pb.Vector3{X: 0, Y: 100},
+	}
+	west := &pb.EntitySnapshot{
+		SchemaVersion: "0.2.0",
+		EntityId:      "west",
+		Active:        true,
+		Position:      &pb.Vector3{X: -100, Y: 0},
+	}
+
+	manager.UpdateEntity(near)
+	manager.UpdateEntity(north)
+	manager.UpdateEntity(west)
+
+	buckets := manager.Buckets("client-3")
+	if tier := tierForEntity(buckets, "west"); tier != pb.InterestTier_INTEREST_TIER_UNSPECIFIED {
+		t.Fatalf("expected west entity to be outside the initial chunk window, got %v", tier)
+	}
+	if tier := tierForEntity(buckets, "north"); tier == pb.InterestTier_INTEREST_TIER_UNSPECIFIED {
+		t.Fatalf("expected north entity to remain visible within the chunk window")
+	}
+
+	//1.- Move the observer to a southern chunk so the west entity enters the ±3 radius window.
+	observerSouth := proto.Clone(observer).(*pb.ObserverState)
+	observerSouth.Position = &pb.Vector3{X: 0, Y: -100}
+	manager.UpdateObserver("client-3", observerSouth)
+
+	buckets = manager.Buckets("client-3")
+	if tier := tierForEntity(buckets, "west"); tier == pb.InterestTier_INTEREST_TIER_UNSPECIFIED {
+		t.Fatalf("expected west entity to enter the chunk window after observer moved south")
+	}
+	if tier := tierForEntity(buckets, "north"); tier != pb.InterestTier_INTEREST_TIER_UNSPECIFIED {
+		t.Fatalf("expected north entity to leave the chunk window after moving south, got %v", tier)
 	}
 }
 

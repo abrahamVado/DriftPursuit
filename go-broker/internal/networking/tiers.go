@@ -21,6 +21,8 @@ type TierConfig struct {
 	NearbyRangeMeters   float64
 	RadarRangeMeters    float64
 	ExtendedRangeMeters float64
+	ArcChunkDegrees     float64
+	ChunkRadius         int
 }
 
 // DefaultTierConfig returns the production defaults used by the broker.
@@ -29,6 +31,8 @@ func DefaultTierConfig() TierConfig {
 		NearbyRangeMeters:   defaultNearbyRangeMeters,
 		RadarRangeMeters:    defaultRadarRangeMeters,
 		ExtendedRangeMeters: defaultExtendedRangeMeters,
+		ArcChunkDegrees:     defaultArcChunkDegrees,
+		ChunkRadius:         3,
 	}
 }
 
@@ -72,6 +76,7 @@ type TierManager struct {
 	buckets   map[string]TierBuckets
 
 	radarHints map[string]pb.InterestTier
+	chunks     *ArcChunkIndex
 }
 
 // NewTierManager constructs a TierManager using the provided configuration.
@@ -83,6 +88,7 @@ func NewTierManager(cfg TierConfig) *TierManager {
 		entities:   make(map[string]*pb.EntitySnapshot),
 		buckets:    make(map[string]TierBuckets),
 		radarHints: make(map[string]pb.InterestTier),
+		chunks:     NewArcChunkIndex(cfg.ArcChunkDegrees),
 	}
 }
 
@@ -124,6 +130,10 @@ func (m *TierManager) UpdateEntity(snapshot *pb.EntitySnapshot) {
 
 	m.mu.Lock()
 	m.entities[clone.EntityId] = clone
+	if m.chunks != nil {
+		//1.- Mirror the entity inside the chunk index to keep spatial lookups current.
+		m.chunks.Update(clone.EntityId, clone.GetPosition())
+	}
 	m.recomputeLocked()
 	m.mu.Unlock()
 }
@@ -135,6 +145,10 @@ func (m *TierManager) RemoveEntity(entityID string) {
 	}
 	m.mu.Lock()
 	delete(m.entities, entityID)
+	if m.chunks != nil {
+		//1.- Evict the entity from the arc buckets so stale references disappear immediately.
+		m.chunks.Remove(entityID)
+	}
 	for observer, buckets := range m.buckets {
 		if len(buckets) == 0 {
 			continue
@@ -198,7 +212,12 @@ func (m *TierManager) IngestWorldSnapshot(snapshot *pb.WorldSnapshot) {
 		if entity == nil || entity.EntityId == "" {
 			continue
 		}
-		m.entities[entity.EntityId] = cloneEntity(entity)
+		cloned := cloneEntity(entity)
+		m.entities[entity.EntityId] = cloned
+		if m.chunks != nil {
+			//1.- Seed the chunk index from the snapshot payload so observers receive immediate coverage.
+			m.chunks.Update(cloned.EntityId, cloned.GetPosition())
+		}
 	}
 	m.recomputeLocked()
 	m.mu.Unlock()
@@ -248,10 +267,26 @@ func (m *TierManager) recomputeLocked() {
 	}
 	for observerKey, observer := range m.observers {
 		buckets := make(TierBuckets)
-		for _, entity := range m.entities {
+		sources := make([]*pb.EntitySnapshot, 0, len(m.entities))
+		if m.chunks != nil {
+			//1.- Restrict the entity set to the observer's subscribed chunk window when possible.
+			ids := m.chunks.EntitiesNear(observer.GetPosition(), m.config.ChunkRadius)
+			for _, id := range ids {
+				if entity := m.entities[id]; entity != nil {
+					sources = append(sources, entity)
+				}
+			}
+		}
+		if len(sources) == 0 {
+			for _, entity := range m.entities {
+				sources = append(sources, entity)
+			}
+		}
+		for _, entity := range sources {
 			if entity == nil || entity.EntityId == "" {
 				continue
 			}
+			//2.- Classify the entity into an interest tier before cloning for the subscriber buckets.
 			tier := m.classify(observer, entity)
 			if tier == pb.InterestTier_INTEREST_TIER_UNSPECIFIED {
 				continue
@@ -329,11 +364,19 @@ func normalizeConfig(cfg TierConfig) TierConfig {
 	if cfg.ExtendedRangeMeters <= 0 {
 		cfg.ExtendedRangeMeters = defaultExtendedRangeMeters
 	}
+	//1.- Ensure tier ranges remain monotonically increasing.
 	if cfg.RadarRangeMeters < cfg.NearbyRangeMeters {
 		cfg.RadarRangeMeters = cfg.NearbyRangeMeters
 	}
 	if cfg.ExtendedRangeMeters < cfg.RadarRangeMeters {
 		cfg.ExtendedRangeMeters = cfg.RadarRangeMeters
+	}
+	//2.- Validate the chunking configuration so spatial indexing stays stable.
+	if cfg.ArcChunkDegrees <= 0 || cfg.ArcChunkDegrees >= 360 {
+		cfg.ArcChunkDegrees = defaultArcChunkDegrees
+	}
+	if cfg.ChunkRadius < 0 {
+		cfg.ChunkRadius = 0
 	}
 	return cfg
 }
