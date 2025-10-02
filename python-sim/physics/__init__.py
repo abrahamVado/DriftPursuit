@@ -6,7 +6,7 @@ from .sdf import (
     PlaneField,
     RayHit,
 )
-from .penetration import BodyState, advance_body
+from .penetration import BodyState, advance_body, advance_surface_bound_body
 
 __all__ = [
     "SignedDistanceField",
@@ -15,4 +15,5 @@ __all__ = [
     "RayHit",
     "BodyState",
     "advance_body",
+    "advance_surface_bound_body",
 ]
