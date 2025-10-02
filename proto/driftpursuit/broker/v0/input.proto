@@ -1,0 +1,27 @@
+syntax = "proto3";
+
+package driftpursuit.broker.v0;
+
+option go_package = "github.com/driftpursuit/DriftPursuit/proto/driftpursuit/broker/v0;brokerpb";
+
+// Intent captures a client's instantaneous control inputs for a vehicle.
+message Intent {
+  //1.- Schema version ensures producers and consumers agree on the layout.
+  string schema_version = 1;
+  //2.- controller_id identifies the publisher of the control stream.
+  string controller_id = 2;
+  //3.- sequence_id orders intents within a session for de-duplication.
+  uint64 sequence_id = 3;
+  //4.- throttle ranges from -1 (full reverse) to +1 (full forward).
+  double throttle = 4;
+  //5.- brake ranges from 0 (released) to 1 (fully applied).
+  double brake = 5;
+  //6.- steer spans -1 (full left) to +1 (full right).
+  double steer = 6;
+  //7.- handbrake engages an auxiliary braking system when true.
+  bool handbrake = 7;
+  //8.- gear reflects the selected transmission gear (-1 reverse, 0 neutral, >0 forward).
+  sint32 gear = 8;
+  //9.- boost indicates whether the boost system should fire on this frame.
+  bool boost = 9;
+}

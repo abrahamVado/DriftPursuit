@@ -776,3 +776,98 @@ func TestHandleStructuredMessageStoresVehicleState(t *testing.T) {
 		t.Fatalf("vehicle_state clone mutated: got %.1f want %.1f", got, want)
 	}
 }
+
+func TestHandleStructuredMessageStoresIntent(t *testing.T) {
+	broker := NewBroker(configpkg.DefaultMaxPayloadBytes, configpkg.DefaultMaxClients, time.Now(), logging.NewTestLogger())
+
+	envelope := inboundEnvelope{Type: "intent", ID: "pilot-007"}
+	raw, err := json.Marshal(map[string]any{
+		"type":           "intent",
+		"id":             "pilot-007",
+		"schema_version": "0.1.0",
+		"controller_id":  "",
+		"sequence_id":    1,
+		"throttle":       0.75,
+		"brake":          0.25,
+		"steer":          -0.5,
+		"handbrake":      false,
+		"gear":           3,
+		"boost":          true,
+	})
+	if err != nil {
+		t.Fatalf("marshal intent: %v", err)
+	}
+
+	consumed := broker.handleStructuredMessage(nil, envelope, raw)
+	if !consumed {
+		t.Fatalf("intent should be consumed, got broadcast")
+	}
+
+	stored := broker.intentForController("pilot-007")
+	if stored == nil {
+		t.Fatalf("intent not stored")
+	}
+	if got, want := stored.SequenceID, uint64(1); got != want {
+		t.Fatalf("intent sequence = %d, want %d", got, want)
+	}
+	if got, want := stored.Throttle, 0.75; got != want {
+		t.Fatalf("intent throttle = %.2f, want %.2f", got, want)
+	}
+	if !stored.Boost {
+		t.Fatalf("intent boost flag lost")
+	}
+}
+
+func TestHandleStructuredMessageRejectsIntentRegression(t *testing.T) {
+	broker := NewBroker(configpkg.DefaultMaxPayloadBytes, configpkg.DefaultMaxClients, time.Now(), logging.NewTestLogger())
+
+	envelope := inboundEnvelope{Type: "intent", ID: "pilot-008"}
+
+	raw1, err := json.Marshal(map[string]any{
+		"type":           "intent",
+		"id":             "pilot-008",
+		"schema_version": "0.1.0",
+		"sequence_id":    2,
+		"throttle":       0.2,
+		"brake":          0.1,
+		"steer":          0.1,
+		"handbrake":      false,
+		"gear":           2,
+		"boost":          false,
+	})
+	if err != nil {
+		t.Fatalf("marshal intent#1: %v", err)
+	}
+
+	if consumed := broker.handleStructuredMessage(nil, envelope, raw1); !consumed {
+		t.Fatalf("intent#1 should be consumed")
+	}
+
+	raw2, err := json.Marshal(map[string]any{
+		"type":           "intent",
+		"id":             "pilot-008",
+		"schema_version": "0.1.0",
+		"sequence_id":    1,
+		"throttle":       0.3,
+		"brake":          0.0,
+		"steer":          0.0,
+		"handbrake":      false,
+		"gear":           2,
+		"boost":          false,
+	})
+	if err != nil {
+		t.Fatalf("marshal intent#2: %v", err)
+	}
+
+	if consumed := broker.handleStructuredMessage(nil, envelope, raw2); !consumed {
+		t.Fatalf("intent#2 should be consumed even when rejected")
+	}
+
+	stored := broker.intentForController("pilot-008")
+	if stored == nil {
+		t.Fatalf("intent missing after regression attempt")
+	}
+	if got, want := stored.SequenceID, uint64(2); got != want {
+		t.Fatalf("intent sequence mutated: got %d want %d", got, want)
+	}
+}

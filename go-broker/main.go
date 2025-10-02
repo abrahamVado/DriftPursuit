@@ -71,6 +71,10 @@ type Broker struct {
 
 	vehicleMu     sync.RWMutex
 	vehicleStates map[string]*pb.VehicleState
+
+	intentMu       sync.RWMutex
+	intentStates   map[string]*intentPayload
+	lastIntentSeqs map[string]uint64
 }
 
 var errRecoveryInProgress = errors.New("state recovery in progress")
@@ -110,6 +114,8 @@ func NewBroker(maxPayloadBytes int64, maxClients int, startedAt time.Time, logge
 		log:             logger,
 		tierManager:     networking.NewTierManager(networking.DefaultTierConfig()),
 		vehicleStates:   make(map[string]*pb.VehicleState),
+		intentStates:    make(map[string]*intentPayload),
+		lastIntentSeqs:  make(map[string]uint64),
 	}
 	for _, opt := range opts {
 		if opt != nil {
@@ -596,6 +602,30 @@ func (b *Broker) handleStructuredMessage(client *Client, envelope inboundEnvelop
 			state.VehicleId = envelope.ID
 		}
 		b.storeVehicleState(&state)
+	case "intent":
+		payload, err := decodeIntentPayload(raw)
+		if err != nil {
+			if client != nil {
+				client.log.Debug("failed to decode intent", logging.Error(err))
+			}
+			return true
+		}
+		if payload.ControllerID == "" {
+			payload.ControllerID = envelope.ID
+		}
+		if err := validateIntentPayload(payload); err != nil {
+			if client != nil {
+				client.log.Debug("rejecting intent", logging.Error(err))
+			}
+			return true
+		}
+		if err := b.storeIntentPayload(payload); err != nil {
+			if client != nil {
+				client.log.Debug("dropping intent", logging.Error(err))
+			}
+			return true
+		}
+		return true
 	case "radar_frame":
 		var frame pb.RadarFrame
 		if err := unmarshal.Unmarshal(raw, &frame); err != nil {
