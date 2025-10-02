@@ -32,6 +32,42 @@ class SignedDistanceField:
         vec = _to_vec3(point)
         return float(self._sampler(vec))
 
+    def gradient(self, point: Sequence[float], epsilon: float = 1e-3) -> Vector3:
+        """Approximate the field gradient via central differences."""
+
+        center = _to_vec3(point)
+        offsets = (
+            (epsilon, 0.0, 0.0),
+            (0.0, epsilon, 0.0),
+            (0.0, 0.0, epsilon),
+        )
+        # //1.- Sample at positive and negative offsets to estimate partial derivatives.
+        dx = (
+            self.sample(_add(center, offsets[0]))
+            - self.sample(_sub(center, offsets[0]))
+        ) / (2.0 * epsilon)
+        dy = (
+            self.sample(_add(center, offsets[1]))
+            - self.sample(_sub(center, offsets[1]))
+        ) / (2.0 * epsilon)
+        dz = (
+            self.sample(_add(center, offsets[2]))
+            - self.sample(_sub(center, offsets[2]))
+        ) / (2.0 * epsilon)
+        return (dx, dy, dz)
+
+    def surface_normal(self, point: Sequence[float], epsilon: float = 1e-3) -> Vector3:
+        """Compute a unit surface normal using the SDF gradient."""
+
+        gradient = self.gradient(point, epsilon=epsilon)
+        magnitude = _length(gradient)
+        if magnitude == 0.0:
+            # //1.- Fall back to a sensible default when the gradient is degenerate.
+            return (0.0, 1.0, 0.0)
+        inv = 1.0 / magnitude
+        # //2.- Normalize the gradient to produce a unit-length surface normal.
+        return (gradient[0] * inv, gradient[1] * inv, gradient[2] * inv)
+
     def ray_intersection(
         self,
         origin: Sequence[float],
