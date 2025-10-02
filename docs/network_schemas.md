@@ -48,3 +48,35 @@ The generated bindings streamline deserialisation in each language:
 - **Go** — `protojson.Unmarshal` fills a `pb.VehicleState`. The broker stores the most recent clone in memory and replays it after restarts.
 - **Python** — `vehicle_pb2.VehicleState.FromString` provides the strongly typed view needed by automation tools.
 - **TypeScript** — The ts-proto bindings expose `VehicleState.encode`, `VehicleState.decode`, and JSON helpers so browser and Node clients can validate their payloads before delivery.
+
+//3.- Capture pilot intent frames
+
+Real-time control streams follow the `Intent` schema so the broker can enforce limits before forwarding commands downstream.
+
+| Field | Type | Purpose |
+| ----- | ---- | ------- |
+| `schema_version` | `string` | Aligns producers and consumers on the versioned intent layout. |
+| `controller_id` | `string` | Identifies the pilot or automation source. When omitted the broker defaults to the websocket envelope id. |
+| `sequence_id` | `uint64` | Increments monotonically for each intent frame to detect drops or replays. |
+| `throttle` | `double` | Forward thrust command from -1 to +1. |
+| `brake` | `double` | Brake pedal position from 0 to 1. |
+| `steer` | `double` | Steering input from -1 (full left) to +1 (full right). |
+| `handbrake` | `bool` | Engages the auxiliary brake when true. |
+| `gear` | `sint32` | Selected transmission gear (-1 reverse, 0 neutral, >0 forward). |
+| `boost` | `bool` | Fires the boost system when true. |
+
+```json
+{
+  "type": "intent",
+  "id": "pilot-007",
+  "schema_version": "0.1.0",
+  "controller_id": "pilot-007",
+  "sequence_id": 42,
+  "throttle": 0.5,
+  "brake": 0.0,
+  "steer": -0.25,
+  "handbrake": false,
+  "gear": 3,
+  "boost": true
+}
+```
