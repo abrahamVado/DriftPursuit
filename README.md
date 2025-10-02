@@ -78,5 +78,6 @@ The [`Docker images`](.github/workflows/docker-images.yml) workflow builds all p
 - `go-broker/` — the WebSocket broker service and tests.
 - `python-sim/` — Python bot runner assets and Dockerfile.
 - `tunnelcave_sandbox_web/` — the web client application and Dockerfile.
-- `docs/` — configuration reference material for operators.
+- `docs/` — configuration reference material for operators, including
+  [networking schema versioning guidance](docs/networking_versioning.md).
 - `docker-compose.yml` — orchestration for the broker, bot runner, and web client.

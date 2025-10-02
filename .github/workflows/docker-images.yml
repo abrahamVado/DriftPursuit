@@ -5,6 +5,9 @@ on:
     branches: ["main"]
   pull_request:
 
+permissions:
+  contents: write
+
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -23,3 +26,32 @@ jobs:
 
       - name: Build web client image
         run: docker build -t driftpursuit/web-client:ci tunnelcave_sandbox_web
+
+      - name: Read schema version
+        id: schema
+        run: echo "value=$(cat proto/SCHEMA_VERSION)" >> "$GITHUB_OUTPUT"
+
+      - name: Tag schema version release
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const version = "${{ steps.schema.outputs.value }}".trim();
+            if (!version) {
+              throw new Error('Failed to read schema version');
+            }
+            const tag = `refs/tags/schema/v${version}`;
+            const existing = await github.rest.git.listMatchingRefs({
+              ...context.repo,
+              ref: `tags/schema/v${version}`,
+            });
+            if (existing.data.length > 0) {
+              console.log(`Schema tag ${tag} already exists, skipping`);
+              return;
+            }
+            await github.rest.git.createRef({
+              ...context.repo,
+              ref: tag,
+              sha: context.sha,
+            });
+            console.log(`Created schema tag ${tag}`);
