@@ -11,6 +11,7 @@ import (
 	"os"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	configpkg "driftpursuit/broker/internal/config"
@@ -19,9 +20,10 @@ import (
 	"driftpursuit/broker/internal/networking"
 	pb "driftpursuit/broker/internal/proto/pb"
 	"driftpursuit/broker/internal/radar"
+	"driftpursuit/broker/internal/simulation"
+	"driftpursuit/broker/internal/state"
 	"github.com/gorilla/websocket"
 	"google.golang.org/protobuf/encoding/protojson"
-	"google.golang.org/protobuf/proto"
 )
 
 // Will be configured in main() after parsing flags/env.
@@ -48,6 +50,24 @@ type Client struct {
 	log  *logging.Logger
 }
 
+type vehicleDiffEnvelope struct {
+	Updated []*pb.VehicleState `json:"updated,omitempty"`
+	Removed []string           `json:"removed,omitempty"`
+}
+
+type projectileDiffEnvelope struct {
+	Updated []*state.ProjectileState `json:"updated,omitempty"`
+	Removed []string                 `json:"removed,omitempty"`
+}
+
+type worldDiffEnvelope struct {
+	Type        string                  `json:"type"`
+	Tick        uint64                  `json:"tick"`
+	Vehicles    *vehicleDiffEnvelope    `json:"vehicles,omitempty"`
+	Projectiles *projectileDiffEnvelope `json:"projectiles,omitempty"`
+	Events      []*pb.GameEvent         `json:"events,omitempty"`
+}
+
 type Broker struct {
 	clients         map[*Client]bool
 	lock            sync.RWMutex
@@ -69,12 +89,12 @@ type Broker struct {
 	radarEvents chan<- *pb.RadarContact
 	radarProc   *radar.Processor
 
-	vehicleMu     sync.RWMutex
-	vehicleStates map[string]*pb.VehicleState
-
 	intentMu       sync.RWMutex
 	intentStates   map[string]*intentPayload
 	lastIntentSeqs map[string]uint64
+
+	world       *state.WorldState
+	tickCounter uint64
 }
 
 var errRecoveryInProgress = errors.New("state recovery in progress")
@@ -113,9 +133,9 @@ func NewBroker(maxPayloadBytes int64, maxClients int, startedAt time.Time, logge
 		startedAt:       startedAt,
 		log:             logger,
 		tierManager:     networking.NewTierManager(networking.DefaultTierConfig()),
-		vehicleStates:   make(map[string]*pb.VehicleState),
 		intentStates:    make(map[string]*intentPayload),
 		lastIntentSeqs:  make(map[string]uint64),
+		world:           state.NewWorldState(),
 	}
 	for _, opt := range opts {
 		if opt != nil {
@@ -140,30 +160,16 @@ func (b *Broker) storeVehicleState(state *pb.VehicleState) {
 	if b == nil || state == nil || state.VehicleId == "" {
 		return
 	}
-	clone, ok := proto.Clone(state).(*pb.VehicleState)
-	if !ok {
-		return
-	}
-	b.vehicleMu.Lock()
-	b.vehicleStates[clone.VehicleId] = clone
-	b.vehicleMu.Unlock()
+	//1.- Delegate to the world state container to record and mark the update.
+	b.world.Vehicles.Upsert(state)
 }
 
 func (b *Broker) vehicleState(vehicleID string) *pb.VehicleState {
 	if b == nil || vehicleID == "" {
 		return nil
 	}
-	b.vehicleMu.RLock()
-	defer b.vehicleMu.RUnlock()
-	state, ok := b.vehicleStates[vehicleID]
-	if !ok {
-		return nil
-	}
-	clone, ok := proto.Clone(state).(*pb.VehicleState)
-	if !ok {
-		return nil
-	}
-	return clone
+	//1.- Read a defensive clone from the world state container.
+	return b.world.Vehicles.Get(vehicleID)
 }
 
 type BrokerStats struct {
@@ -554,6 +560,57 @@ func (b *Broker) replaySnapshots(client *Client, snapshots [][]byte) {
 	}
 }
 
+func (b *Broker) publishWorldDiff(tick uint64, diff state.TickDiff) {
+	if b == nil || !diff.HasChanges() {
+		return
+	}
+
+	envelope := worldDiffEnvelope{Type: "world_diff", Tick: tick}
+
+	//1.- Attach vehicle changes when they exist.
+	if len(diff.Vehicles.Updated) > 0 || len(diff.Vehicles.Removed) > 0 {
+		envelope.Vehicles = &vehicleDiffEnvelope{
+			Updated: diff.Vehicles.Updated,
+			Removed: diff.Vehicles.Removed,
+		}
+	}
+
+	//2.- Attach projectile changes for downstream prediction.
+	if len(diff.Projectiles.Updated) > 0 || len(diff.Projectiles.Removed) > 0 {
+		envelope.Projectiles = &projectileDiffEnvelope{
+			Updated: diff.Projectiles.Updated,
+			Removed: diff.Projectiles.Removed,
+		}
+	}
+
+	//3.- Include queued events for HUD/log updates.
+	if len(diff.Events.Events) > 0 {
+		envelope.Events = diff.Events.Events
+	}
+
+	data, err := json.Marshal(envelope)
+	if err != nil {
+		b.log.Error("failed to marshal world diff", logging.Error(err))
+		return
+	}
+	b.broadcast(data)
+}
+
+func (b *Broker) advanceSimulation(step time.Duration) {
+	if b == nil || step <= 0 {
+		return
+	}
+
+	diff := b.world.AdvanceTick(step)
+	if !diff.HasChanges() {
+		return
+	}
+
+	tick := atomic.AddUint64(&b.tickCounter, 1)
+	//1.- Publish the diff after incrementing the authoritative tick counter.
+	b.publishWorldDiff(tick, diff)
+}
+
 func (b *Broker) handleStructuredMessage(client *Client, envelope inboundEnvelope, raw []byte) bool {
 	if b == nil {
 		return false
@@ -602,6 +659,33 @@ func (b *Broker) handleStructuredMessage(client *Client, envelope inboundEnvelop
 			state.VehicleId = envelope.ID
 		}
 		b.storeVehicleState(&state)
+		return true
+	case "projectile_state":
+		var payload struct {
+			Position  state.Vector3 `json:"position"`
+			Velocity  state.Vector3 `json:"velocity"`
+			Active    bool          `json:"active"`
+			UpdatedAt int64         `json:"updated_at_ms"`
+		}
+		if err := json.Unmarshal(raw, &payload); err != nil {
+			if client != nil {
+				client.log.Debug("failed to decode projectile_state", logging.Error(err))
+			}
+			return true
+		}
+		projectile := &state.ProjectileState{
+			ID:        envelope.ID,
+			Position:  payload.Position,
+			Velocity:  payload.Velocity,
+			Active:    payload.Active,
+			UpdatedAt: payload.UpdatedAt,
+		}
+		if !projectile.Active {
+			b.world.Projectiles.Remove(projectile.ID)
+			return true
+		}
+		b.world.Projectiles.Upsert(projectile)
+		return true
 	case "intent":
 		payload, err := decodeIntentPayload(raw)
 		if err != nil {
@@ -625,6 +709,19 @@ func (b *Broker) handleStructuredMessage(client *Client, envelope inboundEnvelop
 			}
 			return true
 		}
+		return true
+	case "game_event":
+		var event pb.GameEvent
+		if err := unmarshal.Unmarshal(raw, &event); err != nil {
+			if client != nil {
+				client.log.Debug("failed to decode game_event", logging.Error(err))
+			}
+			return true
+		}
+		if event.EventId == "" {
+			event.EventId = envelope.ID
+		}
+		b.world.Events.Add(&event)
 		return true
 	case "radar_frame":
 		var frame pb.RadarFrame
@@ -777,6 +874,12 @@ func main() {
 	}
 
 	broker := NewBroker(maxPayloadBytes, maxClients, startedAt, logger, brokerOptions...)
+
+	simCtx, simCancel := context.WithCancel(context.Background())
+	simLoop := simulation.NewLoop(60, broker.advanceSimulation)
+	simLoop.Start(simCtx)
+	defer simCancel()
+	defer simLoop.Stop()
 
 	// build handler with consistent mux
 	handler := buildHandler(broker, cfg)

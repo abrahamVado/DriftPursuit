@@ -755,8 +755,8 @@ func TestHandleStructuredMessageStoresVehicleState(t *testing.T) {
 	}
 
 	consumed := broker.handleStructuredMessage(nil, envelope, raw)
-	if consumed {
-		t.Fatalf("vehicle_state should be broadcast, got consumed")
+	if !consumed {
+		t.Fatalf("vehicle_state should be consumed for diff broadcast")
 	}
 
 	stored := broker.vehicleState("veh-001")
@@ -774,6 +774,90 @@ func TestHandleStructuredMessageStoresVehicleState(t *testing.T) {
 	}
 	if got, want := fresh.GetSpeedMps(), 123.4; got != want {
 		t.Fatalf("vehicle_state clone mutated: got %.1f want %.1f", got, want)
+	}
+}
+
+func TestHandleStructuredMessageStoresProjectileState(t *testing.T) {
+	broker := NewBroker(configpkg.DefaultMaxPayloadBytes, configpkg.DefaultMaxClients, time.Now(), logging.NewTestLogger())
+
+	envelope := inboundEnvelope{Type: "projectile_state", ID: "proj-42"}
+	raw, err := json.Marshal(map[string]any{
+		"type":          "projectile_state",
+		"id":            "proj-42",
+		"position":      map[string]any{"x": 1.0},
+		"velocity":      map[string]any{"x": 5.0},
+		"active":        true,
+		"updated_at_ms": 123,
+	})
+	if err != nil {
+		t.Fatalf("marshal projectile_state: %v", err)
+	}
+
+	consumed := broker.handleStructuredMessage(nil, envelope, raw)
+	if !consumed {
+		t.Fatalf("projectile_state should be consumed")
+	}
+
+	diff := broker.world.Projectiles.ConsumeDiff()
+	if len(diff.Updated) != 1 {
+		t.Fatalf("expected projectile stored")
+	}
+	if diff.Updated[0].ID != "proj-42" {
+		t.Fatalf("unexpected projectile id %q", diff.Updated[0].ID)
+	}
+}
+
+func TestHandleStructuredMessageStoresGameEvent(t *testing.T) {
+	broker := NewBroker(configpkg.DefaultMaxPayloadBytes, configpkg.DefaultMaxClients, time.Now(), logging.NewTestLogger())
+	envelope := inboundEnvelope{Type: "game_event", ID: "evt-9"}
+	raw, err := json.Marshal(map[string]any{
+		"type":           "game_event",
+		"id":             "evt-9",
+		"schema_version": "1.0",
+		"event_id":       "",
+	})
+	if err != nil {
+		t.Fatalf("marshal game_event: %v", err)
+	}
+
+	consumed := broker.handleStructuredMessage(nil, envelope, raw)
+	if !consumed {
+		t.Fatalf("game_event should be consumed")
+	}
+
+	diff := broker.world.Events.ConsumeDiff()
+	if len(diff.Events) != 1 {
+		t.Fatalf("expected stored event")
+	}
+	if diff.Events[0].GetEventId() != "evt-9" {
+		t.Fatalf("unexpected event id %q", diff.Events[0].GetEventId())
+	}
+}
+
+func TestAdvanceSimulationBroadcastsDiff(t *testing.T) {
+	broker := NewBroker(configpkg.DefaultMaxPayloadBytes, configpkg.DefaultMaxClients, time.Now(), logging.NewTestLogger())
+	client := &Client{send: make(chan []byte, 1), id: "test"}
+	broker.lock.Lock()
+	broker.clients[client] = true
+	broker.lock.Unlock()
+
+	broker.storeVehicleState(&pb.VehicleState{VehicleId: "veh-adv", Position: &pb.Vector3{}})
+	broker.advanceSimulation(16 * time.Millisecond)
+
+	select {
+	case msg := <-client.send:
+		var envelope worldDiffEnvelope
+		if err := json.Unmarshal(msg, &envelope); err != nil {
+			t.Fatalf("unmarshal diff: %v", err)
+		}
+		if envelope.Type != "world_diff" {
+			t.Fatalf("unexpected diff type %q", envelope.Type)
+		}
+		if envelope.Vehicles == nil || len(envelope.Vehicles.Updated) == 0 {
+			t.Fatalf("expected vehicle updates in diff")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for diff broadcast")
 	}
 }
 
