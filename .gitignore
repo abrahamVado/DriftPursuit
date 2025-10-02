@@ -11,3 +11,6 @@ tunnelcave_sandbox_web/node_modules/*
 tunnelcave_sandbox_web/node_modules
 
 node_modules/
+__pycache__/
+**/__pycache__/
+*.py[cod]

@@ -33,6 +33,7 @@ import (
 	"driftpursuit/broker/internal/input"
 	"driftpursuit/broker/internal/logging"
 	pb "driftpursuit/broker/internal/proto/pb"
+	"driftpursuit/broker/internal/state"
 	"github.com/gorilla/websocket"
 	"google.golang.org/protobuf/encoding/protojson"
 )
@@ -1367,5 +1368,36 @@ func TestBrokerTimeSyncSnapshot(t *testing.T) {
 
 	if abs := absInt64(offsetMs); abs > 10 {
 		t.Fatalf("expected offset within 10ms, got %d (server=%d simulated=%d)", offsetMs, serverMs, simulatedMs)
+	}
+}
+
+func TestBrokerSubscribeStateDiffs(t *testing.T) {
+	broker := NewBroker(configpkg.DefaultMaxPayloadBytes, configpkg.DefaultMaxClients, time.Now(), logging.NewTestLogger())
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	ch, stop, err := broker.SubscribeStateDiffs(ctx)
+	if err != nil {
+		t.Fatalf("subscribe state diffs: %v", err)
+	}
+	defer stop()
+
+	diff := state.TickDiff{Vehicles: state.VehicleDiff{Updated: []*pb.VehicleState{{VehicleId: "veh-42"}}}}
+	broker.publishWorldDiff(7, diff)
+
+	select {
+	case event := <-ch:
+		if event.Tick != 7 {
+			t.Fatalf("unexpected tick %d", event.Tick)
+		}
+		var decoded map[string]any
+		if err := json.Unmarshal(event.Payload, &decoded); err != nil {
+			t.Fatalf("decode payload: %v", err)
+		}
+		if decoded["tick"].(float64) != 7 {
+			t.Fatalf("payload tick mismatch: %+v", decoded)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for diff event")
 	}
 }

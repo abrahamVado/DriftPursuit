@@ -15,6 +15,7 @@ import (
 	"time"
 
 	configpkg "driftpursuit/broker/internal/config"
+	grpcstream "driftpursuit/broker/internal/grpc"
 	httpapi "driftpursuit/broker/internal/http"
 	"driftpursuit/broker/internal/input"
 	"driftpursuit/broker/internal/logging"
@@ -117,6 +118,10 @@ type Broker struct {
 	world              *state.WorldState
 	tickCounter        uint64
 	simulatedElapsedNs int64
+
+	diffMu          sync.RWMutex
+	diffSubscribers map[uint64]chan grpcstream.DiffEvent
+	nextDiffID      uint64
 }
 
 var errRecoveryInProgress = errors.New("state recovery in progress")
@@ -182,6 +187,7 @@ func NewBroker(maxPayloadBytes int64, maxClients int, startedAt time.Time, logge
 		intentStates:      make(map[string]*intentPayload),
 		lastIntentSeqs:    make(map[string]uint64),
 		world:             state.NewWorldState(),
+		diffSubscribers:   make(map[uint64]chan grpcstream.DiffEvent),
 	}
 	for _, opt := range opts {
 		if opt != nil {
@@ -864,6 +870,22 @@ func (b *Broker) publishWorldDiff(tick uint64, diff state.TickDiff) {
 		return
 	}
 	b.broadcast(data)
+
+	if len(data) > 0 {
+		payload := append([]byte(nil), data...)
+		event := grpcstream.DiffEvent{Tick: tick, Payload: payload}
+		b.diffMu.RLock()
+		for id, ch := range b.diffSubscribers {
+			select {
+			case ch <- event:
+			default:
+				if b.log != nil {
+					b.log.Debug("dropping grpc diff", logging.Field{Key: "subscriber_id", Value: id})
+				}
+			}
+		}
+		b.diffMu.RUnlock()
+	}
 }
 
 func (b *Broker) advanceSimulation(step time.Duration) {
@@ -981,73 +1003,16 @@ func (b *Broker) handleStructuredMessage(client *Client, envelope inboundEnvelop
 		if client != nil && client.id != "" {
 			clientID = client.id
 		}
-		//3.- Compose the control snapshot once so downstream validators share identical values.
-		controls := input.Controls{Throttle: payload.Throttle, Brake: payload.Brake, Steer: payload.Steer, Gear: payload.Gear}
-		if validator := b.intentValidator; validator != nil {
-			//4.- Run range, delta, and cooldown checks before advancing broker state.
-			decision := validator.Validate(clientID, payload.ControllerID, controls)
-			if !decision.Accepted {
-				logger := b.log
-				if client != nil && client.log != nil {
-					logger = client.log
-				}
-				if logger != nil {
-					fields := []logging.Field{
-						logging.String("reason", string(decision.Reason)),
-						logging.Field{Key: "client_id", Value: clientID},
-						logging.Field{Key: "controller_id", Value: payload.ControllerID},
-					}
-					if decision.Cooldown > 0 {
-						fields = append(fields, logging.Field{Key: "cooldown_ms", Value: decision.Cooldown.Milliseconds()})
-					}
-					if decision.Warn {
-						logger.Warn("intent validation warning", fields...)
-					} else {
-						logger.Debug("dropping intent due to validation", fields...)
-					}
-				}
-				if decision.Disconnect && client != nil && client.conn != nil {
-					_ = client.conn.Close()
-				}
-				return true
-			}
+		logger := b.log
+		if client != nil && client.log != nil {
+			logger = client.log
 		}
-		if gate := b.intentGate; gate != nil {
-			//2.- Evaluate the freshness and sequencing guards before mutating broker state.
-			frame := input.Frame{ClientID: clientID, SequenceID: payload.SequenceID}
-			if ts := payload.SentAt(); !ts.IsZero() {
-				frame.SentAt = ts
-			}
-			decision := gate.Evaluate(frame)
-			if !decision.Accepted {
-				logger := b.log
-				if client != nil && client.log != nil {
-					logger = client.log
-				}
-				if logger != nil {
-					fields := []logging.Field{
-						logging.String("reason", decision.Reason.String()),
-						logging.Field{Key: "client_id", Value: clientID},
-						logging.Field{Key: "controller_id", Value: payload.ControllerID},
-						logging.Field{Key: "sequence_id", Value: payload.SequenceID},
-					}
-					if decision.Delay > 0 {
-						fields = append(fields, logging.Field{Key: "delay_ms", Value: decision.Delay.Milliseconds()})
-					}
-					logger.Debug("dropping intent frame", fields...)
-				}
-				return true
-			}
-		}
-		if err := b.storeIntentPayload(payload); err != nil {
-			if client != nil {
-				client.log.Debug("dropping intent", logging.Error(err))
-			}
+		disconnect, procErr := b.processIntent(clientID, payload, logger)
+		if procErr != nil {
 			return true
 		}
-		if validator := b.intentValidator; validator != nil {
-			//5.- Persist the accepted controls so the next frame can be delta-checked.
-			validator.Commit(clientID, payload.ControllerID, controls)
+		if disconnect && client != nil && client.conn != nil {
+			_ = client.conn.Close()
 		}
 		return true
 	case "game_event":
@@ -1240,6 +1205,8 @@ func main() {
 	grpcServer := grpc.NewServer(grpcOptions...)
 	timeSyncService := timesync.NewService(broker, timeSyncInterval)
 	pb.RegisterTimeSyncServiceServer(grpcServer, timeSyncService)
+	streamService := grpcstream.NewService(broker)
+	pb.RegisterBrokerStreamServiceServer(grpcServer, streamService)
 
 	go func() {
 		listener, err := net.Listen("tcp", cfg.GRPCAddress)
