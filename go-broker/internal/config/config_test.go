@@ -9,13 +9,13 @@ import (
 
 func TestLoadDefaults(t *testing.T) {
 	t.Setenv("BROKER_ADDR", "")
-        t.Setenv("BROKER_ALLOWED_ORIGINS", "")
-        t.Setenv("BROKER_MAX_PAYLOAD_BYTES", "")
-        t.Setenv("BROKER_PING_INTERVAL", "")
-        t.Setenv("BROKER_MAX_CLIENTS", "")
-        t.Setenv("BROKER_GRPC_ADDR", "")
-        t.Setenv("BROKER_TLS_CERT", "")
-        t.Setenv("BROKER_TLS_KEY", "")
+	t.Setenv("BROKER_ALLOWED_ORIGINS", "")
+	t.Setenv("BROKER_MAX_PAYLOAD_BYTES", "")
+	t.Setenv("BROKER_PING_INTERVAL", "")
+	t.Setenv("BROKER_MAX_CLIENTS", "")
+	t.Setenv("BROKER_GRPC_ADDR", "")
+	t.Setenv("BROKER_TLS_CERT", "")
+	t.Setenv("BROKER_TLS_KEY", "")
 	t.Setenv("BROKER_LOG_LEVEL", "")
 	t.Setenv("BROKER_LOG_PATH", "")
 	t.Setenv("BROKER_LOG_MAX_SIZE_MB", "")
@@ -27,18 +27,25 @@ func TestLoadDefaults(t *testing.T) {
 	t.Setenv("BROKER_REPLAY_DUMP_BURST", "")
 	t.Setenv("BROKER_STATE_PATH", "")
 	t.Setenv("BROKER_STATE_INTERVAL", "")
+	t.Setenv("BROKER_WS_AUTH_MODE", "")
+	t.Setenv("BROKER_WS_HMAC_SECRET", "")
+	t.Setenv("BROKER_GRPC_AUTH_MODE", "")
+	t.Setenv("BROKER_GRPC_SHARED_SECRET", "dev-secret")
+	t.Setenv("BROKER_GRPC_TLS_CERT", "")
+	t.Setenv("BROKER_GRPC_TLS_KEY", "")
+	t.Setenv("BROKER_GRPC_CLIENT_CA", "")
 
 	cfg, err := Load()
 	if err != nil {
 		t.Fatalf("Load() returned error: %v", err)
 	}
 
-        if cfg.Address != DefaultAddr {
-                t.Fatalf("expected default addr %q, got %q", DefaultAddr, cfg.Address)
-        }
-        if cfg.GRPCAddress != DefaultGRPCAddr {
-                t.Fatalf("expected default gRPC addr %q, got %q", DefaultGRPCAddr, cfg.GRPCAddress)
-        }
+	if cfg.Address != DefaultAddr {
+		t.Fatalf("expected default addr %q, got %q", DefaultAddr, cfg.Address)
+	}
+	if cfg.GRPCAddress != DefaultGRPCAddr {
+		t.Fatalf("expected default gRPC addr %q, got %q", DefaultGRPCAddr, cfg.GRPCAddress)
+	}
 	if cfg.AllowedOrigins != nil {
 		t.Fatalf("expected no allowed origins, got %#v", cfg.AllowedOrigins)
 	}
@@ -87,6 +94,15 @@ func TestLoadDefaults(t *testing.T) {
 	if cfg.StateSnapshotInterval != DefaultStateSnapshotInterval {
 		t.Fatalf("expected default state snapshot interval %v, got %v", DefaultStateSnapshotInterval, cfg.StateSnapshotInterval)
 	}
+	if cfg.WSAuthMode != WSAuthModeDisabled {
+		t.Fatalf("expected websocket auth mode disabled, got %q", cfg.WSAuthMode)
+	}
+	if cfg.GRPCAuthMode != GRPCAuthModeSharedSecret {
+		t.Fatalf("expected grpc auth mode shared_secret, got %q", cfg.GRPCAuthMode)
+	}
+	if cfg.GRPCSharedSecret != "dev-secret" {
+		t.Fatalf("expected propagated grpc shared secret, got %q", cfg.GRPCSharedSecret)
+	}
 }
 
 func TestLoadOverrides(t *testing.T) {
@@ -94,8 +110,8 @@ func TestLoadOverrides(t *testing.T) {
 	t.Setenv("BROKER_ALLOWED_ORIGINS", "https://example.com, https://demo.local")
 	t.Setenv("BROKER_MAX_PAYLOAD_BYTES", "2048")
 	t.Setenv("BROKER_PING_INTERVAL", "45s")
-        t.Setenv("BROKER_MAX_CLIENTS", "12")
-        t.Setenv("BROKER_GRPC_ADDR", "127.0.0.1:50051")
+	t.Setenv("BROKER_MAX_CLIENTS", "12")
+	t.Setenv("BROKER_GRPC_ADDR", "127.0.0.1:50051")
 	t.Setenv("BROKER_TLS_CERT", "/tmp/cert.pem")
 	t.Setenv("BROKER_TLS_KEY", "/tmp/key.pem")
 	t.Setenv("BROKER_LOG_LEVEL", "debug")
@@ -109,6 +125,13 @@ func TestLoadOverrides(t *testing.T) {
 	t.Setenv("BROKER_REPLAY_DUMP_BURST", "3")
 	t.Setenv("BROKER_STATE_PATH", "/var/run/broker/state.json")
 	t.Setenv("BROKER_STATE_INTERVAL", "15s")
+	t.Setenv("BROKER_WS_AUTH_MODE", WSAuthModeHMAC)
+	t.Setenv("BROKER_WS_HMAC_SECRET", "ws-secret")
+	t.Setenv("BROKER_GRPC_AUTH_MODE", GRPCAuthModeMTLS)
+	t.Setenv("BROKER_GRPC_SHARED_SECRET", "ignored")
+	t.Setenv("BROKER_GRPC_TLS_CERT", "/tls/server.pem")
+	t.Setenv("BROKER_GRPC_TLS_KEY", "/tls/server.key")
+	t.Setenv("BROKER_GRPC_CLIENT_CA", "/tls/ca.pem")
 
 	cfg, err := Load()
 	if err != nil {
@@ -127,12 +150,12 @@ func TestLoadOverrides(t *testing.T) {
 	if cfg.PingInterval.String() != "45s" {
 		t.Fatalf("expected ping interval 45s, got %v", cfg.PingInterval)
 	}
-        if cfg.MaxClients != 12 {
-                t.Fatalf("expected max clients 12, got %d", cfg.MaxClients)
-        }
-        if cfg.GRPCAddress != "127.0.0.1:50051" {
-                t.Fatalf("unexpected grpc address %q", cfg.GRPCAddress)
-        }
+	if cfg.MaxClients != 12 {
+		t.Fatalf("expected max clients 12, got %d", cfg.MaxClients)
+	}
+	if cfg.GRPCAddress != "127.0.0.1:50051" {
+		t.Fatalf("unexpected grpc address %q", cfg.GRPCAddress)
+	}
 	if cfg.TLSCertPath != "/tmp/cert.pem" || cfg.TLSKeyPath != "/tmp/key.pem" {
 		t.Fatalf("unexpected TLS paths cert=%q key=%q", cfg.TLSCertPath, cfg.TLSKeyPath)
 	}
@@ -169,6 +192,21 @@ func TestLoadOverrides(t *testing.T) {
 	if cfg.StateSnapshotInterval != 15*time.Second {
 		t.Fatalf("expected state snapshot interval 15s, got %v", cfg.StateSnapshotInterval)
 	}
+	if cfg.WSAuthMode != WSAuthModeHMAC {
+		t.Fatalf("expected websocket auth mode hmac, got %q", cfg.WSAuthMode)
+	}
+	if cfg.WSHMACSecret != "ws-secret" {
+		t.Fatalf("expected websocket secret ws-secret, got %q", cfg.WSHMACSecret)
+	}
+	if cfg.GRPCAuthMode != GRPCAuthModeMTLS {
+		t.Fatalf("expected grpc auth mode mtls, got %q", cfg.GRPCAuthMode)
+	}
+	if cfg.GRPCServerCertPath != "/tls/server.pem" || cfg.GRPCServerKeyPath != "/tls/server.key" {
+		t.Fatalf("unexpected grpc server keypair cert=%q key=%q", cfg.GRPCServerCertPath, cfg.GRPCServerKeyPath)
+	}
+	if cfg.GRPCClientCAPath != "/tls/ca.pem" {
+		t.Fatalf("unexpected grpc client ca %q", cfg.GRPCClientCAPath)
+	}
 }
 
 func TestLoadReturnsValidationErrors(t *testing.T) {
@@ -184,6 +222,8 @@ func TestLoadReturnsValidationErrors(t *testing.T) {
 	t.Setenv("BROKER_REPLAY_DUMP_WINDOW", "-")
 	t.Setenv("BROKER_REPLAY_DUMP_BURST", "0")
 	t.Setenv("BROKER_STATE_INTERVAL", "-1s")
+	t.Setenv("BROKER_WS_AUTH_MODE", "invalid")
+	t.Setenv("BROKER_GRPC_AUTH_MODE", "invalid")
 
 	_, err := Load()
 	if err == nil {
@@ -202,6 +242,8 @@ func TestLoadReturnsValidationErrors(t *testing.T) {
 		"BROKER_REPLAY_DUMP_WINDOW",
 		"BROKER_REPLAY_DUMP_BURST",
 		"BROKER_STATE_INTERVAL",
+		"BROKER_WS_AUTH_MODE",
+		"BROKER_GRPC_AUTH_MODE",
 	} {
 		if !strings.Contains(err.Error(), want) {
 			t.Fatalf("expected error to mention %s, got %q", want, err.Error())
@@ -210,6 +252,7 @@ func TestLoadReturnsValidationErrors(t *testing.T) {
 }
 
 func TestLoadIgnoresEmptyAllowedOrigins(t *testing.T) {
+	t.Setenv("BROKER_GRPC_SHARED_SECRET", "dev-secret")
 	t.Setenv("BROKER_ALLOWED_ORIGINS", " , ,https://ok.example, ")
 
 	cfg, err := Load()
@@ -223,6 +266,7 @@ func TestLoadIgnoresEmptyAllowedOrigins(t *testing.T) {
 }
 
 func TestLoadReturnsErrorWhenEnvUnsetAfterOverride(t *testing.T) {
+	t.Setenv("BROKER_GRPC_SHARED_SECRET", "dev-secret")
 	t.Setenv("BROKER_MAX_PAYLOAD_BYTES", "1024")
 	t.Setenv("BROKER_TLS_CERT", "")
 	t.Setenv("BROKER_TLS_KEY", "")
@@ -238,6 +282,7 @@ func TestLoadReturnsErrorWhenEnvUnsetAfterOverride(t *testing.T) {
 }
 
 func TestLoadAllowsUnlimitedClients(t *testing.T) {
+	t.Setenv("BROKER_GRPC_SHARED_SECRET", "dev-secret")
 	t.Setenv("BROKER_MAX_CLIENTS", "0")
 
 	cfg, err := Load()
@@ -251,6 +296,7 @@ func TestLoadAllowsUnlimitedClients(t *testing.T) {
 }
 
 func TestLoadWithCustomTLSPair(t *testing.T) {
+	t.Setenv("BROKER_GRPC_SHARED_SECRET", "dev-secret")
 	certFile := createTempFile(t)
 	keyFile := createTempFile(t)
 

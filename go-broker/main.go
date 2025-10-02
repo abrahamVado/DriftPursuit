@@ -89,6 +89,8 @@ type Broker struct {
 	stats           BrokerStats
 	maxPayloadBytes int64
 
+	wsAuthenticator websocketAuthenticator
+
 	// capacity limiting
 	maxClients     int
 	pendingClients int
@@ -185,6 +187,10 @@ func NewBroker(maxPayloadBytes int64, maxClients int, startedAt time.Time, logge
 		if opt != nil {
 			opt(broker)
 		}
+	}
+
+	if broker.wsAuthenticator == nil {
+		broker.wsAuthenticator = allowAllAuthenticator{}
 	}
 
 	if broker.intentGate == nil {
@@ -578,6 +584,22 @@ func (b *Broker) serveWS(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	clientID := r.RemoteAddr
+	if b.wsAuthenticator != nil {
+		subject, err := b.wsAuthenticator.Authenticate(r)
+		if err != nil {
+			reqLogger.Warn("rejecting websocket connection: authentication failed", logging.Error(err))
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
+		if strings.TrimSpace(subject) != "" {
+			clientID = subject
+			reqLogger = reqLogger.With(logging.String("client_subject", subject))
+			ctx = logging.ContextWithLogger(ctx, reqLogger)
+			r = r.WithContext(ctx)
+		}
+	}
+
 	// Capacity pre-check
 	if b.maxClients > 0 {
 		b.lock.Lock()
@@ -603,7 +625,7 @@ func (b *Broker) serveWS(w http.ResponseWriter, r *http.Request) {
 		reqLogger.Error("websocket upgrade failed", logging.Error(err))
 		return
 	}
-	client := &Client{conn: conn, send: make(chan []byte, 256), id: r.RemoteAddr}
+	client := &Client{conn: conn, send: make(chan []byte, 256), id: clientID}
 	client.log = reqLogger.With(logging.String("client_id", client.id))
 
 	// Enforce payload limit (read side)
@@ -1194,9 +1216,28 @@ func main() {
 		}()
 	}
 
+	switch cfg.WSAuthMode {
+	case configpkg.WSAuthModeHMAC:
+		authenticator, err := newHMACWebsocketAuthenticator(cfg.WSHMACSecret)
+		if err != nil {
+			logger.Fatal("failed to configure websocket authenticator", logging.Error(err))
+		}
+		brokerOptions = append(brokerOptions, WithWebsocketAuthenticator(authenticator))
+		logger.Info("websocket HMAC authentication enabled")
+	default:
+		logger.Info("websocket authentication disabled")
+	}
+
 	broker := NewBroker(maxPayloadBytes, maxClients, startedAt, logger, brokerOptions...)
 
-	grpcServer := grpc.NewServer()
+	grpcLogger := logger.With(logging.String("component", "grpc"))
+	grpcOptions, grpcCleanup, err := configureGRPCSecurity(cfg, grpcLogger)
+	if err != nil {
+		logger.Fatal("failed to configure gRPC security", logging.Error(err))
+	}
+	defer grpcCleanup()
+
+	grpcServer := grpc.NewServer(grpcOptions...)
 	timeSyncService := timesync.NewService(broker, timeSyncInterval)
 	pb.RegisterTimeSyncServiceServer(grpcServer, timeSyncService)
 

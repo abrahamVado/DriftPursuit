@@ -17,6 +17,13 @@ The Battle Royale broker is configured entirely through environment variables. E
 | `BROKER_LOG_MAX_BACKUPS` | `10` | Number of rotated log files to retain on disk. |
 | `BROKER_LOG_MAX_AGE_DAYS` | `7` | Maximum age in days for rotated log files before they are purged. |
 | `BROKER_LOG_COMPRESS` | `true` | When `true`, rotated log files are gzip-compressed to save space. |
+| `BROKER_WS_AUTH_MODE` | `disabled` | Controls WebSocket authentication: `disabled` or `hmac`. When `hmac`, clients must supply an HMAC-signed token. |
+| `BROKER_WS_HMAC_SECRET` | *(empty)* | Shared secret used to validate HMAC WebSocket tokens. Required when `BROKER_WS_AUTH_MODE=hmac`. |
+| `BROKER_GRPC_AUTH_MODE` | `shared_secret` | Controls gRPC authentication: `shared_secret` or `mtls`. Use `mtls` for production deployments. |
+| `BROKER_GRPC_SHARED_SECRET` | *(empty)* | Shared secret clients must send via metadata when `BROKER_GRPC_AUTH_MODE=shared_secret`. |
+| `BROKER_GRPC_TLS_CERT` | *(empty)* | PEM certificate presented by the gRPC server when `BROKER_GRPC_AUTH_MODE=mtls`. |
+| `BROKER_GRPC_TLS_KEY` | *(empty)* | PEM key paired with `BROKER_GRPC_TLS_CERT` for gRPC mTLS. |
+| `BROKER_GRPC_CLIENT_CA` | *(empty)* | PEM bundle of trusted client certificate authorities for gRPC mTLS. |
 
 ## Usage Tips
 
@@ -24,3 +31,5 @@ The Battle Royale broker is configured entirely through environment variables. E
 * When deploying behind a load balancer or reverse proxy, set `BROKER_ADDR` to the internal bind address and configure TLS termination as appropriate.
 * Keep `BROKER_MAX_PAYLOAD_BYTES` high enough for your simulation payloads while preventing runaway resource consumption from rogue clients.
 * Shorter `BROKER_PING_INTERVAL` values can detect disconnects faster at the cost of extra network chatter.
+* Enable `BROKER_WS_AUTH_MODE=hmac` alongside a strong `BROKER_WS_HMAC_SECRET` to protect the WebSocket fan-out channel.
+* Toggle `BROKER_GRPC_AUTH_MODE` between `shared_secret` for local rigs and `mtls` with `BROKER_GRPC_TLS_*` for production clusters.

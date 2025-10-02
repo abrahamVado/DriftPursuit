@@ -2,11 +2,14 @@ package main
 
 import (
 	"context"
+	"crypto/hmac"
 	"crypto/rand"
 	"crypto/rsa"
+	"crypto/sha256"
 	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
+	"encoding/base64"
 	"encoding/json"
 	"encoding/pem"
 	"errors"
@@ -15,6 +18,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -569,6 +573,59 @@ func TestServeWSRejectsOversizedMessages(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("timed out waiting for broadcast after oversized message")
 	}
+}
+
+func TestServeWSRequiresAuthTokenWhenConfigured(t *testing.T) {
+	upgrader.CheckOrigin = func(*http.Request) bool { return true }
+	authenticator, err := newHMACWebsocketAuthenticator("shared-secret")
+	if err != nil {
+		t.Fatalf("newHMACWebsocketAuthenticator: %v", err)
+	}
+	broker := NewBroker(configpkg.DefaultMaxPayloadBytes, 0, time.Now(), logging.NewTestLogger(), WithWebsocketAuthenticator(authenticator))
+
+	server := httptest.NewServer(http.HandlerFunc(broker.serveWS))
+	defer server.Close()
+
+	wsURL := "ws" + strings.TrimPrefix(server.URL, "http")
+	if _, resp, err := websocket.DefaultDialer.Dial(wsURL, nil); err == nil {
+		t.Fatal("expected websocket dial without token to fail")
+	} else if resp == nil || resp.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("expected unauthorized status, got resp=%v err=%v", resp, err)
+	}
+
+	token := issueTestToken(t, "shared-secret", "pilot-42", time.Now().Add(time.Minute))
+	authURL := wsURL + "/?auth_token=" + url.QueryEscape(token)
+	conn, _, err := websocket.DefaultDialer.Dial(authURL, nil)
+	if err != nil {
+		t.Fatalf("dial websocket with token: %v", err)
+	}
+	defer conn.Close()
+
+	broker.lock.RLock()
+	var found bool
+	for client := range broker.clients {
+		if client.id == "pilot-42" {
+			found = true
+		}
+	}
+	broker.lock.RUnlock()
+	if !found {
+		t.Fatal("expected authenticated client id to be recorded")
+	}
+}
+
+func issueTestToken(t *testing.T, secret, subject string, expires time.Time) string {
+	t.Helper()
+	header := base64.RawURLEncoding.EncodeToString([]byte(`{"alg":"HS256","typ":"JWT"}`))
+	payload := fmt.Sprintf(`{"sub":"%s","exp":%d,"iat":%d}`, subject, expires.Unix(), time.Now().Unix())
+	encodedPayload := base64.RawURLEncoding.EncodeToString([]byte(payload))
+	signingInput := header + "." + encodedPayload
+	mac := hmac.New(sha256.New, []byte(secret))
+	if _, err := mac.Write([]byte(signingInput)); err != nil {
+		t.Fatalf("mac write: %v", err)
+	}
+	signature := base64.RawURLEncoding.EncodeToString(mac.Sum(nil))
+	return signingInput + "." + signature
 }
 
 func TestBrokerSnapshotRecovery(t *testing.T) {
