@@ -8,16 +8,8 @@ import { createSimulation, updateSimulation, type SimulationParams } from "../li
 import type { SimulationState } from "../lib/world";
 import type { Vec3 } from "../lib/vector";
 import type { ChunkData } from "../lib/terrain";
+import { useSandboxControls } from "../lib/controls";
 import { ControlsOverlay } from "./ControlsOverlay";
-
-interface InputState {
-  throttle: number;
-  roll: number;
-  pitch: number;
-  yaw: number;
-  boost: boolean;
-  resetRoll: boolean;
-}
 
 type SpinFx = {
   mesh: THREE.Object3D;
@@ -283,7 +275,7 @@ export function SandboxCanvas() {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const simRef = useRef<SimulationState | null>(null);
   const rafRef = useRef<number>();
-  const inputRef = useRef<InputState>({ throttle: 0, roll: 0, pitch: 0, yaw: 0, boost: false, resetRoll: false });
+  const { inputRef, setCallbacks } = useSandboxControls();
   const [speed, setSpeed] = useState(0);
   const [targetSpeed, setTargetSpeed] = useState(0);
 
@@ -661,76 +653,39 @@ export function SandboxCanvas() {
     }
 
     // ---- Input (add fire key 'M') ----
-    const keyDown = (event: KeyboardEvent) => {
-      if (event.repeat) return;
-      if (event.code.startsWith("Arrow")) {
-        event.preventDefault();
-      }
-      if (event.code === "KeyW") inputRef.current.throttle = 1;
-      if (event.code === "KeyS") inputRef.current.throttle = -1;
-      if (event.code === "KeyA") inputRef.current.roll = -1;
-      if (event.code === "KeyD") inputRef.current.roll = 1;
-      if (event.code === "ArrowUp") inputRef.current.pitch = 1;
-      if (event.code === "ArrowDown") inputRef.current.pitch = -1;
-      if (event.code === "ArrowLeft") inputRef.current.yaw = -1;
-      if (event.code === "ArrowRight") inputRef.current.yaw = 1;
-      if (event.code === "ShiftLeft" || event.code === "ShiftRight") inputRef.current.boost = true;
-      if (event.code === "Space") inputRef.current.resetRoll = true;
-
-      // In keyDown:
-      if (event.code === "KeyL") {
-        if (!laserActive) {
-          laserActive = true;
-          if (!laserBeam) {
-            laserBeam = buildLaserBeam();
-            scene.add(laserBeam);
+    const removeControlCallbacks = setCallbacks({
+      onLaserToggle: (active) => {
+        if (active) {
+          if (!laserActive) {
+            laserActive = true;
+            if (!laserBeam) {
+              laserBeam = buildLaserBeam();
+              scene.add(laserBeam);
+            }
+          }
+        } else {
+          laserActive = false;
+          if (laserBeam) {
+            // hide instead of destroying so we can reuse without reallocating
+            laserBeam.visible = false;
+            (laserBeam as any).userData.spark.visible = false;
           }
         }
-      }
-
-
-
-      if (event.code === "KeyM") {
-        // spawn from front neon circle (outermost ring), fallback to nose
+      },
+      onFireMissile: () => {
         const front = (craftMesh as any).userData.frontRings as Ring[] | undefined;
-        let spawnWorld = new THREE.Vector3();
+        const spawnWorld = new THREE.Vector3();
         if (front && front.length > 0) front[0].mesh.getWorldPosition(spawnWorld);
         else (craftMesh as any).userData.noseRing?.getWorldPosition(spawnWorld);
 
-        const forwardDir = new THREE.Vector3(0, 0, 1).applyMatrix4(new THREE.Matrix4().extractRotation(craftMesh.matrixWorld));
+        const forwardDir = new THREE.Vector3(0, 0, 1).applyMatrix4(
+          new THREE.Matrix4().extractRotation(craftMesh.matrixWorld)
+        );
         createMissile(spawnWorld, forwardDir);
-      }
-    };
-
-    const keyUp = (event: KeyboardEvent) => {
-      if (event.code === "KeyW" && inputRef.current.throttle > 0) inputRef.current.throttle = 0;
-      if (event.code === "KeyS" && inputRef.current.throttle < 0) inputRef.current.throttle = 0;
-      if (event.code === "KeyA") {
-        inputRef.current.roll = 0;
-      }
-      if (event.code === "KeyD") {
-        inputRef.current.roll = 0;
-      }
-      if (event.code === "ArrowUp" && inputRef.current.pitch > 0) inputRef.current.pitch = 0;
-      if (event.code === "ArrowDown" && inputRef.current.pitch < 0) inputRef.current.pitch = 0;
-      if (event.code === "ArrowLeft" && inputRef.current.yaw < 0) inputRef.current.yaw = 0;
-      if (event.code === "ArrowRight" && inputRef.current.yaw > 0) inputRef.current.yaw = 0;
-      if (event.code === "ShiftLeft" || event.code === "ShiftRight") inputRef.current.boost = false;
-
-      // In keyUp:
-      if (event.code === "KeyL") {
-        laserActive = false;
-        if (laserBeam) {
-          // hide instead of destroying so we can reuse without reallocating
-          laserBeam.visible = false;
-          (laserBeam as any).userData.spark.visible = false;
-        }
-      }      
-    };
+      },
+    });
 
     window.addEventListener("resize", handleResize);
-    window.addEventListener("keydown", keyDown);
-    window.addEventListener("keyup", keyUp);
 
     const animate = () => {
       if (!simRef.current) return;
@@ -1141,8 +1096,7 @@ if (laserBeam) {
     return () => {
       if (rafRef.current) cancelAnimationFrame(rafRef.current);
       window.removeEventListener("resize", handleResize);
-      window.removeEventListener("keydown", keyDown);
-      window.removeEventListener("keyup", keyUp);
+      removeControlCallbacks();
       renderer.dispose();
 
       // dispose chunk meshes
@@ -1165,7 +1119,7 @@ if (laserBeam) {
         }
       });
     };
-  }, []);
+  }, [setCallbacks]);
 
   return (
     <>
