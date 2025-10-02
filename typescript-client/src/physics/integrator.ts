@@ -1,3 +1,5 @@
+import { skiffStats } from "../gameplayConfig";
+
 export interface Vec3 {
   x: number;
   y: number;
@@ -18,6 +20,24 @@ export interface VehicleStateLike {
   flightAssistEnabled?: boolean;
 }
 
+function clampVectorMagnitude(vector: Vec3 | undefined, limit: number): void {
+  //1.- Ignore vectors that are missing or when the limit disables the clamp.
+  if (!vector || !(limit > 0)) {
+    return;
+  }
+  const magnitudeSq = vector.x * vector.x + vector.y * vector.y + vector.z * vector.z;
+  const maxSq = limit * limit;
+  if (magnitudeSq <= maxSq || magnitudeSq === 0) {
+    return;
+  }
+  //2.- Scale each component proportionally so the vector length matches the limit.
+  const magnitude = Math.sqrt(magnitudeSq);
+  const scale = limit / magnitude;
+  vector.x *= scale;
+  vector.y *= scale;
+  vector.z *= scale;
+}
+
 // wrapAngleDeg normalizes an angle into the [-180, 180) interval.
 export function wrapAngleDeg(angle: number): number {
   //1.- Use modulo arithmetic to prevent unbounded growth over long runs.
@@ -31,7 +51,9 @@ export function integrateLinear(position: Vec3 | undefined, velocity: Vec3 | und
   if (!position || !velocity || !(step > 0)) {
     return;
   }
-  //2.- Apply the displacement derived from velocity * dt on each axis.
+  //2.- Clamp velocity magnitude using shared Skiff stats so motion stays consistent across runtimes.
+  clampVectorMagnitude(velocity, skiffStats.maxSpeedMps);
+  //3.- Apply the displacement derived from velocity * dt on each axis.
   position.x += velocity.x * step;
   position.y += velocity.y * step;
   position.z += velocity.z * step;
@@ -43,7 +65,9 @@ export function integrateAngular(orientation: OrientationDeg | undefined, angula
   if (!orientation || !angularVelocity || !(step > 0)) {
     return;
   }
-  //2.- Add the integrated deltas and wrap to keep the values bounded.
+  //2.- Clamp the rotational rate to the shared Skiff target to avoid diverging assists.
+  clampVectorMagnitude(angularVelocity, skiffStats.maxAngularSpeedDegPerSec);
+  //3.- Add the integrated deltas and wrap to keep the values bounded.
   orientation.yawDeg = wrapAngleDeg(orientation.yawDeg + angularVelocity.y * step);
   orientation.pitchDeg = wrapAngleDeg(orientation.pitchDeg + angularVelocity.x * step);
   orientation.rollDeg = wrapAngleDeg(orientation.rollDeg + angularVelocity.z * step);

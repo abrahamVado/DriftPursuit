@@ -1,4 +1,5 @@
 import assert from "node:assert";
+import { skiffStats } from "../gameplayConfig";
 import {
   GuidanceSpline,
   applyAssistAlignment,
@@ -49,4 +50,35 @@ import {
   assert.strictEqual(state.angularVelocity?.x, 0, "angular x dampened");
   assert.strictEqual(state.angularVelocity?.y, 0, "angular y dampened");
   assert.strictEqual(state.angularVelocity?.z, 0, "angular z dampened");
+}
+
+//4.- Validate velocity and rotation are clamped by the shared Skiff stats.
+{
+  const state: VehicleStateLike = {
+    position: { x: 0, y: 0, z: 0 },
+    velocity: {
+      x: skiffStats.maxSpeedMps * 5,
+      y: skiffStats.maxSpeedMps * 2,
+      z: skiffStats.maxSpeedMps * 0.5,
+    },
+    orientation: { yawDeg: 0, pitchDeg: 0, rollDeg: 0 },
+    angularVelocity: {
+      x: skiffStats.maxAngularSpeedDegPerSec * 4,
+      y: skiffStats.maxAngularSpeedDegPerSec * 2,
+      z: 0,
+    },
+  };
+  integrateVehicle(state, 1);
+  const velocity = state.velocity!;
+  const speed = Math.sqrt(velocity.x ** 2 + velocity.y ** 2 + velocity.z ** 2);
+  assert.ok(Math.abs(speed - skiffStats.maxSpeedMps) < 1e-6, "linear clamp should match Skiff cap");
+  const displacementSq =
+    (state.position?.x ?? 0) ** 2 + (state.position?.y ?? 0) ** 2 + (state.position?.z ?? 0) ** 2;
+  assert.ok(Math.abs(displacementSq - skiffStats.maxSpeedMps ** 2) < 1e-4, "position delta reflects clamped speed");
+  const angular = state.angularVelocity!;
+  const angularSpeed = Math.sqrt(angular.x ** 2 + angular.y ** 2 + angular.z ** 2);
+  assert.ok(
+    Math.abs(angularSpeed - skiffStats.maxAngularSpeedDegPerSec) < 1e-6,
+    "angular clamp should match Skiff cap",
+  );
 }

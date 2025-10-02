@@ -3,8 +3,26 @@ package physics
 import (
 	"math"
 
+	"driftpursuit/broker/internal/gameplay"
 	pb "driftpursuit/broker/internal/proto/pb"
 )
+
+func clampVec3Magnitude(vector *pb.Vector3, limit float64) {
+	//1.- Skip clamping when the vector is missing or the limit disables the guard.
+	if vector == nil || !(limit > 0) {
+		return
+	}
+	magnitudeSq := vector.X*vector.X + vector.Y*vector.Y + vector.Z*vector.Z
+	if magnitudeSq == 0 || magnitudeSq <= limit*limit {
+		return
+	}
+	//2.- Scale each axis uniformly so the resulting magnitude matches the limit.
+	magnitude := math.Sqrt(magnitudeSq)
+	scale := limit / magnitude
+	vector.X *= scale
+	vector.Y *= scale
+	vector.Z *= scale
+}
 
 // Vec3 is a lightweight vector helper used by the physics utilities.
 type Vec3 struct {
@@ -51,7 +69,9 @@ func integrateLinear(position *pb.Vector3, velocity *pb.Vector3, step float64) {
 	if position == nil || velocity == nil || step <= 0 {
 		return
 	}
-	//2.- Advance each axis using the standard Euler integration.
+	//2.- Clamp the velocity vector to the Skiff limit to keep runtimes consistent.
+	clampVec3Magnitude(velocity, gameplay.SkiffStats().MaxSpeedMps)
+	//3.- Advance each axis using the standard Euler integration.
 	position.X += velocity.X * step
 	position.Y += velocity.Y * step
 	position.Z += velocity.Z * step
@@ -63,7 +83,9 @@ func integrateAngular(orientation *pb.Orientation, angularVelocity *pb.Vector3, 
 	if orientation == nil || angularVelocity == nil || step <= 0 {
 		return
 	}
-	//2.- Update each Euler component in degrees per second then wrap.
+	//2.- Clamp the angular velocity magnitude against the Skiff configuration.
+	clampVec3Magnitude(angularVelocity, gameplay.SkiffStats().MaxAngularSpeedDegPerSec)
+	//3.- Update each Euler component in degrees per second then wrap.
 	orientation.YawDeg = wrapAngleDeg(orientation.YawDeg + angularVelocity.Y*step)
 	orientation.PitchDeg = wrapAngleDeg(orientation.PitchDeg + angularVelocity.X*step)
 	orientation.RollDeg = wrapAngleDeg(orientation.RollDeg + angularVelocity.Z*step)
