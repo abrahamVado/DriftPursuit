@@ -1,0 +1,52 @@
+syntax = "proto3";
+
+package driftpursuit.networking.v1;
+
+import "go-broker/internal/proto/types.proto";
+
+option go_package = "driftpursuit/broker/internal/proto/pb;pb";
+option java_multiple_files = true;
+option java_package = "build.buf.driftpursuit.networking.v1";
+
+// Snapshot of an entity's physical state that is broadcast to clients.
+message EntitySnapshot {
+  string schema_version = 1;
+  string entity_id = 2;
+  string entity_type = 3;
+  Vector3 position = 4;
+  Vector3 velocity = 5;
+  Orientation orientation = 6;
+  double speed_mps = 7;
+  bool active = 8;
+  // Optional radar cross section in square meters. Zero implies unknown.
+  double radar_cross_section = 9;
+  int64 captured_at_ms = 10;
+}
+
+// Aggregated world state replayed on connect and after broker restarts.
+message WorldSnapshot {
+  string schema_version = 1;
+  int64 captured_at_ms = 2;
+  repeated EntitySnapshot entities = 3;
+  repeated TierAssignment assignments = 4;
+}
+
+// Observer state communicated by gameplay clients to seed tier calculations.
+message ObserverState {
+  string schema_version = 1;
+  string observer_id = 2;
+  Vector3 position = 3;
+  Orientation orientation = 4;
+  double nearby_range_m = 5;
+  double radar_range_m = 6;
+  int64 updated_at_ms = 7;
+}
+
+// Pre-computed tier assignment for a particular observer/entity pair.
+message TierAssignment {
+  string schema_version = 1;
+  string observer_id = 2;
+  string entity_id = 3;
+  InterestTier tier = 4;
+  int64 computed_at_ms = 5;
+}

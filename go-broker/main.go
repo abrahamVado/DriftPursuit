@@ -16,7 +16,10 @@ import (
 	configpkg "driftpursuit/broker/internal/config"
 	httpapi "driftpursuit/broker/internal/http"
 	"driftpursuit/broker/internal/logging"
+	"driftpursuit/broker/internal/networking"
+	pb "driftpursuit/broker/internal/proto/pb"
 	"github.com/gorilla/websocket"
+	"google.golang.org/protobuf/encoding/protojson"
 )
 
 // Will be configured in main() after parsing flags/env.
@@ -60,6 +63,7 @@ type Broker struct {
 	log        *logging.Logger
 
 	snapshotter *StateSnapshotter
+	tierManager *networking.TierManager
 }
 
 var errRecoveryInProgress = errors.New("state recovery in progress")
@@ -86,6 +90,7 @@ func NewBroker(maxPayloadBytes int64, maxClients int, startedAt time.Time, logge
 		maxClients:      maxClients,
 		startedAt:       startedAt,
 		log:             logger,
+		tierManager:     networking.NewTierManager(networking.DefaultTierConfig()),
 	}
 	for _, opt := range opts {
 		if opt != nil {
@@ -121,6 +126,9 @@ func (b *Broker) deregisterClient(client *Client) {
 		}
 	}
 	b.lock.Unlock()
+	if b.tierManager != nil && client != nil {
+		b.tierManager.RemoveObserver(client.id)
+	}
 }
 
 func (b *Broker) broadcast(msg []byte) {
@@ -379,6 +387,10 @@ func (b *Broker) serveWS(w http.ResponseWriter, r *http.Request) {
 				continue
 			}
 
+			if b.handleStructuredMessage(client, envelope, msg) {
+				continue
+			}
+
 			b.recordSnapshot(envelope.Type, msg)
 			b.broadcast(msg)
 		}
@@ -481,6 +493,64 @@ func (b *Broker) replaySnapshots(client *Client, snapshots [][]byte) {
 			return
 		}
 	}
+}
+
+func (b *Broker) handleStructuredMessage(client *Client, envelope inboundEnvelope, raw []byte) bool {
+	if b == nil {
+		return false
+	}
+	if b.tierManager == nil {
+		return false
+	}
+
+	unmarshal := protojson.UnmarshalOptions{DiscardUnknown: true}
+
+	switch envelope.Type {
+	case "observer_state":
+		var state pb.ObserverState
+		if err := unmarshal.Unmarshal(raw, &state); err != nil {
+			if client != nil {
+				client.log.Debug("failed to decode observer_state", logging.Error(err))
+			}
+			return true
+		}
+		if state.ObserverId == "" {
+			state.ObserverId = envelope.ID
+		}
+		b.tierManager.UpdateObserver(client.id, &state)
+		return true
+	case "entity_snapshot":
+		var snapshot pb.EntitySnapshot
+		if err := unmarshal.Unmarshal(raw, &snapshot); err != nil {
+			if client != nil {
+				client.log.Debug("failed to decode entity_snapshot", logging.Error(err))
+			}
+			return false
+		}
+		if snapshot.EntityId == "" {
+			snapshot.EntityId = envelope.ID
+		}
+		b.tierManager.UpdateEntity(&snapshot)
+	case "radar_frame":
+		var frame pb.RadarFrame
+		if err := unmarshal.Unmarshal(raw, &frame); err != nil {
+			if client != nil {
+				client.log.Debug("failed to decode radar_frame", logging.Error(err))
+			}
+			return false
+		}
+		b.tierManager.ApplyRadarFrame(&frame)
+	case "world_snapshot":
+		var snapshot pb.WorldSnapshot
+		if err := unmarshal.Unmarshal(raw, &snapshot); err != nil {
+			if client != nil {
+				client.log.Debug("failed to decode world_snapshot", logging.Error(err))
+			}
+			return false
+		}
+		b.tierManager.IngestWorldSnapshot(&snapshot)
+	}
+	return false
 }
 func statsHandler(provider statsProvider) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {

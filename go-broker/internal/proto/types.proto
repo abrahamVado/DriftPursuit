@@ -1,0 +1,43 @@
+syntax = "proto3";
+
+package driftpursuit.networking.v1;
+
+option go_package = "driftpursuit/broker/internal/proto/pb;pb";
+option java_multiple_files = true;
+option java_package = "build.buf.driftpursuit.networking.v1";
+
+// Semantic version of the networking schema carried in every payload.
+message SchemaVersion {
+  uint32 major = 1;
+  uint32 minor = 2;
+  uint32 patch = 3;
+}
+
+// 3D vector in meters, relative to the simulation origin.
+message Vector3 {
+  double x = 1;
+  double y = 2;
+  double z = 3;
+}
+
+// Euler orientation in degrees following aerospace conventions.
+message Orientation {
+  double yaw_deg = 1;
+  double pitch_deg = 2;
+  double roll_deg = 3;
+}
+
+// Canonical interest tiers used by the broker to bucket subscriptions.
+enum InterestTier {
+  INTEREST_TIER_UNSPECIFIED = 0;
+  // The observing entity itself; always delivered.
+  INTEREST_TIER_SELF = 1;
+  // Entities within the close range bubble receive the full state stream.
+  INTEREST_TIER_NEARBY = 2;
+  // Entities inside the observer's radar volume receive degraded updates.
+  INTEREST_TIER_RADAR = 3;
+  // Entities outside radar range but still relevant for global awareness.
+  INTEREST_TIER_EXTENDED = 4;
+  // Dormant or destroyed entities only appear in high level summaries.
+  INTEREST_TIER_PASSIVE = 5;
+}
