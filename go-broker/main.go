@@ -56,23 +56,50 @@ type Broker struct {
 	stateMu    sync.RWMutex
 	startedAt  time.Time
 	startupErr error
+	recovering bool
 	log        *logging.Logger
+
+	snapshotter *StateSnapshotter
 }
 
-func NewBroker(maxPayloadBytes int64, maxClients int, startedAt time.Time, logger *logging.Logger) *Broker {
+var errRecoveryInProgress = errors.New("state recovery in progress")
+
+type BrokerOption func(*Broker)
+
+// WithSnapshotter attaches a state snapshotter to the broker for persistence and recovery.
+func WithSnapshotter(snapshotter *StateSnapshotter) BrokerOption {
+	return func(b *Broker) {
+		b.snapshotter = snapshotter
+	}
+}
+
+func NewBroker(maxPayloadBytes int64, maxClients int, startedAt time.Time, logger *logging.Logger, opts ...BrokerOption) *Broker {
 	if maxPayloadBytes <= 0 {
 		maxPayloadBytes = configpkg.DefaultMaxPayloadBytes
 	}
 	if logger == nil {
 		logger = logging.L()
 	}
-	return &Broker{
+	broker := &Broker{
 		clients:         make(map[*Client]bool),
 		maxPayloadBytes: maxPayloadBytes,
 		maxClients:      maxClients,
 		startedAt:       startedAt,
 		log:             logger,
 	}
+	for _, opt := range opts {
+		if opt != nil {
+			opt(broker)
+		}
+	}
+
+	if broker.snapshotter != nil {
+		broker.setRecovering(true)
+		broker.setStartupError(errRecoveryInProgress)
+		go broker.finishRecovery()
+	}
+
+	return broker
 }
 
 type BrokerStats struct {
@@ -134,6 +161,19 @@ func (b *Broker) setStartupError(err error) {
 	b.stateMu.Lock()
 	b.startupErr = err
 	b.stateMu.Unlock()
+}
+
+func (b *Broker) setRecovering(recovering bool) {
+	b.stateMu.Lock()
+	b.recovering = recovering
+	b.stateMu.Unlock()
+}
+
+func (b *Broker) isRecovering() bool {
+	b.stateMu.RLock()
+	recovering := b.recovering
+	b.stateMu.RUnlock()
+	return recovering
 }
 
 func (b *Broker) startupError() error {
@@ -233,6 +273,12 @@ func (b *Broker) serveWS(w http.ResponseWriter, r *http.Request) {
 	ctx = logging.ContextWithLogger(ctx, reqLogger)
 	r = r.WithContext(ctx)
 
+	if b.isRecovering() {
+		reqLogger.Warn("rejecting websocket connection: broker recovering state")
+		http.Error(w, "service unavailable: recovering state", http.StatusServiceUnavailable)
+		return
+	}
+
 	// Capacity pre-check
 	if b.maxClients > 0 {
 		b.lock.Lock()
@@ -285,6 +331,10 @@ func (b *Broker) serveWS(w http.ResponseWriter, r *http.Request) {
 	b.stats.Clients++
 	b.lock.Unlock()
 
+	if snapshots := b.snapshotMessages(); len(snapshots) > 0 {
+		go b.replaySnapshots(client, snapshots)
+	}
+
 	// reader
 	go func() {
 		defer func() {
@@ -329,6 +379,7 @@ func (b *Broker) serveWS(w http.ResponseWriter, r *http.Request) {
 				continue
 			}
 
+			b.recordSnapshot(envelope.Type, msg)
 			b.broadcast(msg)
 		}
 	}()
@@ -368,6 +419,69 @@ func (b *Broker) serveWS(w http.ResponseWriter, r *http.Request) {
 		}
 	}()
 }
+
+func (b *Broker) finishRecovery() {
+	if b.snapshotter == nil {
+		b.setStartupError(nil)
+		b.setRecovering(false)
+		return
+	}
+
+	if err := b.snapshotter.load(); err != nil {
+		b.log.Error("failed to load state snapshot", logging.Error(err))
+		b.setStartupError(err)
+		b.setRecovering(false)
+		return
+	}
+
+	snapshots := b.snapshotter.StateMessages()
+
+	if len(snapshots) > 0 {
+		b.log.Info("state snapshot loaded", logging.Int("messages", len(snapshots)))
+	} else {
+		b.log.Info("no state snapshot to apply")
+	}
+
+	b.setStartupError(nil)
+	b.setRecovering(false)
+
+	status := map[string]string{
+		"type":   "system_status",
+		"status": "recovered",
+	}
+	if data, err := json.Marshal(status); err == nil {
+		b.recordSnapshot("system_status", data)
+		b.broadcast(data)
+	}
+}
+
+func (b *Broker) recordSnapshot(messageType string, payload []byte) {
+	if b.snapshotter == nil {
+		return
+	}
+	b.snapshotter.Record(messageType, payload)
+}
+
+func (b *Broker) snapshotMessages() [][]byte {
+	if b.snapshotter == nil {
+		return nil
+	}
+	return b.snapshotter.StateMessages()
+}
+
+func (b *Broker) replaySnapshots(client *Client, snapshots [][]byte) {
+	if client == nil {
+		return
+	}
+	for _, msg := range snapshots {
+		select {
+		case client.send <- msg:
+		default:
+			client.log.Warn("dropping snapshot message: client buffer full")
+			return
+		}
+	}
+}
 func statsHandler(provider statsProvider) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		logger := logging.LoggerFromContext(r.Context()).With(logging.String("handler", "stats"))
@@ -384,6 +498,7 @@ func statsHandler(provider statsProvider) http.HandlerFunc {
 func healthzHandler(b *Broker) http.HandlerFunc {
 	type response struct {
 		Status         string  `json:"status"`
+		Message        string  `json:"message,omitempty"`
 		UptimeSeconds  float64 `json:"uptime_seconds"`
 		Clients        int     `json:"clients"`
 		PendingClients int     `json:"pending_clients"`
@@ -395,9 +510,18 @@ func healthzHandler(b *Broker) http.HandlerFunc {
 		uptime := b.uptime().Seconds()
 		status := "ok"
 		code := http.StatusOK
+		message := ""
+		if b.isRecovering() {
+			status = "recovering"
+			message = "state recovery in progress"
+			code = http.StatusServiceUnavailable
+		}
 		if err := b.startupError(); err != nil {
 			status = "error"
 			code = http.StatusServiceUnavailable
+			if message == "" {
+				message = err.Error()
+			}
 		}
 
 		w.Header().Set("Content-Type", "application/json")
@@ -406,6 +530,7 @@ func healthzHandler(b *Broker) http.HandlerFunc {
 		}
 		resp := response{
 			Status:         status,
+			Message:        message,
 			UptimeSeconds:  uptime,
 			Clients:        clients,
 			PendingClients: pending,
@@ -468,7 +593,22 @@ func main() {
 	// TLS config sanity
 	certProvided := cfg.TLSCertPath != ""
 
-	broker := NewBroker(maxPayloadBytes, maxClients, startedAt, logger)
+	var brokerOptions []BrokerOption
+
+	snapshotter, err := NewStateSnapshotter(cfg.StateSnapshotPath, cfg.StateSnapshotInterval, logger)
+	if err != nil {
+		logger.Fatal("failed to initialise state snapshotter", logging.Error(err))
+	}
+	if snapshotter != nil {
+		brokerOptions = append(brokerOptions, WithSnapshotter(snapshotter))
+		defer func() {
+			if err := snapshotter.Close(); err != nil {
+				logger.Warn("state snapshotter close failed", logging.Error(err))
+			}
+		}()
+	}
+
+	broker := NewBroker(maxPayloadBytes, maxClients, startedAt, logger, brokerOptions...)
 
 	// build handler with consistent mux
 	handler := buildHandler(broker, cfg)
