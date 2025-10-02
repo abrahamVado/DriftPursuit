@@ -1,0 +1,31 @@
+syntax = "proto3";
+
+package driftpursuit.networking.v1;
+
+import "go-broker/internal/proto/types.proto";
+
+option go_package = "driftpursuit/broker/internal/proto/pb;pb";
+option java_multiple_files = true;
+option java_package = "build.buf.driftpursuit.networking.v1";
+
+// RadarFrame carries processed sensor contacts for a single sweep.
+message RadarFrame {
+  string schema_version = 1;
+  uint64 frame_id = 2;
+  string emitter_entity_id = 3;
+  int64 captured_at_ms = 4;
+  repeated RadarContact contacts = 5;
+}
+
+// RadarContact represents a single detection from the emitter's perspective.
+message RadarContact {
+  string schema_version = 1;
+  string track_id = 2;
+  string entity_id = 3;
+  double range_m = 4;
+  double bearing_deg = 5;
+  double elevation_deg = 6;
+  double radial_velocity_mps = 7;
+  double confidence = 8;
+  InterestTier suggested_tier = 9;
+}

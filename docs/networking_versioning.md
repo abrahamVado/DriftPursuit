@@ -1,7 +1,9 @@
 # Networking schema versioning
 
 The websocket payloads exchanged between the broker, gameplay clients, and bot
-runner are formally defined in the [`proto/`](../proto) directory. Every message
+runner are formally defined in [`go-broker/internal/proto`](../go-broker/internal/proto),
+with generated artefacts checked in for Go (`internal/proto/pb`) and Python
+(`python-sim/driftpursuit_proto`). Every message
 carries a `schema_version` field so clients can detect incompatible upgrades
 before attempting to decode the payload. While the networking contract is still
 in flux we follow a `v0.x.y` versioning scheme:

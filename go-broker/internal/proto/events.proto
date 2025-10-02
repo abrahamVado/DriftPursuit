@@ -1,0 +1,29 @@
+syntax = "proto3";
+
+package driftpursuit.networking.v1;
+
+
+option go_package = "driftpursuit/broker/internal/proto/pb;pb";
+option java_multiple_files = true;
+option java_package = "build.buf.driftpursuit.networking.v1";
+
+// Event stream emitted alongside snapshots describing discrete gameplay updates.
+message GameEvent {
+  string schema_version = 1;
+  string event_id = 2;
+  int64 occurred_at_ms = 3;
+  EventType type = 4;
+  string primary_entity_id = 5;
+  repeated string related_entity_ids = 6;
+  map<string, string> metadata = 7;
+}
+
+enum EventType {
+  EVENT_TYPE_UNSPECIFIED = 0;
+  EVENT_TYPE_SPAWNED = 1;
+  EVENT_TYPE_DESTROYED = 2;
+  EVENT_TYPE_COLLISION = 3;
+  EVENT_TYPE_OBJECTIVE_CAPTURED = 4;
+  EVENT_TYPE_SCORE_UPDATE = 5;
+  EVENT_TYPE_SENSOR_CONTACT = 6;
+}
