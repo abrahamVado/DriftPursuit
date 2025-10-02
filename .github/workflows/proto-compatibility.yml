@@ -1,0 +1,27 @@
+name: Protobuf schema
+
+on:
+  push:
+    branches: ["main"]
+  pull_request:
+
+jobs:
+  lint-and-compatibility:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Buf CLI
+        uses: bufbuild/buf-setup-action@v1
+
+      - name: Lint protobuf definitions
+        run: buf lint
+
+      - name: Check for breaking changes against main
+        run: buf breaking --against '.git#branch=main'
+
+      - name: Validate schema version discipline
+        run: python3 scripts/check_schema_version.py

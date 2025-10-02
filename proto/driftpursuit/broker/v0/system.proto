@@ -1,0 +1,13 @@
+syntax = "proto3";
+
+package driftpursuit.broker.v0;
+
+option go_package = "github.com/driftpursuit/DriftPursuit/proto/driftpursuit/broker/v0;brokerpb";
+
+// SystemStatus notifies clients about broker lifecycle events, such as the
+// completion of snapshot recovery.
+message SystemStatus {
+  uint32 schema_version = 1;
+  string status = 2;
+  string message = 3;
+}
