@@ -705,8 +705,12 @@ export function SandboxCanvas() {
     const keyUp = (event: KeyboardEvent) => {
       if (event.code === "KeyW" && inputRef.current.throttle > 0) inputRef.current.throttle = 0;
       if (event.code === "KeyS" && inputRef.current.throttle < 0) inputRef.current.throttle = 0;
-      if (event.code === "KeyA" && inputRef.current.roll < 0) inputRef.current.roll = 0;
-      if (event.code === "KeyD" && inputRef.current.roll > 0) inputRef.current.roll = 0;
+      if (event.code === "KeyA") {
+        inputRef.current.roll = 0;
+      }
+      if (event.code === "KeyD") {
+        inputRef.current.roll = 0;
+      }
       if (event.code === "ArrowUp" && inputRef.current.pitch > 0) inputRef.current.pitch = 0;
       if (event.code === "ArrowDown" && inputRef.current.pitch < 0) inputRef.current.pitch = 0;
       if (event.code === "ArrowLeft" && inputRef.current.yaw < 0) inputRef.current.yaw = 0;
