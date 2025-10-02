@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -42,6 +43,8 @@ const (
 const (
 	driftWarnThresholdMs int64 = 50
 )
+
+const replayFrameRateHz = 5
 
 var pingInterval = configpkg.DefaultPingInterval
 var timeSyncInterval = time.Second
@@ -111,7 +114,9 @@ type Broker struct {
 	radarEvents       chan<- *pb.RadarContact
 	radarProc         *radar.Processor
 
-	replayRecorder *replay.Recorder
+	replayRecorder      *replay.Recorder
+	replayFrameInterval time.Duration
+	replayFrameBudget   time.Duration
 
 	intentMu        sync.RWMutex
 	intentStates    map[string]*intentPayload
@@ -203,19 +208,20 @@ func NewBroker(maxPayloadBytes int64, maxClients int, startedAt time.Time, logge
 	bandwidth := networking.NewBandwidthRegulator(networking.DefaultBandwidthLimitBytesPerSecond, nil)
 
 	broker := &Broker{
-		clients:           make(map[*Client]bool),
-		maxPayloadBytes:   maxPayloadBytes,
-		maxClients:        maxClients,
-		startedAt:         startedAt,
-		log:               logger,
-		snapshotPublisher: networking.NewSnapshotPublisher(int(maxPayloadBytes)),
-		snapshotMetrics:   snapshotMetrics,
-		bandwidth:         bandwidth,
-		tierManager:       networking.NewTierManager(networking.DefaultTierConfig()),
-		intentStates:      make(map[string]*intentPayload),
-		lastIntentSeqs:    make(map[string]uint64),
-		world:             state.NewWorldState(),
-		diffSubscribers:   make(map[uint64]chan grpcstream.DiffEvent),
+		clients:             make(map[*Client]bool),
+		maxPayloadBytes:     maxPayloadBytes,
+		maxClients:          maxClients,
+		startedAt:           startedAt,
+		log:                 logger,
+		snapshotPublisher:   networking.NewSnapshotPublisher(int(maxPayloadBytes)),
+		snapshotMetrics:     snapshotMetrics,
+		bandwidth:           bandwidth,
+		tierManager:         networking.NewTierManager(networking.DefaultTierConfig()),
+		intentStates:        make(map[string]*intentPayload),
+		lastIntentSeqs:      make(map[string]uint64),
+		world:               state.NewWorldState(),
+		diffSubscribers:     make(map[uint64]chan grpcstream.DiffEvent),
+		replayFrameInterval: time.Second / replayFrameRateHz,
 	}
 	for _, opt := range opts {
 		if opt != nil {
@@ -904,6 +910,7 @@ func (b *Broker) publishWorldDiff(tick uint64, diff state.TickDiff) {
 	//3.- Include queued events for HUD/log updates.
 	if len(diff.Events.Events) > 0 {
 		envelope.Events = diff.Events.Events
+		b.recordReplayEvents(tick, diff.Events.Events)
 	}
 
 	data, err := json.Marshal(envelope)
@@ -912,7 +919,8 @@ func (b *Broker) publishWorldDiff(tick uint64, diff state.TickDiff) {
 		return
 	}
 	if b.replayRecorder != nil {
-		b.replayRecorder.RecordTick(tick, data)
+		simulatedMs := atomic.LoadInt64(&b.simulatedElapsedNs) / int64(time.Millisecond)
+		b.replayRecorder.RecordTick(tick, simulatedMs, data)
 	}
 	b.broadcast(data)
 
@@ -969,14 +977,82 @@ func (b *Broker) advanceSimulation(step time.Duration) {
 	//1.- Track total simulated time so clock sync can compare against wall clock drift.
 	atomic.AddInt64(&b.simulatedElapsedNs, step.Nanoseconds())
 
+	//2.- Accumulate elapsed time to capture world frames at the configured replay cadence.
+	b.maybeRecordReplayFrame(step)
+
 	diff := b.world.AdvanceTick(step)
 	if !diff.HasChanges() {
 		return
 	}
 
 	tick := atomic.AddUint64(&b.tickCounter, 1)
-	//2.- Publish the diff after incrementing the authoritative tick counter.
+	//3.- Publish the diff after incrementing the authoritative tick counter.
 	b.publishWorldDiff(tick, diff)
+}
+
+func (b *Broker) maybeRecordReplayFrame(step time.Duration) {
+	if b == nil || b.replayRecorder == nil || b.world == nil {
+		return
+	}
+	interval := b.replayFrameInterval
+	if interval <= 0 {
+		interval = time.Second / replayFrameRateHz
+	}
+
+	b.replayFrameBudget += step
+	for b.replayFrameBudget >= interval {
+		//1.- Reduce the accumulated budget so the capture cadence remains consistent.
+		b.replayFrameBudget -= interval
+		b.recordReplayWorldFrame()
+	}
+}
+
+func (b *Broker) recordReplayWorldFrame() {
+	if b == nil || b.replayRecorder == nil || b.world == nil {
+		return
+	}
+
+	vehicles := b.world.Vehicles.Snapshot()
+	projectiles := b.world.Projectiles.Snapshot()
+	payload := struct {
+		Vehicles    []*pb.VehicleState       `json:"vehicles,omitempty"`
+		Projectiles []*state.ProjectileState `json:"projectiles,omitempty"`
+	}{Vehicles: vehicles, Projectiles: projectiles}
+
+	data, err := json.Marshal(payload)
+	if err != nil {
+		if b.log != nil {
+			b.log.Debug("failed to encode replay world frame", logging.Error(err))
+		}
+		return
+	}
+	simulatedMs := atomic.LoadInt64(&b.simulatedElapsedNs) / int64(time.Millisecond)
+	tick := atomic.LoadUint64(&b.tickCounter)
+	//1.- Record the frame so replay dumps include periodic world snapshots.
+	b.replayRecorder.RecordWorldFrame(tick, simulatedMs, data)
+}
+
+func (b *Broker) recordReplayEvents(tick uint64, events []*pb.GameEvent) {
+	if b == nil || b.replayRecorder == nil || len(events) == 0 {
+		return
+	}
+	marshal := protojson.MarshalOptions{EmitUnpopulated: true}
+	simulatedMs := atomic.LoadInt64(&b.simulatedElapsedNs) / int64(time.Millisecond)
+
+	for _, event := range events {
+		if event == nil {
+			continue
+		}
+		data, err := marshal.Marshal(event)
+		if err != nil {
+			if b.log != nil {
+				b.log.Debug("failed to encode replay event", logging.Error(err))
+			}
+			continue
+		}
+		//1.- Buffer each event to maintain deterministic playback ordering.
+		b.replayRecorder.RecordEvent(tick, simulatedMs, data)
+	}
 }
 
 func (b *Broker) handleStructuredMessage(client *Client, envelope inboundEnvelope, raw []byte) bool {
@@ -1254,6 +1330,9 @@ func main() {
 		}()
 	}
 
+	if cfg.ReplayDirectory == "" {
+		cfg.ReplayDirectory = filepath.Join("storage", "replays")
+	}
 	if cfg.ReplayDirectory != "" {
 		recorder, err := replay.NewRecorder(cfg.ReplayDirectory, nil)
 		if err != nil {
