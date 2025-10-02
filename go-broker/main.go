@@ -84,10 +84,12 @@ type Broker struct {
 	recovering bool
 	log        *logging.Logger
 
-	snapshotter *StateSnapshotter
-	tierManager *networking.TierManager
-	radarEvents chan<- *pb.RadarContact
-	radarProc   *radar.Processor
+	snapshotter       *StateSnapshotter
+	snapshotPublisher *networking.SnapshotPublisher
+	snapshotMetrics   *networking.SnapshotMetrics
+	tierManager       *networking.TierManager
+	radarEvents       chan<- *pb.RadarContact
+	radarProc         *radar.Processor
 
 	intentMu       sync.RWMutex
 	intentStates   map[string]*intentPayload
@@ -126,16 +128,20 @@ func NewBroker(maxPayloadBytes int64, maxClients int, startedAt time.Time, logge
 	if logger == nil {
 		logger = logging.L()
 	}
+	snapshotMetrics := networking.NewSnapshotMetrics()
+
 	broker := &Broker{
-		clients:         make(map[*Client]bool),
-		maxPayloadBytes: maxPayloadBytes,
-		maxClients:      maxClients,
-		startedAt:       startedAt,
-		log:             logger,
-		tierManager:     networking.NewTierManager(networking.DefaultTierConfig()),
-		intentStates:    make(map[string]*intentPayload),
-		lastIntentSeqs:  make(map[string]uint64),
-		world:           state.NewWorldState(),
+		clients:           make(map[*Client]bool),
+		maxPayloadBytes:   maxPayloadBytes,
+		maxClients:        maxClients,
+		startedAt:         startedAt,
+		log:               logger,
+		snapshotPublisher: networking.NewSnapshotPublisher(int(maxPayloadBytes)),
+		snapshotMetrics:   snapshotMetrics,
+		tierManager:       networking.NewTierManager(networking.DefaultTierConfig()),
+		intentStates:      make(map[string]*intentPayload),
+		lastIntentSeqs:    make(map[string]uint64),
+		world:             state.NewWorldState(),
 	}
 	for _, opt := range opts {
 		if opt != nil {
@@ -194,6 +200,9 @@ func (b *Broker) deregisterClient(client *Client) {
 	if b.tierManager != nil && client != nil {
 		b.tierManager.RemoveObserver(client.id)
 	}
+	if b.snapshotMetrics != nil && client != nil {
+		b.snapshotMetrics.ForgetClient(client.id)
+	}
 }
 
 func (b *Broker) broadcast(msg []byte) {
@@ -211,6 +220,80 @@ func (b *Broker) broadcast(msg []byte) {
 			}
 		}
 	}
+}
+
+func (b *Broker) enqueueSnapshot(client *Client, payload []byte) bool {
+	if b == nil || client == nil || len(payload) == 0 {
+		return false
+	}
+	//1.- Attempt a non-blocking send so encoding latency does not stall writers.
+	select {
+	case client.send <- payload:
+		return true
+	default:
+	}
+	//2.- Remove saturated clients under lock to avoid leaking goroutines.
+	b.lock.Lock()
+	if _, exists := b.clients[client]; exists {
+		close(client.send)
+		delete(b.clients, client)
+		if b.stats.Clients > 0 {
+			b.stats.Clients--
+		}
+	}
+	b.lock.Unlock()
+	//3.- Clear exported metrics for the disconnected client.
+	if b.snapshotMetrics != nil {
+		b.snapshotMetrics.ForgetClient(client.id)
+	}
+	return false
+}
+
+func (b *Broker) publishWorldSnapshot(snapshot *pb.WorldSnapshot) {
+	if b == nil || snapshot == nil || b.snapshotPublisher == nil || b.tierManager == nil {
+		return
+	}
+
+	//1.- Capture the current client list without holding the write lock during encoding.
+	b.lock.RLock()
+	clients := make([]*Client, 0, len(b.clients))
+	for client := range b.clients {
+		clients = append(clients, client)
+	}
+	b.lock.RUnlock()
+	if len(clients) == 0 {
+		return
+	}
+
+	deliveries := 0
+	for _, client := range clients {
+		if client == nil {
+			continue
+		}
+		//2.- Build the tailored snapshot using the budgeting planner.
+		plan, err := b.snapshotPublisher.Build(client.id, snapshot, b.tierManager.Buckets(client.id))
+		if err != nil {
+			b.log.Warn("failed to build world snapshot", logging.Error(err))
+			continue
+		}
+		bytes := 0
+		if len(plan.Payload) > 0 && b.enqueueSnapshot(client, plan.Payload) {
+			bytes = len(plan.Payload)
+			deliveries++
+		}
+		if b.snapshotMetrics != nil {
+			b.snapshotMetrics.Observe(client.id, bytes, plan.Result.Dropped)
+		}
+	}
+
+	if deliveries == 0 {
+		return
+	}
+
+	//3.- Count the publish as a broadcast so existing metrics remain consistent.
+	b.lock.Lock()
+	b.stats.Broadcasts++
+	b.lock.Unlock()
 }
 
 func (b *Broker) Stats() BrokerStats {
@@ -744,6 +827,9 @@ func (b *Broker) handleStructuredMessage(client *Client, envelope inboundEnvelop
 			return false
 		}
 		b.tierManager.IngestWorldSnapshot(&snapshot)
+		b.publishWorldSnapshot(&snapshot)
+		b.recordSnapshot(envelope.Type, raw)
+		return true
 	}
 	return false
 }
@@ -925,6 +1011,7 @@ func buildHandler(b *Broker, cfg *configpkg.Config) http.Handler {
 			stats := b.Stats()
 			return stats.Broadcasts, stats.Clients
 		},
+		Snapshots: b.snapshotMetrics,
 		Replay: httpapi.ReplayDumperFunc(func(ctx context.Context) (string, error) {
 			payload := map[string]any{
 				"type":         "replay_dump",

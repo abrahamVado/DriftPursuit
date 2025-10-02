@@ -11,6 +11,8 @@ import (
 	"time"
 
 	"driftpursuit/broker/internal/logging"
+	"driftpursuit/broker/internal/networking"
+	pb "driftpursuit/broker/internal/proto/pb"
 )
 
 type stubReadiness struct {
@@ -107,12 +109,15 @@ func TestReadinessHandlerUnavailable(t *testing.T) {
 
 func TestMetricsHandlerOutputsPrometheusFormat(t *testing.T) {
 	readiness := &stubReadiness{clients: 2, pending: 1, uptime: 90 * time.Second}
+	metrics := networking.NewSnapshotMetrics()
+	metrics.Observe("client-1", 256, map[pb.InterestTier]int{pb.InterestTier_INTEREST_TIER_RADAR: 3})
 	handlers := NewHandlerSet(Options{
 		Logger:    logging.NewTestLogger(),
 		Readiness: readiness,
 		Stats: func() (int, int) {
 			return 4, 2
 		},
+		Snapshots: metrics,
 	})
 
 	rr := httptest.NewRecorder()
@@ -128,6 +133,8 @@ func TestMetricsHandlerOutputsPrometheusFormat(t *testing.T) {
 		"broker_clients 2",
 		"broker_pending_clients 1",
 		"broker_uptime_seconds 90",
+		"broker_snapshot_bytes_per_client{client=\"client-1\"} 256",
+		"broker_snapshot_dropped_entities_total{tier=\"INTEREST_TIER_RADAR\"} 3",
 	} {
 		if !strings.Contains(body, substr) {
 			t.Fatalf("metrics missing %q:\n%s", substr, body)

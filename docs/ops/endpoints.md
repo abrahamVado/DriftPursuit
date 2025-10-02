@@ -29,7 +29,9 @@ indicates the process should be restarted.
 * **Method:** `GET`
 * **Purpose:** Prometheus-compatible text metrics describing broker state.
 * **Response:** `text/plain; version=0.0.4` document containing gauges for
-  uptime, connected clients, pending handshakes, and total broadcast payloads.
+  uptime, connected clients, pending handshakes, total broadcast payloads, and
+  per-client snapshot sizes. Counters report total entity drops per interest
+  tier when snapshot payloads exceed their budgets.
 * **Authentication:** Not required.
 
 Scrape this endpoint from Prometheus or curl it manually to verify live
