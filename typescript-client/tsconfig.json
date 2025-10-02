@@ -9,5 +9,5 @@
     "resolveJsonModule": false,
     "outDir": "dist"
   },
-  "include": ["src/**/*.ts"]
+  "include": ["src/**/*.ts", "../tunnelcave_sandbox_web/src/**/*.ts"]
 }
