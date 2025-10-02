@@ -1,9 +1,13 @@
 python-sim/.venv/
 python-sim/.venv/*
 python-sim/.venv
+
 tunnelcave_sandbox_web/.next/
 tunnelcave_sandbox_web/.next/*
 tunnelcave_sandbox_web/.next
+
 tunnelcave_sandbox_web/node_modules/
 tunnelcave_sandbox_web/node_modules/*
 tunnelcave_sandbox_web/node_modules
+
+node_modules/
