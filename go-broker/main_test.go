@@ -1,8 +1,8 @@
 package main
 
 import (
-        "context"
-        "crypto/rand"
+	"context"
+	"crypto/rand"
 	"crypto/rsa"
 	"crypto/tls"
 	"crypto/x509"
@@ -18,14 +18,15 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
-        "sort"
-        "strings"
-        "sync"
-        "sync/atomic"
-        "testing"
-        "time"
+	"sort"
+	"strings"
+	"sync"
+	"sync/atomic"
+	"testing"
+	"time"
 
 	configpkg "driftpursuit/broker/internal/config"
+	"driftpursuit/broker/internal/input"
 	"driftpursuit/broker/internal/logging"
 	pb "driftpursuit/broker/internal/proto/pb"
 	"github.com/gorilla/websocket"
@@ -263,8 +264,11 @@ func TestStatsHandlerReturnsJSON(t *testing.T) {
 	if err := json.Unmarshal(rr.Body.Bytes(), &resp); err != nil {
 		t.Fatalf("unmarshal response: %v", err)
 	}
-	if resp != fake.stats {
-		t.Fatalf("unexpected stats: got %+v want %+v", resp, fake.stats)
+	if resp.Broadcasts != fake.stats.Broadcasts || resp.Clients != fake.stats.Clients {
+		t.Fatalf("unexpected stats counts: got %+v want %+v", resp, fake.stats)
+	}
+	if !reflect.DeepEqual(resp.IntentDrops, fake.stats.IntentDrops) {
+		t.Fatalf("unexpected intent drops: got %+v want %+v", resp.IntentDrops, fake.stats.IntentDrops)
 	}
 	fake.mu.Lock()
 	defer fake.mu.Unlock()
@@ -954,6 +958,89 @@ func TestHandleStructuredMessageRejectsIntentRegression(t *testing.T) {
 	}
 	if got, want := stored.SequenceID, uint64(2); got != want {
 		t.Fatalf("intent sequence mutated: got %d want %d", got, want)
+	}
+}
+
+type intentClock struct {
+	mu  sync.Mutex
+	now time.Time
+}
+
+// 1.-Now returns the synthetic timestamp used to drive the gate during tests.
+func (c *intentClock) Now() time.Time {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.now
+}
+
+// 2.-Advance shifts the clock forward by the requested duration.
+func (c *intentClock) Advance(d time.Duration) {
+	c.mu.Lock()
+	c.now = c.now.Add(d)
+	c.mu.Unlock()
+}
+
+func TestHandleStructuredMessageRateLimitsIntent(t *testing.T) {
+	base := time.Unix(0, 0)
+	clock := &intentClock{now: base}
+	gate := input.NewGate(input.Config{MaxAge: 250 * time.Millisecond, MinInterval: time.Second / 60}, logging.NewTestLogger(), input.WithClock(clock))
+	broker := NewBroker(configpkg.DefaultMaxPayloadBytes, configpkg.DefaultMaxClients, time.Now(), logging.NewTestLogger(), WithIntentGate(gate))
+	client := &Client{id: "conn-rate", log: logging.NewTestLogger()}
+
+	envelope := inboundEnvelope{Type: "intent", ID: "pilot-007"}
+	raw1, err := json.Marshal(map[string]any{
+		"type":           "intent",
+		"id":             "pilot-007",
+		"schema_version": "0.1.0",
+		"sequence_id":    1,
+		"throttle":       0.5,
+		"brake":          0.1,
+		"steer":          0.0,
+		"handbrake":      false,
+		"gear":           3,
+		"boost":          false,
+	})
+	if err != nil {
+		t.Fatalf("marshal intent#1: %v", err)
+	}
+
+	if consumed := broker.handleStructuredMessage(client, envelope, raw1); !consumed {
+		t.Fatalf("first intent should be consumed")
+	}
+
+	clock.Advance(5 * time.Millisecond)
+	raw2, err := json.Marshal(map[string]any{
+		"type":           "intent",
+		"id":             "pilot-007",
+		"schema_version": "0.1.0",
+		"sequence_id":    2,
+		"throttle":       0.6,
+		"brake":          0.1,
+		"steer":          0.1,
+		"handbrake":      false,
+		"gear":           3,
+		"boost":          false,
+	})
+	if err != nil {
+		t.Fatalf("marshal intent#2: %v", err)
+	}
+
+	if consumed := broker.handleStructuredMessage(client, envelope, raw2); !consumed {
+		t.Fatalf("second intent should be consumed even when dropped")
+	}
+
+	stored := broker.intentForController("pilot-007")
+	if stored == nil {
+		t.Fatalf("intent missing after rate limit test")
+	}
+	if got, want := stored.SequenceID, uint64(1); got != want {
+		t.Fatalf("intent sequence advanced unexpectedly: got %d want %d", got, want)
+	}
+
+	stats := broker.Stats()
+	drops := stats.IntentDrops[client.id]
+	if drops.RateLimited != 1 {
+		t.Fatalf("rate limited drops = %d, want 1", drops.RateLimited)
 	}
 }
 

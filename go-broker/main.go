@@ -16,6 +16,7 @@ import (
 
 	configpkg "driftpursuit/broker/internal/config"
 	httpapi "driftpursuit/broker/internal/http"
+	"driftpursuit/broker/internal/input"
 	"driftpursuit/broker/internal/logging"
 	"driftpursuit/broker/internal/networking"
 	pb "driftpursuit/broker/internal/proto/pb"
@@ -108,6 +109,7 @@ type Broker struct {
 	intentMu       sync.RWMutex
 	intentStates   map[string]*intentPayload
 	lastIntentSeqs map[string]uint64
+	intentGate     *input.Gate
 
 	world              *state.WorldState
 	tickCounter        uint64
@@ -133,6 +135,16 @@ func WithRadarEventChannel(events chan<- *pb.RadarContact) BrokerOption {
 		}
 		b.radarEvents = events
 		b.radarProc = radar.NewProcessor(events)
+	}
+}
+
+// 1.- WithIntentGate allows tests to inject a customised intent gate.
+func WithIntentGate(gate *input.Gate) BrokerOption {
+	return func(b *Broker) {
+		if b == nil || gate == nil {
+			return
+		}
+		b.intentGate = gate
 	}
 }
 
@@ -162,6 +174,17 @@ func NewBroker(maxPayloadBytes int64, maxClients int, startedAt time.Time, logge
 		if opt != nil {
 			opt(broker)
 		}
+	}
+
+	if broker.intentGate == nil {
+		gateLogger := logger
+		if gateLogger != nil {
+			gateLogger = gateLogger.With(logging.String("component", "intent_gate"))
+		}
+		broker.intentGate = input.NewGate(input.Config{
+			MaxAge:      250 * time.Millisecond,
+			MinInterval: time.Second / 60,
+		}, gateLogger)
 	}
 
 	if broker.radarProc == nil {
@@ -194,8 +217,9 @@ func (b *Broker) vehicleState(vehicleID string) *pb.VehicleState {
 }
 
 type BrokerStats struct {
-	Broadcasts int `json:"broadcasts"`
-	Clients    int `json:"clients"`
+	Broadcasts  int                           `json:"broadcasts"`
+	Clients     int                           `json:"clients"`
+	IntentDrops map[string]input.DropCounters `json:"intent_drops,omitempty"`
 }
 
 type statsProvider interface {
@@ -217,6 +241,9 @@ func (b *Broker) deregisterClient(client *Client) {
 	}
 	if b.snapshotMetrics != nil && client != nil {
 		b.snapshotMetrics.ForgetClient(client.id)
+	}
+	if b.intentGate != nil && client != nil {
+		b.intentGate.Forget(client.id)
 	}
 }
 
@@ -384,8 +411,12 @@ func (b *Broker) publishWorldSnapshot(snapshot *pb.WorldSnapshot) {
 
 func (b *Broker) Stats() BrokerStats {
 	b.lock.RLock()
-	defer b.lock.RUnlock()
-	return b.stats
+	stats := b.stats
+	b.lock.RUnlock()
+	if b.intentGate != nil {
+		stats.IntentDrops = b.intentGate.Metrics()
+	}
+	return stats
 }
 
 func (b *Broker) snapshotClientCounts() (clients, pending int) {
@@ -896,6 +927,38 @@ func (b *Broker) handleStructuredMessage(client *Client, envelope inboundEnvelop
 				client.log.Debug("rejecting intent", logging.Error(err))
 			}
 			return true
+		}
+		//1.- Resolve the per-connection identifier so rate limiting applies to each websocket independently.
+		clientID := envelope.ID
+		if client != nil && client.id != "" {
+			clientID = client.id
+		}
+		if gate := b.intentGate; gate != nil {
+			//2.- Evaluate the freshness and sequencing guards before mutating broker state.
+			frame := input.Frame{ClientID: clientID, SequenceID: payload.SequenceID}
+			if ts := payload.SentAt(); !ts.IsZero() {
+				frame.SentAt = ts
+			}
+			decision := gate.Evaluate(frame)
+			if !decision.Accepted {
+				logger := b.log
+				if client != nil && client.log != nil {
+					logger = client.log
+				}
+				if logger != nil {
+					fields := []logging.Field{
+						logging.String("reason", decision.Reason.String()),
+						logging.Field{Key: "client_id", Value: clientID},
+						logging.Field{Key: "controller_id", Value: payload.ControllerID},
+						logging.Field{Key: "sequence_id", Value: payload.SequenceID},
+					}
+					if decision.Delay > 0 {
+						fields = append(fields, logging.Field{Key: "delay_ms", Value: decision.Delay.Milliseconds()})
+					}
+					logger.Debug("dropping intent frame", fields...)
+				}
+				return true
+			}
 		}
 		if err := b.storeIntentPayload(payload); err != nil {
 			if client != nil {
