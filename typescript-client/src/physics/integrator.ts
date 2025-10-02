@@ -1,4 +1,4 @@
-import { skiffStats } from "../gameplayConfig";
+import { VehicleStats, skiffStats } from "../gameplayConfig";
 
 export interface Vec3 {
   x: number;
@@ -46,13 +46,18 @@ export function wrapAngleDeg(angle: number): number {
 }
 
 // integrateLinear advances a position using simple Euler integration.
-export function integrateLinear(position: Vec3 | undefined, velocity: Vec3 | undefined, step: number): void {
+export function integrateLinear(
+  position: Vec3 | undefined,
+  velocity: Vec3 | undefined,
+  step: number,
+  stats: VehicleStats = skiffStats,
+): void {
   //1.- Guard against invalid inputs so callers can pass partial state objects.
   if (!position || !velocity || !(step > 0)) {
     return;
   }
-  //2.- Clamp velocity magnitude using shared Skiff stats so motion stays consistent across runtimes.
-  clampVectorMagnitude(velocity, skiffStats.maxSpeedMps);
+  //2.- Clamp velocity magnitude using shared loadout adjusted stats so runtimes stay aligned.
+  clampVectorMagnitude(velocity, stats.maxSpeedMps);
   //3.- Apply the displacement derived from velocity * dt on each axis.
   position.x += velocity.x * step;
   position.y += velocity.y * step;
@@ -60,13 +65,18 @@ export function integrateLinear(position: Vec3 | undefined, velocity: Vec3 | und
 }
 
 // integrateAngular updates Euler angles from angular velocity in degrees/s.
-export function integrateAngular(orientation: OrientationDeg | undefined, angularVelocity: Vec3 | undefined, step: number): void {
+export function integrateAngular(
+  orientation: OrientationDeg | undefined,
+  angularVelocity: Vec3 | undefined,
+  step: number,
+  stats: VehicleStats = skiffStats,
+): void {
   //1.- Skip when the vehicle lacks rotation data or the step is degenerate.
   if (!orientation || !angularVelocity || !(step > 0)) {
     return;
   }
-  //2.- Clamp the rotational rate to the shared Skiff target to avoid diverging assists.
-  clampVectorMagnitude(angularVelocity, skiffStats.maxAngularSpeedDegPerSec);
+  //2.- Clamp the rotational rate to the loadout adjusted target to avoid diverging assists.
+  clampVectorMagnitude(angularVelocity, stats.maxAngularSpeedDegPerSec);
   //3.- Add the integrated deltas and wrap to keep the values bounded.
   orientation.yawDeg = wrapAngleDeg(orientation.yawDeg + angularVelocity.y * step);
   orientation.pitchDeg = wrapAngleDeg(orientation.pitchDeg + angularVelocity.x * step);
@@ -74,14 +84,18 @@ export function integrateAngular(orientation: OrientationDeg | undefined, angula
 }
 
 // integrateVehicle mutates the provided state with both linear and angular updates.
-export function integrateVehicle(state: VehicleStateLike | undefined, step: number): void {
+export function integrateVehicle(
+  state: VehicleStateLike | undefined,
+  step: number,
+  stats: VehicleStats = skiffStats,
+): void {
   //1.- Support defensive callers by no-oping on invalid state or timestep.
   if (!state || !(step > 0)) {
     return;
   }
   //2.- Apply both translation and rotation integration in place.
-  integrateLinear(state.position, state.velocity, step);
-  integrateAngular(state.orientation, state.angularVelocity, step);
+  integrateLinear(state.position, state.velocity, step, stats);
+  integrateAngular(state.orientation, state.angularVelocity, step, stats);
 }
 
 export class GuidanceSpline {

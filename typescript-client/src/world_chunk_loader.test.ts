@@ -1,8 +1,5 @@
 import assert from "assert";
-import {
-  ArcChunkLoader,
-  ChunkTransport,
-} from "../../tunnelcave_sandbox_web/src/world/chunkLoader";
+import { ArcChunkLoader, ChunkTransport } from "./world/chunkLoader";
 
 class StubTransport implements ChunkTransport {
   public subscribed: number[] = [];

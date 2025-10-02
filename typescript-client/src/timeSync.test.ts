@@ -1,6 +1,6 @@
 import assert from "node:assert";
 import { ClockSynchronizer, TimeSyncUpdate } from "./timeSync";
-import { TimeSyncController } from "../../tunnelcave_sandbox_web/src/networking/timeSync";
+import { TimeSyncController } from "./networking/timeSync";
 
 function makeUpdate(offset: number): TimeSyncUpdate {
   return {

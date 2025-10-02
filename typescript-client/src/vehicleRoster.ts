@@ -1,4 +1,31 @@
-import { GroundVehicleConfig, groundVehiclePlaceholders, skiffStats, VehicleStats } from "./gameplayConfig";
+import {
+  GroundVehicleConfig,
+  groundVehiclePlaceholders,
+  skiffLoadouts,
+  skiffStats,
+  VehicleLoadoutConfig,
+  VehicleStats,
+  deriveStatsWithModifiers,
+} from "./gameplayConfig";
+
+export interface VehicleLoadoutSummary {
+  //1.- Stable identifier used when issuing spawn or respawn requests.
+  id: string;
+  //2.- Human readable label rendered in selection menus.
+  displayName: string;
+  //3.- Short description surfaced to help players pick a role.
+  description: string;
+  //4.- Icon path so the HUD can show a themed graphic.
+  icon: string;
+  //5.- Flag noting whether the loadout can be equipped right now.
+  selectable: boolean;
+  //6.- Weapon bundle exposed for tooltips and telemetry.
+  weapons: VehicleLoadoutConfig["weapons"];
+  //7.- Passive modifier snapshot reused by both physics and combat calculations.
+  passiveModifiers: VehicleLoadoutConfig["passiveModifiers"];
+  //8.- Derived vehicle stats after applying the passive modifiers.
+  stats: VehicleStats;
+}
 
 export interface VehicleRosterEntry {
   //1.- Provide a stable identifier consumed by UI components and telemetry.
@@ -11,6 +38,10 @@ export interface VehicleRosterEntry {
   selectable: boolean;
   //5.- Explain why an entry is disabled so tooltips and logs remain informative.
   disabledReason?: string;
+  //6.- Collection of loadout options with their derived stat blocks.
+  loadouts: readonly VehicleLoadoutSummary[];
+  //7.- Suggest a default loadout identifier for quick spawn flows.
+  defaultLoadoutId?: string;
 }
 
 function liftGroundPlaceholder(identifier: string, config: GroundVehicleConfig): VehicleRosterEntry {
@@ -21,6 +52,22 @@ function liftGroundPlaceholder(identifier: string, config: GroundVehicleConfig):
     stats: config.stats,
     selectable: config.selectable,
     disabledReason: config.selectable ? undefined : config.notes,
+    loadouts: Object.freeze([]),
+  });
+}
+
+function translateLoadout(config: VehicleLoadoutConfig): VehicleLoadoutSummary {
+  //1.- Precompute the stat block so consumers avoid recomputing on every render.
+  const stats = deriveStatsWithModifiers(skiffStats, config.passiveModifiers);
+  return Object.freeze({
+    id: config.id,
+    displayName: config.displayName,
+    description: config.description,
+    icon: config.icon,
+    selectable: config.selectable,
+    weapons: config.weapons,
+    passiveModifiers: config.passiveModifiers,
+    stats,
   });
 }
 
@@ -31,6 +78,8 @@ export const vehicleRoster: readonly VehicleRosterEntry[] = Object.freeze([
     displayName: "Skiff",
     stats: skiffStats,
     selectable: true,
+    loadouts: Object.freeze(skiffLoadouts.map((entry) => translateLoadout(entry))),
+    defaultLoadoutId: skiffLoadouts.find((entry) => entry.selectable)?.id,
   }),
   ...Object.entries(groundVehiclePlaceholders).map(([identifier, config]) =>
     liftGroundPlaceholder(identifier, config),

@@ -62,7 +62,7 @@ func TestIntegrateVehicleClampsToSkiffStats(t *testing.T) {
 		},
 	}
 	//2.- Integrate a one second step to exercise the clamp logic.
-	IntegrateVehicle(state, 1)
+	IntegrateVehicleWithStats(state, stats, 1)
 	velocity := state.GetVelocity()
 	if velocity == nil {
 		t.Fatalf("expected velocity to remain populated")
@@ -89,5 +89,27 @@ func TestIntegrateVehicleClampsToSkiffStats(t *testing.T) {
 	angularSpeed := math.Sqrt(angular.X*angular.X + angular.Y*angular.Y + angular.Z*angular.Z)
 	if math.Abs(angularSpeed-stats.MaxAngularSpeedDegPerSec) > 1e-6 {
 		t.Fatalf("angular clamp mismatch: got %.6f want %.6f", angularSpeed, stats.MaxAngularSpeedDegPerSec)
+	}
+}
+
+func TestIntegrateVehicleHonoursCustomLoadoutStats(t *testing.T) {
+	//1.- Craft a loadout with modified speed and agility multipliers.
+	base := gameplay.SkiffStats()
+	tuned := gameplay.DeriveStatsWithModifiers(base, gameplay.PassiveModifiers{SpeedMultiplier: 1.2, AgilityMultiplier: 0.5, DamageMultiplier: 1, BoostCooldownScale: 1})
+	state := &pb.VehicleState{
+		Position:        &pb.Vector3{},
+		Velocity:        &pb.Vector3{X: tuned.MaxSpeedMps * 5},
+		Orientation:     &pb.Orientation{},
+		AngularVelocity: &pb.Vector3{X: tuned.MaxAngularSpeedDegPerSec * 3},
+	}
+	//2.- Integrate a unit step with the derived stats to exercise the clamping behaviour.
+	IntegrateVehicleWithStats(state, tuned, 1)
+	speed := math.Sqrt(state.Velocity.X*state.Velocity.X + state.Velocity.Y*state.Velocity.Y + state.Velocity.Z*state.Velocity.Z)
+	if math.Abs(speed-tuned.MaxSpeedMps) > 1e-6 {
+		t.Fatalf("expected custom speed clamp %.2f got %.2f", tuned.MaxSpeedMps, speed)
+	}
+	angular := math.Sqrt(state.AngularVelocity.X*state.AngularVelocity.X + state.AngularVelocity.Y*state.AngularVelocity.Y + state.AngularVelocity.Z*state.AngularVelocity.Z)
+	if math.Abs(angular-tuned.MaxAngularSpeedDegPerSec) > 1e-6 {
+		t.Fatalf("expected custom angular clamp %.2f got %.2f", tuned.MaxAngularSpeedDegPerSec, angular)
 	}
 }

@@ -6,6 +6,7 @@ import (
 	pb "driftpursuit/broker/internal/proto/pb"
 	"google.golang.org/protobuf/proto"
 
+	"driftpursuit/broker/internal/gameplay"
 	"driftpursuit/broker/internal/physics"
 )
 
@@ -22,14 +23,16 @@ type VehicleStore struct {
 	dirty    map[string]struct{}
 	removed  map[string]struct{}
 	guidance *physics.GuidanceSpline
+	loadouts map[string]string
 }
 
 // NewVehicleStore constructs a thread-safe vehicle state container.
 func NewVehicleStore() *VehicleStore {
 	return &VehicleStore{
-		states:  make(map[string]*pb.VehicleState),
-		dirty:   make(map[string]struct{}),
-		removed: make(map[string]struct{}),
+		states:   make(map[string]*pb.VehicleState),
+		dirty:    make(map[string]struct{}),
+		removed:  make(map[string]struct{}),
+		loadouts: make(map[string]string),
 	}
 }
 
@@ -61,6 +64,12 @@ func (s *VehicleStore) Upsert(state *pb.VehicleState) {
 	s.states[clone.VehicleId] = clone
 	delete(s.removed, clone.VehicleId)
 	s.dirty[clone.VehicleId] = struct{}{}
+	if _, ok := s.loadouts[clone.VehicleId]; !ok {
+		//1.- Default new vehicles to the first selectable Skiff loadout until the client specifies otherwise.
+		if defaultID := gameplay.DefaultSkiffLoadoutID(); defaultID != "" {
+			s.loadouts[clone.VehicleId] = defaultID
+		}
+	}
 	s.mu.Unlock()
 }
 
@@ -75,7 +84,34 @@ func (s *VehicleStore) Remove(vehicleID string) {
 	delete(s.states, vehicleID)
 	delete(s.dirty, vehicleID)
 	s.removed[vehicleID] = struct{}{}
+	delete(s.loadouts, vehicleID)
 	s.mu.Unlock()
+}
+
+// AssignLoadout associates a loadout identifier with the stored vehicle state.
+func (s *VehicleStore) AssignLoadout(vehicleID, loadoutID string) {
+	if s == nil || vehicleID == "" {
+		return
+	}
+	s.mu.Lock()
+	//1.- Persist the requested loadout so physics and combat systems can honour it.
+	if loadoutID == "" {
+		delete(s.loadouts, vehicleID)
+	} else {
+		s.loadouts[vehicleID] = loadoutID
+	}
+	s.mu.Unlock()
+}
+
+// LoadoutFor returns the configured loadout identifier for the vehicle when available.
+func (s *VehicleStore) LoadoutFor(vehicleID string) string {
+	if s == nil || vehicleID == "" {
+		return ""
+	}
+	s.mu.RLock()
+	id := s.loadouts[vehicleID]
+	s.mu.RUnlock()
+	return id
 }
 
 // Get returns a defensive clone of the stored vehicle state if present.
@@ -112,7 +148,9 @@ func (s *VehicleStore) Advance(stepSeconds float64) {
 		if vehicle == nil {
 			continue
 		}
-		physics.IntegrateVehicle(vehicle, stepSeconds)
+		loadoutID := s.loadouts[id]
+		stats := gameplay.LoadoutStats(loadoutID)
+		physics.IntegrateVehicleWithStats(vehicle, stats, stepSeconds)
 		if vehicle.FlightAssistEnabled {
 			physics.AlignToGuidance(vehicle, s.guidance)
 		}
