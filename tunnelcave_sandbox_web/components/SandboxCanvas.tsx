@@ -6,12 +6,15 @@ import * as THREE from "three";
 import { defaultParams } from "../lib/config";
 import { createSimulation, updateSimulation, type SimulationParams } from "../lib/world";
 import type { SimulationState } from "../lib/world";
+import type { Vec3 } from "../lib/vector";
 import type { ChunkData } from "../lib/terrain";
 import { ControlsOverlay } from "./ControlsOverlay";
 
 interface InputState {
   throttle: number;
   roll: number;
+  pitch: number;
+  yaw: number;
   boost: boolean;
   resetRoll: boolean;
 }
@@ -280,7 +283,7 @@ export function SandboxCanvas() {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const simRef = useRef<SimulationState | null>(null);
   const rafRef = useRef<number>();
-  const inputRef = useRef<InputState>({ throttle: 0, roll: 0, boost: false, resetRoll: false });
+  const inputRef = useRef<InputState>({ throttle: 0, roll: 0, pitch: 0, yaw: 0, boost: false, resetRoll: false });
   const [speed, setSpeed] = useState(0);
   const [targetSpeed, setTargetSpeed] = useState(0);
 
@@ -660,10 +663,17 @@ export function SandboxCanvas() {
     // ---- Input (add fire key 'M') ----
     const keyDown = (event: KeyboardEvent) => {
       if (event.repeat) return;
+      if (event.code.startsWith("Arrow")) {
+        event.preventDefault();
+      }
       if (event.code === "KeyW") inputRef.current.throttle = 1;
       if (event.code === "KeyS") inputRef.current.throttle = -1;
       if (event.code === "KeyA") inputRef.current.roll = -1;
       if (event.code === "KeyD") inputRef.current.roll = 1;
+      if (event.code === "ArrowUp") inputRef.current.pitch = 1;
+      if (event.code === "ArrowDown") inputRef.current.pitch = -1;
+      if (event.code === "ArrowLeft") inputRef.current.yaw = -1;
+      if (event.code === "ArrowRight") inputRef.current.yaw = 1;
       if (event.code === "ShiftLeft" || event.code === "ShiftRight") inputRef.current.boost = true;
       if (event.code === "Space") inputRef.current.resetRoll = true;
 
@@ -696,7 +706,11 @@ export function SandboxCanvas() {
       if (event.code === "KeyW" && inputRef.current.throttle > 0) inputRef.current.throttle = 0;
       if (event.code === "KeyS" && inputRef.current.throttle < 0) inputRef.current.throttle = 0;
       if (event.code === "KeyA" && inputRef.current.roll < 0) inputRef.current.roll = 0;
-      if (event.code === "KeyD") inputRef.current.roll = Math.max(0, inputRef.current.roll - 0);
+      if (event.code === "KeyD" && inputRef.current.roll > 0) inputRef.current.roll = 0;
+      if (event.code === "ArrowUp" && inputRef.current.pitch > 0) inputRef.current.pitch = 0;
+      if (event.code === "ArrowDown" && inputRef.current.pitch < 0) inputRef.current.pitch = 0;
+      if (event.code === "ArrowLeft" && inputRef.current.yaw < 0) inputRef.current.yaw = 0;
+      if (event.code === "ArrowRight" && inputRef.current.yaw > 0) inputRef.current.yaw = 0;
       if (event.code === "ShiftLeft" || event.code === "ShiftRight") inputRef.current.boost = false;
 
       // In keyUp:
@@ -729,13 +743,37 @@ export function SandboxCanvas() {
       updateSimulation(
         simRef.current,
         params,
-        { throttleDelta: inputRef.current.throttle, rollDelta: inputRef.current.roll },
+        {
+          throttleDelta: inputRef.current.throttle,
+          rollDelta: inputRef.current.roll,
+          pitchDelta: inputRef.current.pitch,
+          yawDelta: inputRef.current.yaw,
+        },
         dt
       );
 
       if (inputRef.current.resetRoll) {
-        simRef.current.craft.roll = 0;
-        simRef.current.craft.rollRate = 0;
+        const { craft, band } = simRef.current;
+        const closest = band.closestS?.(craft.position);
+        const sampleFn = band.sample;
+        if (closest !== undefined && sampleFn) {
+          const sample = sampleFn(closest);
+          const tangent = sample.tangent;
+          const right = sample.right;
+          const up = sample.up;
+          craft.forward = [tangent[0], tangent[1], tangent[2]] as Vec3;
+          craft.right = [right[0], right[1], right[2]] as Vec3;
+          craft.up = [up[0], up[1], up[2]] as Vec3;
+          const speedMag = Math.hypot(craft.velocity[0], craft.velocity[1], craft.velocity[2]);
+          craft.velocity = [
+            tangent[0] * speedMag,
+            tangent[1] * speedMag,
+            tangent[2] * speedMag,
+          ] as Vec3;
+          craft.speed = speedMag;
+        }
+        craft.angularVelocity = [0, 0, 0] as Vec3;
+        craft.crashed = false;
         inputRef.current.resetRoll = false;
       }
 
