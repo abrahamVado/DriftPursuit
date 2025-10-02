@@ -5,6 +5,9 @@ import (
 	"errors"
 	"fmt"
 	"time"
+
+	"driftpursuit/broker/internal/input"
+	"driftpursuit/broker/internal/logging"
 )
 
 var (
@@ -103,4 +106,76 @@ func (b *Broker) intentForController(controllerID string) *intentPayload {
 	}
 	clone := *payload
 	return &clone
+}
+
+// processIntent enforces gating, validation, and persistence for incoming intents.
+func (b *Broker) processIntent(clientID string, payload *intentPayload, logger *logging.Logger) (bool, error) {
+	if b == nil {
+		return false, errors.New("broker is nil")
+	}
+	if payload == nil {
+		return false, errors.New("intent payload is nil")
+	}
+
+	controls := input.Controls{Throttle: payload.Throttle, Brake: payload.Brake, Steer: payload.Steer, Gear: payload.Gear}
+
+	if validator := b.intentValidator; validator != nil {
+		//1.- Apply range, delta, and cooldown checks before mutating broker state.
+		decision := validator.Validate(clientID, payload.ControllerID, controls)
+		if !decision.Accepted {
+			if logger != nil {
+				fields := []logging.Field{
+					logging.String("reason", string(decision.Reason)),
+					logging.Field{Key: "client_id", Value: clientID},
+					logging.Field{Key: "controller_id", Value: payload.ControllerID},
+				}
+				if decision.Cooldown > 0 {
+					fields = append(fields, logging.Field{Key: "cooldown_ms", Value: decision.Cooldown.Milliseconds()})
+				}
+				if decision.Warn {
+					logger.Warn("intent validation warning", fields...)
+				} else {
+					logger.Debug("dropping intent due to validation", fields...)
+				}
+			}
+			return decision.Disconnect, fmt.Errorf("intent validation rejected: %s", decision.Reason)
+		}
+	}
+
+	if gate := b.intentGate; gate != nil {
+		//2.- Evaluate sequencing and freshness guards before storing the frame.
+		frame := input.Frame{ClientID: clientID, SequenceID: payload.SequenceID}
+		if ts := payload.SentAt(); !ts.IsZero() {
+			frame.SentAt = ts
+		}
+		decision := gate.Evaluate(frame)
+		if !decision.Accepted {
+			if logger != nil {
+				fields := []logging.Field{
+					logging.String("reason", decision.Reason.String()),
+					logging.Field{Key: "client_id", Value: clientID},
+					logging.Field{Key: "controller_id", Value: payload.ControllerID},
+					logging.Field{Key: "sequence_id", Value: payload.SequenceID},
+				}
+				if decision.Delay > 0 {
+					fields = append(fields, logging.Field{Key: "delay_ms", Value: decision.Delay.Milliseconds()})
+				}
+				logger.Debug("dropping intent frame", fields...)
+			}
+			return false, fmt.Errorf("intent gate rejected: %s", decision.Reason)
+		}
+	}
+
+	if err := b.storeIntentPayload(payload); err != nil {
+		if logger != nil {
+			logger.Debug("dropping intent", logging.Error(err))
+		}
+		return false, err
+	}
+
+	if validator := b.intentValidator; validator != nil {
+		//3.- Persist accepted controls to drive delta-based validation.
+		validator.Commit(clientID, payload.ControllerID, controls)
+	}
+	return false, nil
 }
