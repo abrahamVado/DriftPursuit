@@ -7,7 +7,7 @@ import SimulationControlPanel from './SimulationControlPanel'
 import {
   CONTROL_PANEL_EVENT,
   type ControlPanelIntentDetail,
-} from '../../../typescript-client/src/world/vehicleSceneManager'
+} from '../../../typescript-client/src/world/controlPanelEvents'
 
 const originalFetch = global.fetch
 
@@ -63,6 +63,7 @@ describe('SimulationControlPanel', () => {
     const statusText = status?.textContent ?? ''
     const errorText = error?.textContent ?? ''
     expect(statusText).toContain('offline')
+    expect(errorText).toContain('SIM_BRIDGE_URL')
     expect(errorText).toContain('NEXT_PUBLIC_SIM_BRIDGE_URL')
     expect(errorText).toContain('http://localhost:8000')
   })
@@ -78,6 +79,95 @@ describe('SimulationControlPanel', () => {
     const status = container.querySelector('[data-testid="bridge-status"]')
     expect(status?.textContent ?? '').toContain('Simulation bridge online')
     expect(fetchMock).toHaveBeenCalledWith('http://localhost:8080/handshake', expect.any(Object))
+  })
+
+  it('logs the upstream bridge URL after a successful handshake', async () => {
+    const handshake = { message: 'Simulation bridge online', bridgeUrl: 'http://localhost:8000' }
+    const fetchMock = vi.fn().mockResolvedValueOnce({ ok: true, json: async () => handshake })
+    global.fetch = fetchMock as unknown as typeof global.fetch
+    const consoleSpy = vi.spyOn(console, 'info').mockImplementation(() => {})
+    process.env.NEXT_PUBLIC_SIM_BRIDGE_URL = 'http://localhost:8000'
+
+    try {
+      await renderPanel(<SimulationControlPanel />)
+      await flushMicrotasks()
+
+      expect(consoleSpy).toHaveBeenNthCalledWith(
+        1,
+        '[SimulationControlPanel] Attempting simulation bridge handshake via %s',
+        'http://localhost:8000',
+      )
+      expect(consoleSpy).toHaveBeenNthCalledWith(
+        2,
+        '[SimulationControlPanel] Simulation bridge handshake succeeded via %s',
+        'http://localhost:8000',
+      )
+    } finally {
+      //1.- Always restore the console spy to avoid leaking mocks between tests.
+      consoleSpy.mockRestore()
+    }
+  })
+
+  it('logs handshake failures with the attempted bridge URL', async () => {
+    process.env.NEXT_PUBLIC_SIM_BRIDGE_URL = 'http://localhost:8000'
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce({
+        ok: false,
+        status: 502,
+        json: async () => ({ message: 'Failed to reach simulation bridge.' }),
+      })
+    global.fetch = fetchMock as unknown as typeof global.fetch
+    const infoSpy = vi.spyOn(console, 'info').mockImplementation(() => {})
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+
+    try {
+      await renderPanel(<SimulationControlPanel />)
+      await flushMicrotasks()
+
+      expect(infoSpy).toHaveBeenCalledWith(
+        '[SimulationControlPanel] Attempting simulation bridge handshake via %s',
+        'http://localhost:8000',
+      )
+      expect(warnSpy).toHaveBeenCalledWith(
+        '[SimulationControlPanel] Simulation bridge handshake failed via %s: %s',
+        'http://localhost:8000',
+        'Failed to reach simulation bridge.',
+      )
+    } finally {
+      infoSpy.mockRestore()
+      warnSpy.mockRestore()
+    }
+  })
+
+  it('surfaces detailed handshake errors from the API proxy', async () => {
+    process.env.NEXT_PUBLIC_SIM_BRIDGE_URL = 'http://localhost:8000'
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce({
+        ok: false,
+        status: 503,
+        json: async () => ({ message: 'Simulation bridge URL not configured.' }),
+      })
+    global.fetch = fetchMock as unknown as typeof global.fetch
+
+    await renderPanel(<SimulationControlPanel />)
+    await flushMicrotasks()
+
+    const error = container.querySelector('[data-testid="bridge-error"]')
+    expect(error?.textContent ?? '').toContain('Simulation bridge URL not configured.')
+  })
+
+  it('routes handshake requests through the API proxy when only the environment variable is set', async () => {
+    process.env.NEXT_PUBLIC_SIM_BRIDGE_URL = 'http://localhost:8000'
+    const handshake = { message: 'Simulation bridge online' }
+    const fetchMock = vi.fn().mockResolvedValueOnce({ ok: true, json: async () => handshake })
+    global.fetch = fetchMock as unknown as typeof global.fetch
+
+    await renderPanel(<SimulationControlPanel />)
+    await flushMicrotasks()
+
+    expect(fetchMock).toHaveBeenCalledWith('/api/sim-bridge/handshake', expect.objectContaining({ cache: 'no-store' }))
   })
 
   it('sends commands to the bridge', async () => {
@@ -105,6 +195,32 @@ describe('SimulationControlPanel', () => {
       headers: { 'Content-Type': 'application/json' },
       body: expect.stringContaining('throttle'),
     })
+  })
+
+  it('displays detailed command errors from the API proxy', async () => {
+    process.env.NEXT_PUBLIC_SIM_BRIDGE_URL = 'http://localhost:8000'
+    const handshake = { message: 'Simulation bridge online' }
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce({ ok: true, json: async () => handshake })
+      .mockResolvedValueOnce({
+        ok: false,
+        status: 502,
+        json: async () => ({ message: 'Failed to forward command to simulation bridge.' }),
+      })
+    global.fetch = fetchMock as unknown as typeof global.fetch
+
+    await renderPanel(<SimulationControlPanel />)
+    await flushMicrotasks()
+
+    const throttleButton = container.querySelector('button') as HTMLButtonElement
+    await act(async () => {
+      throttleButton.click()
+    })
+    await flushMicrotasks()
+
+    const error = container.querySelector('[data-testid="bridge-error"]')
+    expect(error?.textContent ?? '').toContain('Failed to forward command to simulation bridge.')
   })
 
   it('emits control intents when buttons are pressed', async () => {

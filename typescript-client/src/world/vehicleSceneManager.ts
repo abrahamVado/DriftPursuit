@@ -11,18 +11,12 @@ import {
   Vector3,
 } from "three";
 import { VehicleGeometryFactory, type VehicleGeometryResult } from "./procedural/vehicleFactory";
-
-export const CONTROL_PANEL_EVENT = "simulation-control-intent";
-
-export type ControlPanelIntent = "throttle" | "brake" | "steer";
-
-export interface ControlPanelIntentDetail {
-  control: ControlPanelIntent;
-  value: number;
-  issuedAtMs?: number;
-}
-
-export type ControlPanelEvent = CustomEvent<ControlPanelIntentDetail>;
+import {
+  CONTROL_PANEL_EVENT,
+  type ControlPanelEvent,
+  type ControlPanelIntent,
+  type ControlPanelIntentDetail,
+} from "./controlPanelEvents";
 
 export interface VehicleStateSource extends EventTarget {
   getEntityState(entityId: string, nowMs?: number): InterpolatedState | undefined;

@@ -12,8 +12,11 @@ export default defineConfig({
     //1.- Target the networking mocks, procedural geometry, and UI interaction suites together with the remaining client tests.
     include: [
       'app/**/*.test.ts',
+      'app/**/*.test.tsx',
       'src/**/*.test.ts',
+      'src/**/*.test.tsx',
       'test/**/*.test.ts',
+      'test/**/*.test.tsx',
     ],
     environment: 'jsdom',
     globals: true,
