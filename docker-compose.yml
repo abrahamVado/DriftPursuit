@@ -22,6 +22,10 @@ services:
     environment:
       BROKER_WS_URL: ws://broker:43127/ws
       TRACE_HEADER: X-Trace-ID
+      WEB_BRIDGE_HOST: 0.0.0.0
+      WEB_BRIDGE_PORT: 8000
+    ports:
+      - "8000:8000"
     networks:
       - battleground
 
