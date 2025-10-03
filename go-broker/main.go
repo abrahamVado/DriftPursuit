@@ -17,6 +17,7 @@ import (
 
 	"driftpursuit/broker/internal/bots"
 	configpkg "driftpursuit/broker/internal/config"
+	"driftpursuit/broker/internal/events"
 	grpcstream "driftpursuit/broker/internal/grpc"
 	httpapi "driftpursuit/broker/internal/http"
 	"driftpursuit/broker/internal/input"
@@ -48,6 +49,11 @@ const (
 
 const replayFrameRateHz = 5
 
+const (
+	hudSubscriberPrefix = "hud-scoreboard"
+	hudEventBuffer      = 64
+)
+
 var pingInterval = configpkg.DefaultPingInterval
 var timeSyncInterval = time.Second
 
@@ -59,10 +65,11 @@ var localHosts = map[string]struct{}{
 }
 
 type Client struct {
-	conn *websocket.Conn
-	send chan []byte
-	id   string
-	log  *logging.Logger
+	conn     *websocket.Conn
+	send     chan []byte
+	id       string
+	log      *logging.Logger
+	eventSub *events.Subscription
 }
 
 type vehicleDiffEnvelope struct {
@@ -143,6 +150,9 @@ type Broker struct {
 	nextDiffID      uint64
 
 	tickMonitor *simulation.TickMonitor
+
+	eventStream  *events.Stream
+	eventEncoder protojson.MarshalOptions
 }
 
 var errRecoveryInProgress = errors.New("state recovery in progress")
@@ -281,6 +291,8 @@ func NewBroker(maxPayloadBytes int64, maxClients int, startedAt time.Time, logge
 		diffSubscribers:     make(map[uint64]chan grpcstream.DiffEvent),
 		replayFrameInterval: time.Second / replayFrameRateHz,
 		tickMonitor:         simulation.NewTickMonitor(),
+		eventStream:         events.NewStream(events.Config{}),
+		eventEncoder:        protojson.MarshalOptions{EmitUnpopulated: true, UseEnumNumbers: true},
 	}
 	for _, opt := range opts {
 		if opt != nil {
@@ -389,6 +401,10 @@ func (b *Broker) deregisterClient(client *Client) {
 		}
 	}
 	b.lock.Unlock()
+	if client != nil && client.eventSub != nil {
+		client.eventSub.Close()
+		client.eventSub = nil
+	}
 	if b.botController != nil {
 		//1.- Reflect the disconnection in the bot population controller.
 		if err := b.botController.HumanDisconnected(context.Background()); err != nil && b.log != nil {
@@ -857,9 +873,12 @@ func (b *Broker) serveWS(w http.ResponseWriter, r *http.Request) {
 		go b.replaySnapshots(client, snapshots)
 	}
 
+	hudCancel := b.startHudEventStream(context.Background(), client)
+
 	// reader
 	go func() {
 		defer func() {
+			hudCancel()
 			b.deregisterClient(client)
 			_ = client.conn.Close()
 		}()
@@ -915,6 +934,7 @@ func (b *Broker) serveWS(w http.ResponseWriter, r *http.Request) {
 		pingTicker := time.NewTicker(pingInterval)
 		syncTicker := time.NewTicker(timeSyncInterval)
 		defer func() {
+			hudCancel()
 			pingTicker.Stop()
 			syncTicker.Stop()
 			_ = client.conn.Close()
@@ -1092,6 +1112,9 @@ func (b *Broker) publishWorldDiff(tick uint64, diff state.TickDiff) {
 	if len(diff.Events.Events) > 0 {
 		envelope.Events = diff.Events.Events
 		b.recordReplayEvents(tick, diff.Events.Events)
+		for _, event := range diff.Events.Events {
+			b.publishScoreEvent(event)
+		}
 	}
 
 	data, err := json.Marshal(envelope)
@@ -1120,6 +1143,105 @@ func (b *Broker) publishWorldDiff(tick uint64, diff state.TickDiff) {
 		}
 		b.diffMu.RUnlock()
 	}
+}
+
+func (b *Broker) publishScoreEvent(event *pb.GameEvent) {
+	if b == nil || b.eventStream == nil || event == nil {
+		return
+	}
+	if event.GetType() != pb.EventType_EVENT_TYPE_SCORE_UPDATE {
+		return
+	}
+	if _, err := b.eventStream.PublishLifecycle(event); err != nil {
+		if b.log != nil {
+			b.log.Debug("hud event publish failed", logging.Error(err))
+		}
+	}
+}
+
+func (b *Broker) startHudEventStream(ctx context.Context, client *Client) context.CancelFunc {
+	if b == nil || b.eventStream == nil || client == nil {
+		return func() {}
+	}
+	subscriberID := fmt.Sprintf("%s:%s", hudSubscriberPrefix, client.id)
+	sub, err := b.eventStream.Subscribe(ctx, subscriberID, hudEventBuffer)
+	if err != nil {
+		if client.log != nil {
+			client.log.Debug("hud event subscribe failed", logging.Error(err))
+		} else if b.log != nil {
+			b.log.Debug("hud event subscribe failed", logging.Error(err))
+		}
+		return func() {}
+	}
+	client.eventSub = sub
+	streamCtx, cancel := context.WithCancel(ctx)
+	go b.forwardHudEvents(streamCtx, client, sub)
+	return cancel
+}
+
+func (b *Broker) forwardHudEvents(ctx context.Context, client *Client, sub *events.Subscription) {
+	if b == nil || client == nil || sub == nil {
+		return
+	}
+	defer func() {
+		sub.Close()
+		if client.eventSub == sub {
+			client.eventSub = nil
+		}
+	}()
+	eventsCh := sub.Events()
+	subscriber := sub.ID()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case envelope, ok := <-eventsCh:
+			if !ok {
+				return
+			}
+			payload, ok := b.marshalHudEvent(subscriber, envelope)
+			if !ok {
+				continue
+			}
+			if !b.enqueueSnapshot(client, payload) {
+				return
+			}
+		}
+	}
+}
+
+func (b *Broker) marshalHudEvent(subscriber string, envelope *events.Envelope) ([]byte, bool) {
+	if b == nil || envelope == nil {
+		return nil, false
+	}
+	if envelope.Kind != events.KindLifecycle {
+		return nil, false
+	}
+	if envelope.Game == nil || envelope.Game.GetType() != pb.EventType_EVENT_TYPE_SCORE_UPDATE {
+		return nil, false
+	}
+	data, err := b.eventEncoder.Marshal(envelope.Game)
+	if err != nil {
+		if b.log != nil {
+			b.log.Debug("marshal hud event failed", logging.Error(err))
+		}
+		return nil, false
+	}
+	message := map[string]any{
+		"type":       "event_stream",
+		"subscriber": subscriber,
+		"sequence":   envelope.Sequence,
+		"kind":       string(envelope.Kind),
+		"payload":    json.RawMessage(data),
+	}
+	encoded, err := json.Marshal(message)
+	if err != nil {
+		if b.log != nil {
+			b.log.Debug("encode hud event failed", logging.Error(err))
+		}
+		return nil, false
+	}
+	return encoded, true
 }
 
 // DumpReplay persists the buffered replay frames and returns the artefact path.
@@ -1289,6 +1411,32 @@ func (b *Broker) handleStructuredMessage(client *Client, envelope inboundEnvelop
 	unmarshal := protojson.UnmarshalOptions{DiscardUnknown: true}
 
 	switch envelope.Type {
+	case "event_ack":
+		var ack struct {
+			Subscriber string `json:"subscriber"`
+			Sequence   uint64 `json:"sequence"`
+		}
+		if err := json.Unmarshal(raw, &ack); err != nil {
+			if client != nil && client.log != nil {
+				client.log.Debug("invalid event_ack payload", logging.Error(err))
+			}
+			return true
+		}
+		if client != nil && client.eventSub != nil {
+			expected := client.eventSub.ID()
+			if ack.Subscriber != "" && ack.Subscriber != expected {
+				return true
+			}
+			if ack.Sequence == 0 {
+				return true
+			}
+			if err := client.eventSub.Ack(ack.Sequence); err != nil {
+				if client.log != nil {
+					client.log.Debug("hud event ack failed", logging.Error(err))
+				}
+			}
+		}
+		return true
 	case "observer_state":
 		var state pb.ObserverState
 		if err := unmarshal.Unmarshal(raw, &state); err != nil {

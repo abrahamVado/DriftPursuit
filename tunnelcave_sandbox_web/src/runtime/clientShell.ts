@@ -1,11 +1,26 @@
 import { HudController } from "../hud/controller"
+import type { EventStreamClient } from "../../../typescript-client/src/eventStream"
 import type { ConnectionStatus } from "../networking/WebSocketClient"
+
+export interface HudSession {
+  //1.- Connected world session exposing telemetry getters for HUD metrics.
+  client: EventTarget & {
+    getConnectionStatus(): ConnectionStatus
+    getPlaybackBufferMs(): number
+  }
+  //2.- Optional scoreboard event stream wired when the broker advertises support.
+  eventStream?: EventStreamClient
+  //3.- Disposal hook allowing the shell to release networking resources during teardown.
+  dispose?: () => void
+}
 
 export interface ClientShellOptions {
   //1.- Optional override used by tests to inject a custom document implementation.
   document?: Document
   //2.- Broker endpoint enables future networking setup without hardcoding environment globals.
   brokerUrl?: string
+  //3.- Asynchronous world session factory invoked once DOM anchors are ready.
+  createWorldSession?: () => Promise<HudSession>
 }
 
 class PassiveHudClient extends EventTarget {
@@ -39,30 +54,76 @@ class RendererController {
 
 interface ClientShellHandles {
   renderer: RendererController
-  hud: HudController
+  hud: HudController | null
   canvasRoot: HTMLElement
   hudRoot: HTMLElement
+  sessionDispose?: () => void
 }
 
 let handles: ClientShellHandles | null = null
 let pendingReadyListener: ((event: Event) => void) | null = null
 let lastDocument: Document | null = null
 
-function instantiateControllers(doc: Document, options: ClientShellOptions): boolean {
+async function instantiateControllers(doc: Document, options: ClientShellOptions): Promise<boolean> {
   //1.- Discover the canvas and HUD anchors while tolerating missing markup for graceful degradation.
   const canvasRoot = doc.querySelector<HTMLElement>("#canvas-root")
   const hudRoot = doc.querySelector<HTMLElement>("#hud-root")
   if (!canvasRoot || !hudRoot) {
     return false
   }
-  //2.- Stand up the renderer and HUD controllers so the gameplay shell can render telemetry.
+  //2.- Instantiate the renderer immediately so the canvas exists before the session resolves.
   const renderer = new RendererController(canvasRoot)
-  const hud = new HudController({ root: hudRoot, client: new PassiveHudClient() })
-  if (options.brokerUrl) {
-    //3.- Surface the configured broker URL for debugging overlays via a data attribute.
-    hudRoot.dataset.brokerUrl = options.brokerUrl
+  const context: ClientShellHandles = { renderer, hud: null, canvasRoot, hudRoot }
+  handles = context
+  hudRoot.dataset.brokerUrl = options.brokerUrl ?? ""
+
+  const attachHud = (session: HudSession): boolean => {
+    if (handles !== context) {
+      session.dispose?.()
+      return false
+    }
+    context.hud = new HudController({
+      root: hudRoot,
+      client: session.client,
+      eventStream: session.eventStream,
+    })
+    context.sessionDispose = session.dispose
+    return true
   }
-  handles = { renderer, hud, canvasRoot, hudRoot }
+
+  const handleFailure = () => {
+    //3.- Ensure partial mounts release resources when the session never materialises.
+    context.sessionDispose?.()
+    renderer.dispose()
+    hudRoot.dataset.brokerUrl = ""
+    if (handles === context) {
+      handles = null
+    }
+  }
+
+  if (options.createWorldSession) {
+    try {
+      const session = await options.createWorldSession()
+      if (!attachHud(session)) {
+        handleFailure()
+        return false
+      }
+      return true
+    } catch (error) {
+      //4.- Fall back to a passive HUD so the overlay remains interactive without telemetry.
+      console.error("failed to initialise world session", error)
+      if (!attachHud({ client: new PassiveHudClient() })) {
+        handleFailure()
+        return false
+      }
+      return true
+    }
+  }
+
+  if (!attachHud({ client: new PassiveHudClient() })) {
+    handleFailure()
+    return false
+  }
   return true
 }
 
@@ -79,15 +140,25 @@ export async function mountClientShell(options: ClientShellOptions = {}): Promis
   if (doc.readyState === "loading") {
     //2.- Defer mounting until DOMContentLoaded guarantees anchors are present in the document.
     return new Promise((resolve) => {
-      pendingReadyListener = () => {
+      pendingReadyListener = async () => {
         pendingReadyListener = null
-        resolve(mountNow())
+        try {
+          resolve(await mountNow())
+        } catch (error) {
+          console.error("failed to mount client shell", error)
+          resolve(false)
+        }
       }
       doc.addEventListener("DOMContentLoaded", pendingReadyListener)
     })
   }
   //3.- Proceed immediately when the DOM is already parsed by the time the caller initialises the shell.
-  return mountNow()
+  try {
+    return await mountNow()
+  } catch (error) {
+    console.error("failed to mount client shell", error)
+    return false
+  }
 }
 
 export function unmountClientShell(): void {
@@ -101,7 +172,8 @@ export function unmountClientShell(): void {
     return
   }
   //2.- Dispose controllers so they can release DOM references and timers during teardown.
-  handles.hud.dispose()
+  handles.sessionDispose?.()
+  handles.hud?.dispose()
   handles.renderer.dispose()
   handles.hudRoot.dataset.brokerUrl = ""
   handles = null

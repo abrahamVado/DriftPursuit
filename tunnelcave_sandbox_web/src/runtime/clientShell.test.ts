@@ -39,18 +39,34 @@ describe('clientShell', () => {
     ].join('')
     Object.defineProperty(document, 'readyState', { configurable: true, value: 'loading' })
     const module = await import('./clientShell')
-    const mountPromise = module.mountClientShell({ brokerUrl: 'ws://localhost:43127/ws' })
+    const dispose = vi.fn()
+    const sessionClient = new (class extends EventTarget {
+      getConnectionStatus() {
+        return 'connected' as const
+      }
+      getPlaybackBufferMs() {
+        return 0
+      }
+    })()
+    const createWorldSession = vi.fn(async () => ({ client: sessionClient, dispose }))
+    const mountPromise = module.mountClientShell({
+      brokerUrl: 'ws://localhost:43127/ws',
+      createWorldSession,
+    })
     document.dispatchEvent(new Event('DOMContentLoaded'))
     const mounted = await mountPromise
     expect(mounted).toBe(true)
     expect(module.isClientShellMounted()).toBe(true)
+    expect(createWorldSession).toHaveBeenCalledTimes(1)
     expect(hudConstructor).toHaveBeenCalledTimes(1)
+    expect(hudConstructor.mock.calls[0]?.[0]?.client).toBe(sessionClient)
     const hudRoot = document.getElementById('hud-root') as HTMLDivElement
     expect(hudRoot.dataset.brokerUrl).toBe('ws://localhost:43127/ws')
     const canvas = document.querySelector('#canvas-root canvas[data-role="world-canvas"]')
     expect(canvas).not.toBeNull()
     module.unmountClientShell()
     expect(hudDisposer).toHaveBeenCalledTimes(1)
+    expect(dispose).toHaveBeenCalledTimes(1)
     expect(hudRoot.dataset.brokerUrl).toBe('')
     expect(module.isClientShellMounted()).toBe(false)
   })
