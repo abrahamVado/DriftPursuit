@@ -3,6 +3,14 @@ import { act } from 'react-dom/test-utils'
 import { createRoot, type Root } from 'react-dom/client'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
+const mountClientShell = vi.fn(async () => true)
+const unmountClientShell = vi.fn()
+
+vi.mock('../../src/runtime/clientShell', () => ({
+  mountClientShell,
+  unmountClientShell,
+}))
+
 describe('ClientBootstrap', () => {
   let container: HTMLDivElement
   let root: Root | null
@@ -10,6 +18,8 @@ describe('ClientBootstrap', () => {
   beforeEach(() => {
     //1.- Reset module caches and recreate a clean DOM container for each scenario.
     vi.resetModules()
+    mountClientShell.mockClear()
+    unmountClientShell.mockClear()
     container = document.createElement('div')
     document.body.innerHTML = ''
     document.body.appendChild(container)
@@ -40,10 +50,15 @@ describe('ClientBootstrap', () => {
     delete process.env.NEXT_PUBLIC_BROKER_URL
     const { default: ClientBootstrap } = await import('./ClientBootstrap')
     await renderComponent(<ClientBootstrap />)
+    await act(async () => {
+      //1.- Allow the effect microtasks to settle so lazy imports can be observed.
+      await Promise.resolve()
+    })
     const message = container.querySelector('[data-testid="status-message"]')
     const text = message?.textContent ?? ''
     expect(text).toMatch(/Broker URL missing/i)
     expect(text).toContain('NEXT_PUBLIC_BROKER_URL=ws://localhost:43127/ws')
+    expect(mountClientShell).not.toHaveBeenCalled()
     await teardown()
   })
 
@@ -52,8 +67,14 @@ describe('ClientBootstrap', () => {
     process.env.NEXT_PUBLIC_BROKER_URL = 'ws://localhost:43127/ws'
     const { default: ClientBootstrap } = await import('./ClientBootstrap')
     await renderComponent(<ClientBootstrap />)
+    await act(async () => {
+      //1.- Resolve any pending tasks spawned by the lazy runtime import.
+      await Promise.resolve()
+    })
     const message = container.querySelector('[data-testid="status-message"]')
     expect(message?.textContent ?? '').toContain('ws://localhost:43127/ws')
+    expect(mountClientShell).toHaveBeenCalledWith({ brokerUrl: 'ws://localhost:43127/ws' })
     await teardown()
+    expect(unmountClientShell).toHaveBeenCalled()
   })
 })

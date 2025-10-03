@@ -18,10 +18,42 @@ export default function ClientBootstrap() {
       setStatus(
         'Broker URL missing. Create a .env.local file with NEXT_PUBLIC_BROKER_URL=ws://localhost:43127/ws to enable live telemetry.',
       )
-      return
+      return () => {
+        //1.- No runtime shell was started so only mark the effect as cancelled.
+      }
     }
     //2.- Confirm to the player that the client is ready to negotiate a session.
     setStatus(`Client ready. Broker endpoint: ${brokerUrl}`)
+
+    let cancelled = false
+    let runtimeModule: typeof import('../../src/runtime/clientShell') | null = null
+
+    const startShell = async () => {
+      try {
+        //3.- Lazily import the heavier runtime bundle so the landing page stays lightweight.
+        runtimeModule = await import('../../src/runtime/clientShell')
+        if (cancelled) {
+          return
+        }
+        await runtimeModule.mountClientShell({ brokerUrl })
+      } catch (error) {
+        console.error('Failed to start client shell', error)
+        if (!cancelled) {
+          //4.- Surface a descriptive status message so the user can diagnose issues quickly.
+          setStatus('Client shell failed to start. Check the developer console for details.')
+        }
+      }
+    }
+
+    startShell()
+
+    return () => {
+      //5.- Flag the effect as cancelled before unmounting to avoid racing asynchronous imports.
+      cancelled = true
+      if (runtimeModule) {
+        runtimeModule.unmountClientShell()
+      }
+    }
   }, [brokerUrl])
 
   //3.- Present the bootstrap instructions alongside DOM anchors for future systems.
