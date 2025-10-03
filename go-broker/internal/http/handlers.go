@@ -49,32 +49,34 @@ type MatchSession interface {
 
 // Options configures the HandlerSet.
 type Options struct {
-	Logger      *logging.Logger
-	Readiness   ReadinessProvider
-	Stats       StatsFunc
-	Snapshots   *networking.SnapshotMetrics
-	Bandwidth   *networking.BandwidthRegulator
-	Replay      ReplayDumper
-	AdminToken  string
-	RateLimiter RateLimiter
-	TimeSource  func() time.Time
-	ReplayStats func() replay.Stats
-	Match       MatchSession
+	Logger        *logging.Logger
+	Readiness     ReadinessProvider
+	Stats         StatsFunc
+	Snapshots     *networking.SnapshotMetrics
+	Bandwidth     *networking.BandwidthRegulator
+	Replay        ReplayDumper
+	AdminToken    string
+	RateLimiter   RateLimiter
+	TimeSource    func() time.Time
+	ReplayStats   func() replay.Stats
+	ReplayStorage func() replay.StorageStats
+	Match         MatchSession
 }
 
 // HandlerSet bundles the broker operational handlers.
 type HandlerSet struct {
-	logger      *logging.Logger
-	readiness   ReadinessProvider
-	stats       StatsFunc
-	snapshots   *networking.SnapshotMetrics
-	bandwidth   *networking.BandwidthRegulator
-	replay      ReplayDumper
-	adminToken  string
-	rateLimiter RateLimiter
-	now         func() time.Time
-	replayStats func() replay.Stats
-	match       MatchSession
+	logger        *logging.Logger
+	readiness     ReadinessProvider
+	stats         StatsFunc
+	snapshots     *networking.SnapshotMetrics
+	bandwidth     *networking.BandwidthRegulator
+	replay        ReplayDumper
+	adminToken    string
+	rateLimiter   RateLimiter
+	now           func() time.Time
+	replayStats   func() replay.Stats
+	replayStorage func() replay.StorageStats
+	match         MatchSession
 }
 
 // NewHandlerSet constructs a HandlerSet using the provided options.
@@ -88,17 +90,18 @@ func NewHandlerSet(opts Options) *HandlerSet {
 		now = time.Now
 	}
 	return &HandlerSet{
-		logger:      logger,
-		readiness:   opts.Readiness,
-		stats:       opts.Stats,
-		snapshots:   opts.Snapshots,
-		bandwidth:   opts.Bandwidth,
-		replay:      opts.Replay,
-		adminToken:  strings.TrimSpace(opts.AdminToken),
-		rateLimiter: opts.RateLimiter,
-		now:         now,
-		replayStats: opts.ReplayStats,
-		match:       opts.Match,
+		logger:        logger,
+		readiness:     opts.Readiness,
+		stats:         opts.Stats,
+		snapshots:     opts.Snapshots,
+		bandwidth:     opts.Bandwidth,
+		replay:        opts.Replay,
+		adminToken:    strings.TrimSpace(opts.AdminToken),
+		rateLimiter:   opts.RateLimiter,
+		now:           now,
+		replayStats:   opts.ReplayStats,
+		replayStorage: opts.ReplayStorage,
+		match:         opts.Match,
 	}
 }
 
@@ -224,6 +227,25 @@ func (h *HandlerSet) MetricsHandler() http.HandlerFunc {
 			fmt.Fprintf(w, "# HELP broker_replay_dumps_total Replay dumps completed successfully.\n")
 			fmt.Fprintf(w, "# TYPE broker_replay_dumps_total counter\n")
 			fmt.Fprintf(w, "broker_replay_dumps_total %d\n", stats.Dumps)
+		}
+		if h.replayStorage != nil {
+			storage := h.replayStorage()
+			//1.- Surface retained artefact counts so operators can inspect cleanup effectiveness.
+			fmt.Fprintf(w, "# HELP broker_replay_storage_matches Replay artefacts currently retained.\n")
+			fmt.Fprintf(w, "# TYPE broker_replay_storage_matches gauge\n")
+			fmt.Fprintf(w, "broker_replay_storage_matches %d\n", storage.Matches)
+			fmt.Fprintf(w, "# HELP broker_replay_storage_headers Replay header documents currently present.\n")
+			fmt.Fprintf(w, "# TYPE broker_replay_storage_headers gauge\n")
+			fmt.Fprintf(w, "broker_replay_storage_headers %d\n", storage.Headers)
+			fmt.Fprintf(w, "# HELP broker_replay_storage_bytes Total on-disk size of retained replays in bytes.\n")
+			fmt.Fprintf(w, "# TYPE broker_replay_storage_bytes gauge\n")
+			fmt.Fprintf(w, "broker_replay_storage_bytes %d\n", storage.Bytes)
+			if !storage.LastSweep.IsZero() {
+				//2.- Publish the last sweep time so dashboards can detect stalled cleanup loops.
+				fmt.Fprintf(w, "# HELP broker_replay_storage_last_sweep_timestamp_seconds Unix timestamp of the last replay retention sweep.\n")
+				fmt.Fprintf(w, "# TYPE broker_replay_storage_last_sweep_timestamp_seconds gauge\n")
+				fmt.Fprintf(w, "broker_replay_storage_last_sweep_timestamp_seconds %d\n", storage.LastSweep.Unix())
+			}
 		}
 	}
 }

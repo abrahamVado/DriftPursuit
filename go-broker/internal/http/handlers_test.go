@@ -146,15 +146,20 @@ func TestMetricsHandlerOutputsPrometheusFormat(t *testing.T) {
 	replayStats := func() replay.Stats {
 		return replay.Stats{BufferedFrames: 3, BufferedBytes: 2048, Dumps: 2}
 	}
+	replayStorage := func() replay.StorageStats {
+		return replay.StorageStats{Matches: 5, Headers: 5, Bytes: 12345, LastSweep: time.Unix(1700000000, 0)}
+	}
+
 	handlers := NewHandlerSet(Options{
 		Logger:    logging.NewTestLogger(),
 		Readiness: readiness,
 		Stats: func() (int, int) {
 			return 4, 2
 		},
-		Snapshots:   metrics,
-		Bandwidth:   bandwidth,
-		ReplayStats: replayStats,
+		Snapshots:     metrics,
+		Bandwidth:     bandwidth,
+		ReplayStats:   replayStats,
+		ReplayStorage: replayStorage,
 	})
 
 	rr := httptest.NewRecorder()
@@ -176,6 +181,10 @@ func TestMetricsHandlerOutputsPrometheusFormat(t *testing.T) {
 		"broker_bandwidth_denied_total{client=\"client-1\"} 1",
 		"broker_replay_buffer_frames 3",
 		"broker_replay_dumps_total 2",
+		"broker_replay_storage_matches 5",
+		"broker_replay_storage_bytes 12345",
+		"broker_replay_storage_headers 5",
+		"broker_replay_storage_last_sweep_timestamp_seconds 1700000000",
 	} {
 		if !strings.Contains(body, substr) {
 			t.Fatalf("metrics missing %q:\n%s", substr, body)
