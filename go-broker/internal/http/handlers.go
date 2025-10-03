@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"driftpursuit/broker/internal/logging"
+	"driftpursuit/broker/internal/match"
 	"driftpursuit/broker/internal/networking"
 	"driftpursuit/broker/internal/replay"
 )
@@ -40,6 +41,12 @@ type RateLimiter interface {
 	Allow() bool
 }
 
+// MatchSession exposes the minimal surface required to administrate match capacity.
+type MatchSession interface {
+	Snapshot() match.Snapshot
+	AdjustCapacity(minPlayers, maxPlayers int) (match.Snapshot, error)
+}
+
 // Options configures the HandlerSet.
 type Options struct {
 	Logger      *logging.Logger
@@ -52,6 +59,7 @@ type Options struct {
 	RateLimiter RateLimiter
 	TimeSource  func() time.Time
 	ReplayStats func() replay.Stats
+	Match       MatchSession
 }
 
 // HandlerSet bundles the broker operational handlers.
@@ -66,6 +74,7 @@ type HandlerSet struct {
 	rateLimiter RateLimiter
 	now         func() time.Time
 	replayStats func() replay.Stats
+	match       MatchSession
 }
 
 // NewHandlerSet constructs a HandlerSet using the provided options.
@@ -89,6 +98,7 @@ func NewHandlerSet(opts Options) *HandlerSet {
 		rateLimiter: opts.RateLimiter,
 		now:         now,
 		replayStats: opts.ReplayStats,
+		match:       opts.Match,
 	}
 }
 
@@ -101,6 +111,9 @@ func (h *HandlerSet) Register(mux *http.ServeMux) {
 	mux.HandleFunc("/readyz", h.ReadinessHandler())
 	mux.HandleFunc("/metrics", h.MetricsHandler())
 	mux.HandleFunc("/replay/dump", h.ReplayDumpHandler())
+	if h.match != nil {
+		mux.HandleFunc("/admin/match/capacity", h.MatchCapacityHandler())
+	}
 }
 
 // LivenessHandler reports that the HTTP server is reachable.
@@ -259,6 +272,70 @@ func (h *HandlerSet) ReplayDumpHandler() http.HandlerFunc {
 		}
 		reqLogger.Info("replay dump triggered")
 		writeJSON(w, http.StatusAccepted, response{Status: "accepted", Location: location})
+	}
+}
+
+// MatchCapacityHandler authorises and applies runtime match capacity adjustments.
+func (h *HandlerSet) MatchCapacityHandler() http.HandlerFunc {
+	type request struct {
+		MinPlayers *int `json:"min_players"`
+		MaxPlayers *int `json:"max_players"`
+	}
+	type response struct {
+		Status        string         `json:"status"`
+		MatchID       string         `json:"match_id"`
+		Capacity      match.Capacity `json:"capacity"`
+		ActivePlayers []string       `json:"active_players"`
+		Message       string         `json:"message,omitempty"`
+	}
+	return func(w http.ResponseWriter, r *http.Request) {
+		logger := h.logger.With(
+			logging.String("handler", "match_capacity"),
+			logging.String("remote_addr", r.RemoteAddr),
+		)
+		if r.Method != http.MethodPost {
+			w.Header().Set("Allow", http.MethodPost)
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		if h.match == nil {
+			http.Error(w, "match management unavailable", http.StatusServiceUnavailable)
+			return
+		}
+		if h.adminToken == "" {
+			logger.Warn("capacity adjustment denied: admin auth disabled")
+			http.Error(w, "admin authentication not configured", http.StatusForbidden)
+			return
+		}
+		if !h.authorise(r) {
+			logger.Warn("capacity adjustment denied: unauthorized request")
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
+		var req request
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			logger.Warn("capacity adjustment denied: invalid payload", logging.Error(err))
+			http.Error(w, "invalid request payload", http.StatusBadRequest)
+			return
+		}
+		current := h.match.Snapshot()
+		minPlayers := current.Capacity.MinPlayers
+		maxPlayers := current.Capacity.MaxPlayers
+		//1.- Apply the request overrides while defaulting unspecified fields to the current snapshot.
+		if req.MinPlayers != nil {
+			minPlayers = *req.MinPlayers
+		}
+		if req.MaxPlayers != nil {
+			maxPlayers = *req.MaxPlayers
+		}
+		updated, err := h.match.AdjustCapacity(minPlayers, maxPlayers)
+		if err != nil {
+			logger.Warn("capacity adjustment denied: invalid configuration", logging.Error(err))
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		logger.Info("match capacity adjusted", logging.Int("min_players", updated.Capacity.MinPlayers), logging.Int("max_players", updated.Capacity.MaxPlayers))
+		writeJSON(w, http.StatusOK, response{Status: "ok", MatchID: updated.MatchID, Capacity: updated.Capacity, ActivePlayers: updated.ActivePlayers})
 	}
 }
 

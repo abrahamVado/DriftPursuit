@@ -20,6 +20,7 @@ import (
 	httpapi "driftpursuit/broker/internal/http"
 	"driftpursuit/broker/internal/input"
 	"driftpursuit/broker/internal/logging"
+	"driftpursuit/broker/internal/match"
 	"driftpursuit/broker/internal/networking"
 	pb "driftpursuit/broker/internal/proto/pb"
 	"driftpursuit/broker/internal/radar"
@@ -119,6 +120,8 @@ type Broker struct {
 	replayFrameInterval time.Duration
 	replayFrameBudget   time.Duration
 
+	matchSession *match.Session
+
 	intentMu        sync.RWMutex
 	intentStates    map[string]*intentPayload
 	lastIntentSeqs  map[string]uint64
@@ -198,6 +201,17 @@ func WithReplayRecorder(recorder *replay.Recorder) BrokerOption {
 	}
 }
 
+// WithMatchSession injects a preconfigured match session for capacity management.
+func WithMatchSession(session *match.Session) BrokerOption {
+	return func(b *Broker) {
+		if b == nil || session == nil {
+			return
+		}
+		//1.- Reuse the supplied session so tests can control capacity without touching globals.
+		b.matchSession = session
+	}
+}
+
 func NewBroker(maxPayloadBytes int64, maxClients int, startedAt time.Time, logger *logging.Logger, opts ...BrokerOption) *Broker {
 	if maxPayloadBytes <= 0 {
 		maxPayloadBytes = configpkg.DefaultMaxPayloadBytes
@@ -228,6 +242,17 @@ func NewBroker(maxPayloadBytes int64, maxClients int, startedAt time.Time, logge
 		if opt != nil {
 			opt(broker)
 		}
+	}
+
+	if broker.matchSession == nil {
+		session, err := match.NewSession()
+		if err != nil {
+			if logger != nil {
+				logger.Warn("falling back to default match session", logging.Error(err))
+			}
+			session, _ = match.NewSession(match.WithSessionEnvLookup(nil))
+		}
+		broker.matchSession = session
 	}
 
 	if broker.wsAuthenticator == nil {
@@ -324,6 +349,10 @@ func (b *Broker) deregisterClient(client *Client) {
 	}
 	if b.intentValidator != nil && client != nil {
 		b.intentValidator.Forget(client.id)
+	}
+	if b.matchSession != nil && client != nil {
+		//1.- Release the participant slot so reconnects can rejoin without resetting the match.
+		b.matchSession.Leave(client.id)
 	}
 }
 
@@ -690,6 +719,26 @@ func (b *Broker) serveWS(w http.ResponseWriter, r *http.Request) {
 	client := &Client{conn: conn, send: make(chan []byte, 256), id: clientID}
 	client.log = reqLogger.With(logging.String("client_id", client.id))
 
+	var joinSnapshot match.Snapshot
+	if b.matchSession != nil {
+		snapshot, joinErr := b.matchSession.Join(client.id)
+		if joinErr != nil {
+			if b.maxClients > 0 {
+				b.lock.Lock()
+				if b.pendingClients > 0 {
+					b.pendingClients--
+				}
+				b.lock.Unlock()
+			}
+			reqLogger.Warn("rejecting websocket connection: match capacity", logging.Error(joinErr))
+			closePayload := websocket.FormatCloseMessage(websocket.ClosePolicyViolation, "match capacity reached")
+			_ = conn.WriteControl(websocket.CloseMessage, closePayload, time.Now().Add(writeWait))
+			_ = conn.Close()
+			return
+		}
+		joinSnapshot = snapshot
+	}
+
 	b.lock.Lock()
 	if b.maxClients > 0 && b.pendingClients > 0 {
 		b.pendingClients--
@@ -701,6 +750,11 @@ func (b *Broker) serveWS(w http.ResponseWriter, r *http.Request) {
 	// Enforce payload limit (read side)
 	if b.maxPayloadBytes > 0 {
 		client.conn.SetReadLimit(b.maxPayloadBytes)
+	}
+
+	if joinSnapshot.MatchID != "" {
+		//1.- Immediately inform the client of the persistent match context and roster.
+		b.enqueueMatchStatus(client, joinSnapshot)
 	}
 
 	// Keepalive: read deadline & pong handler
@@ -827,6 +881,40 @@ func (b *Broker) serveWS(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}()
+}
+
+func (b *Broker) enqueueMatchStatus(client *Client, snapshot match.Snapshot) {
+	if b == nil || client == nil {
+		return
+	}
+	payload := struct {
+		Type          string         `json:"type"`
+		MatchID       string         `json:"match_id"`
+		PlayerID      string         `json:"player_id"`
+		Capacity      match.Capacity `json:"capacity"`
+		ActivePlayers []string       `json:"active_players"`
+	}{
+		Type:          "match_status",
+		MatchID:       snapshot.MatchID,
+		PlayerID:      client.id,
+		Capacity:      snapshot.Capacity,
+		ActivePlayers: snapshot.ActivePlayers,
+	}
+	data, err := json.Marshal(payload)
+	if err != nil {
+		if client.log != nil {
+			client.log.Error("failed to marshal match status", logging.Error(err))
+		}
+		return
+	}
+	//1.- Attempt to enqueue the payload without blocking so connection startup remains responsive.
+	select {
+	case client.send <- data:
+	default:
+		if client.log != nil {
+			client.log.Warn("dropping match status message: client buffer full")
+		}
+	}
 }
 
 func (b *Broker) finishRecovery() {
@@ -1488,6 +1576,7 @@ func buildHandler(b *Broker, cfg *configpkg.Config) http.Handler {
 		},
 		AdminToken:  adminToken,
 		RateLimiter: limiter,
+		Match:       b.matchSession,
 	})
 	opsHandlers.Register(mux)
 

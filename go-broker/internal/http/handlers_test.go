@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"driftpursuit/broker/internal/logging"
+	"driftpursuit/broker/internal/match"
 	"driftpursuit/broker/internal/networking"
 	pb "driftpursuit/broker/internal/proto/pb"
 	"driftpursuit/broker/internal/replay"
@@ -48,6 +49,26 @@ type stubDumper struct {
 func (s *stubDumper) DumpReplay(ctx context.Context) (string, error) {
 	s.calls++
 	return s.location, s.err
+}
+
+type stubMatchSession struct {
+	snapshot match.Snapshot
+	err      error
+	min      int
+	max      int
+}
+
+func (s *stubMatchSession) Snapshot() match.Snapshot { return s.snapshot }
+
+func (s *stubMatchSession) AdjustCapacity(minPlayers, maxPlayers int) (match.Snapshot, error) {
+	s.min = minPlayers
+	s.max = maxPlayers
+	if s.err != nil {
+		return match.Snapshot{}, s.err
+	}
+	s.snapshot.Capacity.MinPlayers = minPlayers
+	s.snapshot.Capacity.MaxPlayers = maxPlayers
+	return s.snapshot, nil
 }
 
 func TestLivenessHandlerReturnsJSON(t *testing.T) {
@@ -195,5 +216,75 @@ func TestReplayDumpHandlerAuthAndRateLimits(t *testing.T) {
 
 	if resp := makeRequest("topsecret"); resp.Code != http.StatusTooManyRequests {
 		t.Fatalf("expected rate limit, got %d", resp.Code)
+	}
+}
+
+func TestMatchCapacityHandlerAdjustsLimits(t *testing.T) {
+	session := &stubMatchSession{snapshot: match.Snapshot{MatchID: "persistent", Capacity: match.Capacity{MinPlayers: 1, MaxPlayers: 4}, ActivePlayers: []string{"pilot-1"}}}
+	handlers := NewHandlerSet(Options{
+		Logger:     logging.NewTestLogger(),
+		AdminToken: "secret",
+		Match:      session,
+	})
+
+	body := strings.NewReader(`{"max_players":6}`)
+	req := httptest.NewRequest(http.MethodPost, "/admin/match/capacity", body)
+	req.Header.Set("Authorization", "Bearer secret")
+	rr := httptest.NewRecorder()
+
+	handlers.MatchCapacityHandler().ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200 OK, got %d", rr.Code)
+	}
+	if session.max != 6 {
+		t.Fatalf("expected max override to be recorded, got %d", session.max)
+	}
+	var payload struct {
+		Status   string         `json:"status"`
+		MatchID  string         `json:"match_id"`
+		Capacity match.Capacity `json:"capacity"`
+	}
+	if err := json.NewDecoder(rr.Body).Decode(&payload); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if payload.Status != "ok" || payload.MatchID != "persistent" {
+		t.Fatalf("unexpected response: %+v", payload)
+	}
+	if payload.Capacity.MaxPlayers != 6 || payload.Capacity.MinPlayers != 1 {
+		t.Fatalf("unexpected capacity payload: %+v", payload.Capacity)
+	}
+}
+
+func TestMatchCapacityHandlerValidatesAuthAndPayload(t *testing.T) {
+	session := &stubMatchSession{snapshot: match.Snapshot{MatchID: "session", Capacity: match.Capacity{MinPlayers: 0, MaxPlayers: 2}}}
+	handlers := NewHandlerSet(Options{
+		Logger:     logging.NewTestLogger(),
+		AdminToken: "secret",
+		Match:      session,
+	})
+
+	unauthorized := httptest.NewRequest(http.MethodPost, "/admin/match/capacity", strings.NewReader(`{"max_players":4}`))
+	rr := httptest.NewRecorder()
+	handlers.MatchCapacityHandler().ServeHTTP(rr, unauthorized)
+	if rr.Code != http.StatusUnauthorized {
+		t.Fatalf("expected 401 for missing auth, got %d", rr.Code)
+	}
+
+	badPayload := httptest.NewRequest(http.MethodPost, "/admin/match/capacity", strings.NewReader("not-json"))
+	badPayload.Header.Set("Authorization", "Bearer secret")
+	rr = httptest.NewRecorder()
+	handlers.MatchCapacityHandler().ServeHTTP(rr, badPayload)
+	if rr.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 for invalid payload, got %d", rr.Code)
+	}
+
+	session.err = errors.New("invalid capacity")
+	failing := httptest.NewRequest(http.MethodPost, "/admin/match/capacity", strings.NewReader(`{"max_players":1}`))
+	failing.Header.Set("Authorization", "Bearer secret")
+	rr = httptest.NewRecorder()
+	handlers.MatchCapacityHandler().ServeHTTP(rr, failing)
+	if rr.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 for rejected adjustment, got %d", rr.Code)
 	}
 }
