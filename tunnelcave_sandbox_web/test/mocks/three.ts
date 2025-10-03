@@ -104,6 +104,7 @@ export class Object3D {
   position = new Vector3()
   quaternion = new Quaternion()
   rotation = new Euler()
+  scale = new Vector3(1, 1, 1)
   matrixAutoUpdate = true
   userData: Record<string, unknown> = {}
   visible = true
@@ -137,6 +138,10 @@ export class Object3D {
   updateMatrix(): void {
     //1.- No-op placeholder to keep the API compatible with three.js.
   }
+
+  updateMatrixWorld(): void {
+    //1.- Match three.js API while staying inert for tests.
+  }
 }
 
 export class Group extends Object3D {}
@@ -151,6 +156,15 @@ export class Mesh extends Object3D {
     this.geometry = geometry
     this.material = material
   }
+
+  clone(): Mesh {
+    const copy = new Mesh(this.geometry, this.material)
+    copy.position = new Vector3(this.position.x, this.position.y, this.position.z)
+    copy.rotation = new Euler(this.rotation.x, this.rotation.y, this.rotation.z, this.rotation.order)
+    copy.scale = new Vector3(this.scale.x, this.scale.y, this.scale.z)
+    copy.userData = { ...this.userData }
+    return copy
+  }
 }
 
 export class MeshStandardMaterial {
@@ -163,4 +177,66 @@ export const MathUtils = {
   degToRad(degrees: number): number {
     return (degrees * Math.PI) / 180
   },
+}
+
+export class Float32BufferAttribute {
+  //1.- Provide minimal attribute storage for BufferGeometry usage.
+  constructor(public array: ArrayLike<number>, public itemSize: number) {}
+}
+
+export class BufferGeometry {
+  //1.- Track indices and attributes to imitate three.js geometry containers.
+  index: number[] | null = null
+  attributes: Record<string, unknown> = {}
+
+  setIndex(index: number[] | ArrayLike<number>): this {
+    this.index = Array.from(index as number[])
+    return this
+  }
+
+  setAttribute(name: string, attribute: unknown): this {
+    this.attributes[name] = attribute
+    return this
+  }
+
+  computeVertexNormals(): this {
+    return this
+  }
+
+  translate(): this {
+    return this
+  }
+
+  center(): this {
+    return this
+  }
+}
+
+export class Shape {
+  //1.- Record 2D contour points to emulate polygon extrusion inputs.
+  points: { x: number; y: number }[] = []
+
+  moveTo(x: number, y: number): this {
+    this.points = [{ x, y }]
+    return this
+  }
+
+  lineTo(x: number, y: number): this {
+    this.points.push({ x, y })
+    return this
+  }
+}
+
+export class ExtrudeGeometry extends BufferGeometry {
+  //1.- Store references so tests can confirm extrusion parameters.
+  constructor(public shape: Shape, public settings: Record<string, unknown>) {
+    super()
+  }
+}
+
+export class TorusGeometry extends BufferGeometry {
+  //1.- Capture torus dimensions for inspection.
+  constructor(public radius: number, public tube: number, public radialSegments: number, public tubularSegments: number) {
+    super()
+  }
 }
