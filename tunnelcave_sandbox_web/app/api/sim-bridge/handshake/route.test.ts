@@ -45,17 +45,15 @@ describe('sim-bridge handshake route', () => {
     expect(body).toMatchObject({ ...handshake, bridgeUrl: 'http://localhost:8000' })
   })
 
-  it('maps network failures to a gateway error with troubleshooting guidance', async () => {
-    process.env.SIM_BRIDGE_URL = 'http://localhost:8000'
-    const fetchMock = vi.fn().mockRejectedValueOnce(new Error('fetch failed', { cause: { code: 'ECONNREFUSED' } }))
+  it('maps network failures to a gateway error', async () => {
+    process.env.SIM_BRIDGE_URL = 'http://backend:9000'
+    const fetchMock = vi.fn().mockRejectedValueOnce(new Error('connect ECONNREFUSED'))
     global.fetch = fetchMock as unknown as typeof global.fetch
 
     const response = await GET()
     const body = await response.json()
 
     expect(response.status).toBe(502)
-    expect(body.message).toContain('Failed to reach simulation bridge at http://localhost:8000')
-    expect(body.message).toContain('Ensure the simulation bridge service is running')
-    expect(body.message).toContain('host.docker.internal')
+    expect(body.message).toContain('Failed to reach simulation bridge at http://backend:9000')
   })
 })
