@@ -15,6 +15,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"driftpursuit/broker/internal/bots"
 	configpkg "driftpursuit/broker/internal/config"
 	grpcstream "driftpursuit/broker/internal/grpc"
 	httpapi "driftpursuit/broker/internal/http"
@@ -122,6 +123,8 @@ type Broker struct {
 
 	matchSession *match.Session
 
+	botController *bots.Controller
+
 	intentMu        sync.RWMutex
 	intentStates    map[string]*intentPayload
 	lastIntentSeqs  map[string]uint64
@@ -145,6 +148,17 @@ type BrokerOption func(*Broker)
 func WithSnapshotter(snapshotter *StateSnapshotter) BrokerOption {
 	return func(b *Broker) {
 		b.snapshotter = snapshotter
+	}
+}
+
+// WithBotController wires a bot population controller into the broker lifecycle.
+func WithBotController(controller *bots.Controller) BrokerOption {
+	return func(b *Broker) {
+		if b == nil || controller == nil {
+			return
+		}
+		//1.- Attach the supplied controller so connection events adjust bot supply.
+		b.botController = controller
 	}
 }
 
@@ -255,6 +269,14 @@ func NewBroker(maxPayloadBytes int64, maxClients int, startedAt time.Time, logge
 		broker.matchSession = session
 	}
 
+	if broker.botController != nil && broker.matchSession != nil {
+		snapshot := broker.matchSession.Snapshot()
+		if snapshot.Capacity.MaxPlayers > 0 {
+			//1.- Align the controller target with the match capacity so bots backfill empty slots.
+			_ = broker.botController.SetTargetPopulation(context.Background(), snapshot.Capacity.MaxPlayers)
+		}
+	}
+
 	if broker.wsAuthenticator == nil {
 		broker.wsAuthenticator = allowAllAuthenticator{}
 	}
@@ -317,6 +339,8 @@ func (b *Broker) vehicleState(vehicleID string) *pb.VehicleState {
 type BrokerStats struct {
 	Broadcasts       int                                 `json:"broadcasts"`
 	Clients          int                                 `json:"clients"`
+	Humans           int                                 `json:"humans"`
+	Bots             int                                 `json:"bots"`
 	IntentDrops      map[string]input.DropCounters       `json:"intent_drops,omitempty"`
 	IntentValidation map[string]input.ValidationCounters `json:"intent_validation,omitempty"`
 }
@@ -335,6 +359,12 @@ func (b *Broker) deregisterClient(client *Client) {
 		}
 	}
 	b.lock.Unlock()
+	if b.botController != nil {
+		//1.- Reflect the disconnection in the bot population controller.
+		if err := b.botController.HumanDisconnected(context.Background()); err != nil && b.log != nil {
+			b.log.Warn("bot controller disconnect failed", logging.Error(err))
+		}
+	}
 	if b.tierManager != nil && client != nil {
 		b.tierManager.RemoveObserver(client.id)
 	}
@@ -533,6 +563,11 @@ func (b *Broker) Stats() BrokerStats {
 	b.lock.RLock()
 	stats := b.stats
 	b.lock.RUnlock()
+	if b.botController != nil {
+		snapshot := b.botController.Snapshot()
+		stats.Humans = snapshot.Humans
+		stats.Bots = snapshot.Bots
+	}
 	if b.intentGate != nil {
 		stats.IntentDrops = b.intentGate.Metrics()
 	}
@@ -746,6 +781,17 @@ func (b *Broker) serveWS(w http.ResponseWriter, r *http.Request) {
 	b.clients[client] = true
 	b.stats.Clients++
 	b.lock.Unlock()
+
+	if b.botController != nil {
+		//1.- Let the population controller know a new human participant joined.
+		if err := b.botController.HumanConnected(r.Context()); err != nil {
+			if client.log != nil {
+				client.log.Warn("bot controller connect failed", logging.Error(err))
+			} else if b.log != nil {
+				b.log.Warn("bot controller connect failed", logging.Error(err))
+			}
+		}
+	}
 
 	// Enforce payload limit (read side)
 	if b.maxPayloadBytes > 0 {
@@ -1440,6 +1486,27 @@ func main() {
 	certProvided := cfg.TLSCertPath != ""
 
 	var brokerOptions []BrokerOption
+
+	var botController *bots.Controller
+	if cfg.BotControllerURL != "" {
+		launcher, err := bots.NewHTTPLauncher(cfg.BotControllerURL, nil)
+		if err != nil {
+			logger.Warn("failed to configure HTTP bot launcher", logging.Error(err))
+		} else {
+			botController = bots.NewController(bots.ControllerConfig{Launcher: launcher})
+		}
+	}
+	if botController == nil {
+		botController = bots.NewController(bots.ControllerConfig{})
+	}
+	if cfg.BotTargetPopulation > 0 {
+		if err := botController.SetTargetPopulation(context.Background(), cfg.BotTargetPopulation); err != nil {
+			logger.Warn("failed to apply configured bot target", logging.Error(err))
+		}
+	}
+	if botController != nil {
+		brokerOptions = append(brokerOptions, WithBotController(botController))
+	}
 
 	snapshotter, err := NewStateSnapshotter(cfg.StateSnapshotPath, cfg.StateSnapshotInterval, logger)
 	if err != nil {

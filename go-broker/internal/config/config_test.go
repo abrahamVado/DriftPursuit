@@ -35,6 +35,8 @@ func TestLoadDefaults(t *testing.T) {
 	t.Setenv("BROKER_GRPC_TLS_CERT", "")
 	t.Setenv("BROKER_GRPC_TLS_KEY", "")
 	t.Setenv("BROKER_GRPC_CLIENT_CA", "")
+	t.Setenv("BROKER_BOT_CONTROLLER_URL", "")
+	t.Setenv("BROKER_BOT_TARGET", "")
 
 	cfg, err := Load()
 	if err != nil {
@@ -107,6 +109,12 @@ func TestLoadDefaults(t *testing.T) {
 	if cfg.GRPCSharedSecret != "dev-secret" {
 		t.Fatalf("expected propagated grpc shared secret, got %q", cfg.GRPCSharedSecret)
 	}
+	if cfg.BotControllerURL != "" {
+		t.Fatalf("expected bot controller URL to be empty by default")
+	}
+	if cfg.BotTargetPopulation != 0 {
+		t.Fatalf("expected bot target population default to zero, got %d", cfg.BotTargetPopulation)
+	}
 }
 
 func TestLoadOverrides(t *testing.T) {
@@ -137,6 +145,8 @@ func TestLoadOverrides(t *testing.T) {
 	t.Setenv("BROKER_GRPC_TLS_CERT", "/tls/server.pem")
 	t.Setenv("BROKER_GRPC_TLS_KEY", "/tls/server.key")
 	t.Setenv("BROKER_GRPC_CLIENT_CA", "/tls/ca.pem")
+	t.Setenv("BROKER_BOT_CONTROLLER_URL", "http://bots.local/scale")
+	t.Setenv("BROKER_BOT_TARGET", "6")
 
 	cfg, err := Load()
 	if err != nil {
@@ -181,6 +191,12 @@ func TestLoadOverrides(t *testing.T) {
 	}
 	if cfg.Logging.Compress {
 		t.Fatalf("expected log compression disabled")
+	}
+	if cfg.BotControllerURL != "http://bots.local/scale" {
+		t.Fatalf("unexpected bot controller URL %q", cfg.BotControllerURL)
+	}
+	if cfg.BotTargetPopulation != 6 {
+		t.Fatalf("expected bot target population 6, got %d", cfg.BotTargetPopulation)
 	}
 	if cfg.AdminToken != "s3cret" {
 		t.Fatalf("expected overridden admin token, got %q", cfg.AdminToken)

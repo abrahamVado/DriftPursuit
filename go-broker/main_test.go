@@ -253,7 +253,7 @@ func (f *fakeBroker) Stats() BrokerStats {
 }
 
 func TestStatsHandlerReturnsJSON(t *testing.T) {
-	fake := &fakeBroker{stats: BrokerStats{Broadcasts: 5, Clients: 2}}
+	fake := &fakeBroker{stats: BrokerStats{Broadcasts: 5, Clients: 2, Humans: 1, Bots: 4}}
 	req := httptest.NewRequest(http.MethodGet, "/api/stats", nil)
 	rr := httptest.NewRecorder()
 
@@ -270,7 +270,7 @@ func TestStatsHandlerReturnsJSON(t *testing.T) {
 	if err := json.Unmarshal(rr.Body.Bytes(), &resp); err != nil {
 		t.Fatalf("unmarshal response: %v", err)
 	}
-	if resp.Broadcasts != fake.stats.Broadcasts || resp.Clients != fake.stats.Clients {
+	if resp.Broadcasts != fake.stats.Broadcasts || resp.Clients != fake.stats.Clients || resp.Humans != fake.stats.Humans || resp.Bots != fake.stats.Bots {
 		t.Fatalf("unexpected stats counts: got %+v want %+v", resp, fake.stats)
 	}
 	if !reflect.DeepEqual(resp.IntentDrops, fake.stats.IntentDrops) {
@@ -308,7 +308,7 @@ func (b *blockingBroker) Stats() BrokerStats {
 
 func TestStatsHandlerHonorsLocking(t *testing.T) {
 	blocker := &blockingBroker{
-		stats:   BrokerStats{Broadcasts: 1, Clients: 1},
+		stats:   BrokerStats{Broadcasts: 1, Clients: 1, Humans: 1, Bots: 0},
 		wait:    make(chan struct{}),
 		started: make(chan struct{}),
 	}
