@@ -141,6 +141,8 @@ type Broker struct {
 	diffMu          sync.RWMutex
 	diffSubscribers map[uint64]chan grpcstream.DiffEvent
 	nextDiffID      uint64
+
+	tickMonitor *simulation.TickMonitor
 }
 
 var errRecoveryInProgress = errors.New("state recovery in progress")
@@ -278,6 +280,7 @@ func NewBroker(maxPayloadBytes int64, maxClients int, startedAt time.Time, logge
 		world:               state.NewWorldState(),
 		diffSubscribers:     make(map[uint64]chan grpcstream.DiffEvent),
 		replayFrameInterval: time.Second / replayFrameRateHz,
+		tickMonitor:         simulation.NewTickMonitor(),
 	}
 	for _, opt := range opts {
 		if opt != nil {
@@ -602,6 +605,15 @@ func (b *Broker) Stats() BrokerStats {
 		stats.IntentValidation = b.intentValidator.Metrics()
 	}
 	return stats
+}
+
+// TickMetrics returns the aggregated simulation tick timing statistics.
+func (b *Broker) TickMetrics() simulation.TickMetricsSnapshot {
+	if b == nil || b.tickMonitor == nil {
+		return simulation.TickMetricsSnapshot{}
+	}
+	// //1.- Delegate to the monitor so callers receive a defensive snapshot.
+	return b.tickMonitor.Snapshot()
 }
 
 func (b *Broker) snapshotClientCounts() (clients, pending int) {
@@ -1146,6 +1158,14 @@ func (b *Broker) advanceSimulation(step time.Duration) {
 	if b == nil || step <= 0 {
 		return
 	}
+
+	start := time.Now()
+	defer func() {
+		if b.tickMonitor != nil {
+			// //1.- Record the full duration so monitoring captures slow frames.
+			b.tickMonitor.Observe(time.Since(start))
+		}
+	}()
 
 	//1.- Track total simulated time so clock sync can compare against wall clock drift.
 	atomic.AddInt64(&b.simulatedElapsedNs, step.Nanoseconds())
