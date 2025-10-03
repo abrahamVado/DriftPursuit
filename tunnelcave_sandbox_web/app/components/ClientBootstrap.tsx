@@ -2,6 +2,8 @@
 
 import React, { useEffect, useMemo, useState } from 'react'
 
+import SimulationControlPanel from './SimulationControlPanel'
+
 const DEFAULT_STATUS = 'Loading web client shell…'
 
 export default function ClientBootstrap() {
@@ -41,6 +43,7 @@ export default function ClientBootstrap() {
         <div id="canvas-root" aria-label="3D world mount" />
         <div id="hud-root" aria-label="HUD overlay mount" />
       </section>
+      <SimulationControlPanel />
     </main>
   )
 }
