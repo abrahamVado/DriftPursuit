@@ -5,8 +5,10 @@ import (
 	"errors"
 	"fmt"
 	"sort"
+	"strconv"
 	"sync"
 
+	"driftpursuit/broker/internal/match"
 	pb "driftpursuit/broker/internal/proto/pb"
 	"google.golang.org/protobuf/proto"
 )
@@ -20,6 +22,8 @@ const (
 	KindRespawn   Kind = "respawn"
 	KindLifecycle Kind = "lifecycle"
 )
+
+const spawnShieldMetadataKey = "spawn_shield_ms"
 
 // Envelope carries the concrete protobuf payload together with sequencing metadata.
 type Envelope struct {
@@ -237,6 +241,14 @@ func (s *Stream) PublishRespawn(event *pb.GameEvent) (uint64, error) {
 	if !ok {
 		return 0, errors.New("respawn clone failed")
 	}
+	//1.- Ensure clients learn about the active spawn shield duration in milliseconds.
+	durationMs := strconv.FormatInt(match.DefaultSpawnShieldDuration.Milliseconds(), 10)
+	metadata := clone.GetMetadata()
+	if metadata == nil {
+		metadata = make(map[string]string, 1)
+	}
+	metadata[spawnShieldMetadataKey] = durationMs
+	clone.Metadata = metadata
 	return s.publishEnvelope(&Envelope{Kind: KindRespawn, Game: clone})
 }
 

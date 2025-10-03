@@ -3,9 +3,11 @@ package events
 import (
 	"context"
 	"errors"
+	"strconv"
 	"testing"
 	"time"
 
+	"driftpursuit/broker/internal/match"
 	pb "driftpursuit/broker/internal/proto/pb"
 )
 
@@ -42,6 +44,13 @@ func TestStreamDeliverAndAck(t *testing.T) {
 		case env := <-sub.Events():
 			if env.Sequence != expected {
 				t.Fatalf("expected sequence %d, got %d", expected, env.Sequence)
+			}
+			if env.Kind == KindRespawn {
+				//1.- Confirm the spawn shield metadata is propagated to clients.
+				want := strconv.FormatInt(match.DefaultSpawnShieldDuration.Milliseconds(), 10)
+				if env.Game.GetMetadata()[spawnShieldMetadataKey] != want {
+					t.Fatalf("expected spawn shield metadata %s, got %+v", want, env.Game.GetMetadata())
+				}
 			}
 			if err := sub.Ack(env.Sequence); err != nil {
 				t.Fatalf("ack failed: %v", err)
@@ -138,5 +147,32 @@ func TestStreamRejectsOutOfOrderAck(t *testing.T) {
 	}
 	if err := sub.Ack(second.Sequence); err != nil {
 		t.Fatalf("ack second failed: %v", err)
+	}
+}
+
+func TestPublishRespawnAnnotatesShieldMetadata(t *testing.T) {
+	//1.- Publish a respawn event and inspect the delivered metadata payload.
+	stream := NewStream(Config{})
+	respawn := &pb.GameEvent{EventId: "shielded", Type: pb.EventType_EVENT_TYPE_SPAWNED}
+	seq, err := stream.PublishRespawn(respawn)
+	if err != nil {
+		t.Fatalf("publish respawn failed: %v", err)
+	}
+	if seq == 0 {
+		t.Fatal("expected non-zero sequence for respawn event")
+	}
+
+	//2.- Subscribe to replay the stored envelope and verify metadata injection.
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	sub, err := stream.Subscribe(ctx, "shield-check", 1)
+	if err != nil {
+		t.Fatalf("subscribe failed: %v", err)
+	}
+	env := <-sub.Events()
+	want := strconv.FormatInt(match.DefaultSpawnShieldDuration.Milliseconds(), 10)
+	got := env.Game.GetMetadata()[spawnShieldMetadataKey]
+	if got != want {
+		t.Fatalf("expected spawn shield metadata %s, got %s", want, got)
 	}
 }
