@@ -9,10 +9,10 @@ import (
 )
 
 const (
-        // DefaultAddr is the default TCP address the broker listens on.
-        DefaultAddr = ":43127"
-        // DefaultPingInterval controls the keepalive cadence for WebSocket connections.
-        DefaultPingInterval = 30 * time.Second
+	// DefaultAddr is the default TCP address the broker listens on.
+	DefaultAddr = ":43127"
+	// DefaultPingInterval controls the keepalive cadence for WebSocket connections.
+	DefaultPingInterval = 30 * time.Second
 	// DefaultMaxPayloadBytes limits inbound WebSocket frame size.
 	DefaultMaxPayloadBytes int64 = 1 << 20
 	// DefaultMaxClients bounds concurrent WebSocket connections. Zero disables the limit.
@@ -38,44 +38,46 @@ const (
 	// DefaultLogCompress toggles gzip compression for rotated log files.
 	DefaultLogCompress = true
 
-        // DefaultStateSnapshotInterval controls how frequently state snapshots are persisted.
-        DefaultStateSnapshotInterval = 30 * time.Second
+	// DefaultStateSnapshotInterval controls how frequently state snapshots are persisted.
+	DefaultStateSnapshotInterval = 30 * time.Second
 
-        // WSAuthModeDisabled allows unauthenticated WebSocket connections.
-        WSAuthModeDisabled = "disabled"
-        // WSAuthModeHMAC enforces HMAC-signed bearer tokens on WebSocket upgrades.
-        WSAuthModeHMAC = "hmac"
+	// WSAuthModeDisabled allows unauthenticated WebSocket connections.
+	WSAuthModeDisabled = "disabled"
+	// WSAuthModeHMAC enforces HMAC-signed bearer tokens on WebSocket upgrades.
+	WSAuthModeHMAC = "hmac"
 
-        // GRPCAuthModeSharedSecret requires a metadata secret on the gRPC stream.
-        GRPCAuthModeSharedSecret = "shared_secret"
-        // GRPCAuthModeMTLS mandates mutual TLS authentication for gRPC streams.
-        GRPCAuthModeMTLS = "mtls"
+	// GRPCAuthModeSharedSecret requires a metadata secret on the gRPC stream.
+	GRPCAuthModeSharedSecret = "shared_secret"
+	// GRPCAuthModeMTLS mandates mutual TLS authentication for gRPC streams.
+	GRPCAuthModeMTLS = "mtls"
 )
 
 // Config captures all runtime tunables for the broker service.
 type Config struct {
-        Address               string
-        GRPCAddress           string
-        AllowedOrigins        []string
-        MaxPayloadBytes       int64
-        PingInterval          time.Duration
-        MaxClients            int
-        TLSCertPath           string
-        TLSKeyPath            string
-        AdminToken            string
-        ReplayDumpWindow      time.Duration
-        ReplayDumpBurst       int
-        ReplayDirectory       string
-        Logging               LoggingConfig
-        StateSnapshotPath     string
-        StateSnapshotInterval time.Duration
-        WSAuthMode            string
-        WSHMACSecret          string
-        GRPCAuthMode          string
-        GRPCSharedSecret      string
-        GRPCServerCertPath    string
-        GRPCServerKeyPath     string
-        GRPCClientCAPath      string
+	Address               string
+	GRPCAddress           string
+	AllowedOrigins        []string
+	MaxPayloadBytes       int64
+	PingInterval          time.Duration
+	MaxClients            int
+	TLSCertPath           string
+	TLSKeyPath            string
+	AdminToken            string
+	ReplayDumpWindow      time.Duration
+	ReplayDumpBurst       int
+	ReplayDirectory       string
+	Logging               LoggingConfig
+	StateSnapshotPath     string
+	StateSnapshotInterval time.Duration
+	WSAuthMode            string
+	WSHMACSecret          string
+	GRPCAuthMode          string
+	GRPCSharedSecret      string
+	GRPCServerCertPath    string
+	GRPCServerKeyPath     string
+	GRPCClientCAPath      string
+	BotControllerURL      string
+	BotTargetPopulation   int
 }
 
 // LoggingConfig captures structured logging configuration options.
@@ -91,73 +93,74 @@ type LoggingConfig struct {
 // Load reads the broker configuration from environment variables, applying sane defaults
 // and returning descriptive errors for invalid overrides.
 func Load() (*Config, error) {
-        cfg := &Config{
-                Address:          getString("BROKER_ADDR", DefaultAddr),
-                GRPCAddress:      getString("BROKER_GRPC_ADDR", DefaultGRPCAddr),
-                AllowedOrigins:   parseList(os.Getenv("BROKER_ALLOWED_ORIGINS")),
-                MaxPayloadBytes:  DefaultMaxPayloadBytes,
-                PingInterval:     DefaultPingInterval,
-                MaxClients:       DefaultMaxClients,
-                TLSCertPath:      strings.TrimSpace(os.Getenv("BROKER_TLS_CERT")),
-                TLSKeyPath:       strings.TrimSpace(os.Getenv("BROKER_TLS_KEY")),
-                AdminToken:       strings.TrimSpace(os.Getenv("BROKER_ADMIN_TOKEN")),
-                ReplayDumpWindow: DefaultReplayDumpWindow,
-                ReplayDumpBurst:  DefaultReplayDumpBurst,
-                ReplayDirectory:  strings.TrimSpace(os.Getenv("BROKER_REPLAY_DIR")),
-                Logging: LoggingConfig{
-                        Level:      strings.TrimSpace(getString("BROKER_LOG_LEVEL", DefaultLogLevel)),
-                        Path:       strings.TrimSpace(getString("BROKER_LOG_PATH", DefaultLogPath)),
-                        MaxSizeMB:  DefaultLogMaxSizeMB,
-                        MaxBackups: DefaultLogMaxBackups,
+	cfg := &Config{
+		Address:          getString("BROKER_ADDR", DefaultAddr),
+		GRPCAddress:      getString("BROKER_GRPC_ADDR", DefaultGRPCAddr),
+		AllowedOrigins:   parseList(os.Getenv("BROKER_ALLOWED_ORIGINS")),
+		MaxPayloadBytes:  DefaultMaxPayloadBytes,
+		PingInterval:     DefaultPingInterval,
+		MaxClients:       DefaultMaxClients,
+		TLSCertPath:      strings.TrimSpace(os.Getenv("BROKER_TLS_CERT")),
+		TLSKeyPath:       strings.TrimSpace(os.Getenv("BROKER_TLS_KEY")),
+		AdminToken:       strings.TrimSpace(os.Getenv("BROKER_ADMIN_TOKEN")),
+		ReplayDumpWindow: DefaultReplayDumpWindow,
+		ReplayDumpBurst:  DefaultReplayDumpBurst,
+		ReplayDirectory:  strings.TrimSpace(os.Getenv("BROKER_REPLAY_DIR")),
+		Logging: LoggingConfig{
+			Level:      strings.TrimSpace(getString("BROKER_LOG_LEVEL", DefaultLogLevel)),
+			Path:       strings.TrimSpace(getString("BROKER_LOG_PATH", DefaultLogPath)),
+			MaxSizeMB:  DefaultLogMaxSizeMB,
+			MaxBackups: DefaultLogMaxBackups,
 			MaxAgeDays: DefaultLogMaxAgeDays,
 			Compress:   DefaultLogCompress,
-                },
-                StateSnapshotPath:     strings.TrimSpace(os.Getenv("BROKER_STATE_PATH")),
-                StateSnapshotInterval: DefaultStateSnapshotInterval,
-                WSAuthMode:            strings.TrimSpace(strings.ToLower(getString("BROKER_WS_AUTH_MODE", WSAuthModeDisabled))),
-                WSHMACSecret:          strings.TrimSpace(os.Getenv("BROKER_WS_HMAC_SECRET")),
-                GRPCAuthMode:          strings.TrimSpace(strings.ToLower(getString("BROKER_GRPC_AUTH_MODE", GRPCAuthModeSharedSecret))),
-                GRPCSharedSecret:      strings.TrimSpace(os.Getenv("BROKER_GRPC_SHARED_SECRET")),
-                GRPCServerCertPath:    strings.TrimSpace(os.Getenv("BROKER_GRPC_TLS_CERT")),
-                GRPCServerKeyPath:     strings.TrimSpace(os.Getenv("BROKER_GRPC_TLS_KEY")),
-                GRPCClientCAPath:      strings.TrimSpace(os.Getenv("BROKER_GRPC_CLIENT_CA")),
-        }
+		},
+		StateSnapshotPath:     strings.TrimSpace(os.Getenv("BROKER_STATE_PATH")),
+		StateSnapshotInterval: DefaultStateSnapshotInterval,
+		WSAuthMode:            strings.TrimSpace(strings.ToLower(getString("BROKER_WS_AUTH_MODE", WSAuthModeDisabled))),
+		WSHMACSecret:          strings.TrimSpace(os.Getenv("BROKER_WS_HMAC_SECRET")),
+		GRPCAuthMode:          strings.TrimSpace(strings.ToLower(getString("BROKER_GRPC_AUTH_MODE", GRPCAuthModeSharedSecret))),
+		GRPCSharedSecret:      strings.TrimSpace(os.Getenv("BROKER_GRPC_SHARED_SECRET")),
+		GRPCServerCertPath:    strings.TrimSpace(os.Getenv("BROKER_GRPC_TLS_CERT")),
+		GRPCServerKeyPath:     strings.TrimSpace(os.Getenv("BROKER_GRPC_TLS_KEY")),
+		GRPCClientCAPath:      strings.TrimSpace(os.Getenv("BROKER_GRPC_CLIENT_CA")),
+		BotControllerURL:      strings.TrimSpace(os.Getenv("BROKER_BOT_CONTROLLER_URL")),
+	}
 
-        var problems []string
+	var problems []string
 
-        if cfg.WSAuthMode == "" {
-                cfg.WSAuthMode = WSAuthModeDisabled
-        }
-        switch cfg.WSAuthMode {
-        case WSAuthModeDisabled:
-        case WSAuthModeHMAC:
-                if cfg.WSHMACSecret == "" {
-                        problems = append(problems, "BROKER_WS_HMAC_SECRET must be provided when BROKER_WS_AUTH_MODE=hmac")
-                }
-        default:
-                problems = append(problems, fmt.Sprintf("BROKER_WS_AUTH_MODE must be one of %q or %q", WSAuthModeDisabled, WSAuthModeHMAC))
-        }
+	if cfg.WSAuthMode == "" {
+		cfg.WSAuthMode = WSAuthModeDisabled
+	}
+	switch cfg.WSAuthMode {
+	case WSAuthModeDisabled:
+	case WSAuthModeHMAC:
+		if cfg.WSHMACSecret == "" {
+			problems = append(problems, "BROKER_WS_HMAC_SECRET must be provided when BROKER_WS_AUTH_MODE=hmac")
+		}
+	default:
+		problems = append(problems, fmt.Sprintf("BROKER_WS_AUTH_MODE must be one of %q or %q", WSAuthModeDisabled, WSAuthModeHMAC))
+	}
 
-        if cfg.GRPCAuthMode == "" {
-                cfg.GRPCAuthMode = GRPCAuthModeSharedSecret
-        }
-        switch cfg.GRPCAuthMode {
-        case GRPCAuthModeSharedSecret:
-                if cfg.GRPCSharedSecret == "" {
-                        problems = append(problems, "BROKER_GRPC_SHARED_SECRET must be provided when BROKER_GRPC_AUTH_MODE=shared_secret")
-                }
-        case GRPCAuthModeMTLS:
-                if cfg.GRPCServerCertPath == "" || cfg.GRPCServerKeyPath == "" || cfg.GRPCClientCAPath == "" {
-                        problems = append(problems, "BROKER_GRPC_TLS_CERT, BROKER_GRPC_TLS_KEY, and BROKER_GRPC_CLIENT_CA must be set when BROKER_GRPC_AUTH_MODE=mtls")
-                }
-        default:
-                problems = append(problems, fmt.Sprintf("BROKER_GRPC_AUTH_MODE must be one of %q or %q", GRPCAuthModeSharedSecret, GRPCAuthModeMTLS))
-        }
+	if cfg.GRPCAuthMode == "" {
+		cfg.GRPCAuthMode = GRPCAuthModeSharedSecret
+	}
+	switch cfg.GRPCAuthMode {
+	case GRPCAuthModeSharedSecret:
+		if cfg.GRPCSharedSecret == "" {
+			problems = append(problems, "BROKER_GRPC_SHARED_SECRET must be provided when BROKER_GRPC_AUTH_MODE=shared_secret")
+		}
+	case GRPCAuthModeMTLS:
+		if cfg.GRPCServerCertPath == "" || cfg.GRPCServerKeyPath == "" || cfg.GRPCClientCAPath == "" {
+			problems = append(problems, "BROKER_GRPC_TLS_CERT, BROKER_GRPC_TLS_KEY, and BROKER_GRPC_CLIENT_CA must be set when BROKER_GRPC_AUTH_MODE=mtls")
+		}
+	default:
+		problems = append(problems, fmt.Sprintf("BROKER_GRPC_AUTH_MODE must be one of %q or %q", GRPCAuthModeSharedSecret, GRPCAuthModeMTLS))
+	}
 
-        if raw := strings.TrimSpace(os.Getenv("BROKER_MAX_PAYLOAD_BYTES")); raw != "" {
-                value, err := strconv.ParseInt(raw, 10, 64)
-                if err != nil || value <= 0 {
-                        problems = append(problems, fmt.Sprintf("BROKER_MAX_PAYLOAD_BYTES must be a positive integer, got %q", raw))
+	if raw := strings.TrimSpace(os.Getenv("BROKER_MAX_PAYLOAD_BYTES")); raw != "" {
+		value, err := strconv.ParseInt(raw, 10, 64)
+		if err != nil || value <= 0 {
+			problems = append(problems, fmt.Sprintf("BROKER_MAX_PAYLOAD_BYTES must be a positive integer, got %q", raw))
 		} else {
 			cfg.MaxPayloadBytes = value
 		}
@@ -178,6 +181,15 @@ func Load() (*Config, error) {
 			problems = append(problems, fmt.Sprintf("BROKER_MAX_CLIENTS must be a non-negative integer, got %q", raw))
 		} else {
 			cfg.MaxClients = value
+		}
+	}
+
+	if raw := strings.TrimSpace(os.Getenv("BROKER_BOT_TARGET")); raw != "" {
+		value, err := strconv.Atoi(raw)
+		if err != nil || value < 0 {
+			problems = append(problems, fmt.Sprintf("BROKER_BOT_TARGET must be a non-negative integer, got %q", raw))
+		} else {
+			cfg.BotTargetPopulation = value
 		}
 	}
 
