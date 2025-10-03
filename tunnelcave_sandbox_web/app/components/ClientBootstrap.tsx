@@ -35,7 +35,10 @@ export default function ClientBootstrap() {
             Start the broker server locally and expose the websocket endpoint (default
             <code> ws://localhost:43127/ws</code>).
           </li>
-          <li>Create <code>.env.local</code> and set NEXT_PUBLIC_BROKER_URL to the broker endpoint.</li>
+          <li>
+            Create <code>.env.local</code> (use <code>scripts/setup-env.sh</code> for a starter file) and set NEXT_PUBLIC_BROKER_URL
+            to the broker endpoint.
+          </li>
           <li>Restart this page so the HUD connects using the configured broker URL.</li>
         </ol>
       </section>

@@ -8,6 +8,8 @@ tunnelcave_sandbox_web/.next
 
 tunnelcave_sandbox_web/node_modules/
 tunnelcave_sandbox_web/node_modules/*
+tunnelcave_sandbox_web/.env.local
+tunnelcave_sandbox_web/.env.local.bak
 tunnelcave_sandbox_web/node_modules
 
 node_modules/

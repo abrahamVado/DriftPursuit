@@ -41,7 +41,9 @@ describe('ClientBootstrap', () => {
     const { default: ClientBootstrap } = await import('./ClientBootstrap')
     await renderComponent(<ClientBootstrap />)
     const message = container.querySelector('[data-testid="status-message"]')
-    expect(message?.textContent ?? '').toMatch(/Broker URL missing/i)
+    const text = message?.textContent ?? ''
+    expect(text).toMatch(/Broker URL missing/i)
+    expect(text).toContain('NEXT_PUBLIC_BROKER_URL=ws://localhost:43127/ws')
     await teardown()
   })
 
