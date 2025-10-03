@@ -118,13 +118,21 @@ def build_chaser_bot(
     *,
     toggles: RuntimeToggles | None = None,
     auto_start: bool = True,
+    planning_frequency_hz: float | None = None,
 ) -> FSMIntentBot:
     """Factory for the chaser FSM bot."""
 
     # //4.- Register the search, chase, and attack states with the machine.
     states = [SearchState(config=config), ChaseState(config=config), AttackState(config=config)]
     machine = FiniteStateMachine(states, "search")
-    return FSMIntentBot(client, machine, config.controller_id, toggles=toggles, auto_start=auto_start)
+    return FSMIntentBot(
+        client,
+        machine,
+        config.controller_id,
+        toggles=toggles,
+        auto_start=auto_start,
+        planning_frequency_hz=planning_frequency_hz,
+    )
 
 
 __all__ = ["ChaserConfig", "build_chaser_bot"]

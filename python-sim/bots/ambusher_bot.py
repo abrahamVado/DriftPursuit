@@ -136,13 +136,21 @@ def build_ambusher_bot(
     *,
     toggles: RuntimeToggles | None = None,
     auto_start: bool = True,
+    planning_frequency_hz: float | None = None,
 ) -> FSMIntentBot:
     """Factory for the ambusher FSM bot."""
 
     # //5.- Wire the hide, stalk, strike, and evade states into the FSM runtime.
     states = [HideState(config=config), StalkState(config=config), StrikeState(config=config), EvadeState(config=config)]
     machine = FiniteStateMachine(states, "hide")
-    return FSMIntentBot(client, machine, config.controller_id, toggles=toggles, auto_start=auto_start)
+    return FSMIntentBot(
+        client,
+        machine,
+        config.controller_id,
+        toggles=toggles,
+        auto_start=auto_start,
+        planning_frequency_hz=planning_frequency_hz,
+    )
 
 
 __all__ = ["AmbusherConfig", "build_ambusher_bot"]
