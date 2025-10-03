@@ -29,15 +29,17 @@ type frameBlob struct {
 
 // Writer streams gameplay artefacts to disk using the high-frequency format.
 type Writer struct {
-	mu          sync.Mutex
-	dir         string
-	now         func() time.Time
-	eventFile   *os.File
-	eventStream *snappy.Writer
-	frameFile   *os.File
-	frameStream *zstd.Encoder
-	pending     []frameBlob
-	lastFlush   time.Time
+	mu            sync.Mutex
+	dir           string
+	now           func() time.Time
+	eventFile     *os.File
+	eventStream   *snappy.Writer
+	frameFile     *os.File
+	frameStream   *zstd.Encoder
+	pending       []frameBlob
+	lastFlush     time.Time
+	headerSeed    string
+	headerTerrain TerrainParameters
 }
 
 // Manifest describes the replay bundle layout so tooling can locate artefacts.
@@ -200,6 +202,19 @@ func (w *Writer) AppendFrame(tick uint64, simulatedMs int64, payload []byte) err
 	return nil
 }
 
+// SetHeaderMetadata configures the header persisted alongside the replay bundle.
+func (w *Writer) SetHeaderMetadata(seed string, terrain TerrainParameters) {
+	if w == nil {
+		return
+	}
+	w.mu.Lock()
+	//1.- Cache the seed for later header emission when the writer closes.
+	w.headerSeed = seed
+	//2.- Clone terrain parameters to avoid retaining shared mutable references.
+	w.headerTerrain = terrain.Clone()
+	w.mu.Unlock()
+}
+
 // Flush forces pending frames to be written regardless of cadence.
 func (w *Writer) Flush() error {
 	if w == nil {
@@ -224,8 +239,14 @@ func (w *Writer) Close() error {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 
-	//1.- Attempt every flush/close and surface the first failure for callers to inspect.
+	//1.- Persist the metadata header before dismantling the streaming sinks.
 	var firstErr error
+	headerPath := filepath.Join(w.dir, "header.json")
+	header := Header{SchemaVersion: HeaderSchemaVersion, MatchSeed: w.headerSeed, TerrainParams: w.headerTerrain.Clone(), FilePointer: "manifest.json"}
+	if err := WriteHeader(headerPath, header); err != nil && firstErr == nil {
+		firstErr = err
+	}
+	//2.- Attempt every flush/close and surface the first failure for callers to inspect.
 	if err := w.flushLocked(); err != nil && firstErr == nil {
 		firstErr = err
 	}

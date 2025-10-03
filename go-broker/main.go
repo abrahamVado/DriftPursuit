@@ -121,7 +121,9 @@ type Broker struct {
 	replayFrameInterval time.Duration
 	replayFrameBudget   time.Duration
 
-	matchSession *match.Session
+	matchSession  *match.Session
+	matchSeed     string
+	terrainParams replay.TerrainParameters
 
 	botController *bots.Controller
 
@@ -212,6 +214,19 @@ func WithReplayRecorder(recorder *replay.Recorder) BrokerOption {
 		}
 		//1.- Capture the recorder so replay dumps persist buffered frames during shutdown hooks.
 		b.replayRecorder = recorder
+	}
+}
+
+// WithMatchMetadata configures the deterministic seed and terrain parameters for replays.
+func WithMatchMetadata(seed string, terrain replay.TerrainParameters) BrokerOption {
+	return func(b *Broker) {
+		if b == nil {
+			return
+		}
+		//1.- Capture the match seed so replay headers expose deterministic context.
+		b.matchSeed = seed
+		//2.- Clone the terrain parameters to avoid coupling broker state to caller slices.
+		b.terrainParams = terrain.Clone()
 	}
 }
 
@@ -1093,8 +1108,9 @@ func (b *Broker) DumpReplay(ctx context.Context) (string, error) {
 	if matchID == "" {
 		matchID = "match"
 	}
+	b.replayRecorder.SetHeaderMetadata(b.matchSeed, b.terrainParams)
 	//2.- Trigger the recorder roll so the buffered frames land on disk.
-	path, err := b.replayRecorder.Roll(matchID)
+	path, headerPath, err := b.replayRecorder.Roll(matchID)
 	if err != nil {
 		return "", err
 	}
@@ -1103,6 +1119,9 @@ func (b *Broker) DumpReplay(ctx context.Context) (string, error) {
 		"type":         "replay_dump",
 		"location":     path,
 		"requested_at": time.Now().UTC().Format(time.RFC3339Nano),
+	}
+	if headerPath != "" {
+		payload["header"] = headerPath
 	}
 	data, err := json.Marshal(payload)
 	if err == nil {
@@ -1531,6 +1550,8 @@ func main() {
 		}
 		brokerOptions = append(brokerOptions, WithReplayRecorder(recorder))
 	}
+
+	brokerOptions = append(brokerOptions, WithMatchMetadata(cfg.MatchSeed, replay.TerrainParameters(cfg.TerrainParams)))
 
 	switch cfg.WSAuthMode {
 	case configpkg.WSAuthModeHMAC:

@@ -26,6 +26,8 @@ func TestLoadDefaults(t *testing.T) {
 	t.Setenv("BROKER_REPLAY_DUMP_WINDOW", "")
 	t.Setenv("BROKER_REPLAY_DUMP_BURST", "")
 	t.Setenv("BROKER_REPLAY_DIR", "")
+	t.Setenv("BROKER_MATCH_SEED", "")
+	t.Setenv("BROKER_TERRAIN_PARAMS", "")
 	t.Setenv("BROKER_STATE_PATH", "")
 	t.Setenv("BROKER_STATE_INTERVAL", "")
 	t.Setenv("BROKER_WS_AUTH_MODE", "")
@@ -75,6 +77,12 @@ func TestLoadDefaults(t *testing.T) {
 	}
 	if cfg.ReplayDirectory != "" {
 		t.Fatalf("expected replay directory to default to empty string")
+	}
+	if cfg.MatchSeed != "" {
+		t.Fatalf("expected match seed to default to empty string")
+	}
+	if cfg.TerrainParams != nil {
+		t.Fatalf("expected terrain params to be nil by default")
 	}
 	if cfg.Logging.Level != DefaultLogLevel {
 		t.Fatalf("expected default log level %q, got %q", DefaultLogLevel, cfg.Logging.Level)
@@ -136,6 +144,8 @@ func TestLoadOverrides(t *testing.T) {
 	t.Setenv("BROKER_REPLAY_DUMP_WINDOW", "2m")
 	t.Setenv("BROKER_REPLAY_DUMP_BURST", "3")
 	t.Setenv("BROKER_REPLAY_DIR", "/var/run/replays")
+	t.Setenv("BROKER_MATCH_SEED", "seed-42")
+	t.Setenv("BROKER_TERRAIN_PARAMS", "{\"roughness\":0.7}")
 	t.Setenv("BROKER_STATE_PATH", "/var/run/broker/state.json")
 	t.Setenv("BROKER_STATE_INTERVAL", "15s")
 	t.Setenv("BROKER_WS_AUTH_MODE", WSAuthModeHMAC)
@@ -210,6 +220,12 @@ func TestLoadOverrides(t *testing.T) {
 	if cfg.ReplayDirectory != "/var/run/replays" {
 		t.Fatalf("expected replay directory override, got %q", cfg.ReplayDirectory)
 	}
+	if cfg.MatchSeed != "seed-42" {
+		t.Fatalf("expected match seed override, got %q", cfg.MatchSeed)
+	}
+	if len(cfg.TerrainParams) != 1 || cfg.TerrainParams["roughness"] != 0.7 {
+		t.Fatalf("unexpected terrain params: %#v", cfg.TerrainParams)
+	}
 	if cfg.StateSnapshotPath != "/var/run/broker/state.json" {
 		t.Fatalf("unexpected state snapshot path %q", cfg.StateSnapshotPath)
 	}
@@ -245,6 +261,7 @@ func TestLoadReturnsValidationErrors(t *testing.T) {
 	t.Setenv("BROKER_LOG_COMPRESS", "notabool")
 	t.Setenv("BROKER_REPLAY_DUMP_WINDOW", "-")
 	t.Setenv("BROKER_REPLAY_DUMP_BURST", "0")
+	t.Setenv("BROKER_TERRAIN_PARAMS", "not-json")
 	t.Setenv("BROKER_STATE_INTERVAL", "-1s")
 	t.Setenv("BROKER_WS_AUTH_MODE", "invalid")
 	t.Setenv("BROKER_GRPC_AUTH_MODE", "invalid")
@@ -268,6 +285,7 @@ func TestLoadReturnsValidationErrors(t *testing.T) {
 		"BROKER_STATE_INTERVAL",
 		"BROKER_WS_AUTH_MODE",
 		"BROKER_GRPC_AUTH_MODE",
+		"BROKER_TERRAIN_PARAMS",
 	} {
 		if !strings.Contains(err.Error(), want) {
 			t.Fatalf("expected error to mention %s, got %q", want, err.Error())

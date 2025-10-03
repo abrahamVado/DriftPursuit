@@ -25,6 +25,8 @@ func TestWriterAppendAndFlushCadence(t *testing.T) {
 		t.Fatalf("create writer: %v", err)
 	}
 
+	writer.SetHeaderMetadata("seed-abc", TerrainParameters{"roughness": 0.6})
+
 	if manifest.FrameIntervalMs != 200 {
 		t.Fatalf("expected frame interval 200 ms, got %d", manifest.FrameIntervalMs)
 	}
@@ -134,6 +136,20 @@ func TestWriterAppendAndFlushCadence(t *testing.T) {
 			t.Fatalf("unexpected frame payload size: %d", len(fr.Payload))
 		}
 	}
+
+	header, err := ReadHeader(filepath.Join(writer.Directory(), "header.json"))
+	if err != nil {
+		t.Fatalf("read header: %v", err)
+	}
+	if header.MatchSeed != "seed-abc" {
+		t.Fatalf("unexpected header seed: %q", header.MatchSeed)
+	}
+	if header.FilePointer != "manifest.json" {
+		t.Fatalf("unexpected header file pointer: %q", header.FilePointer)
+	}
+	if header.TerrainParams["roughness"] != 0.6 {
+		t.Fatalf("unexpected header terrain params: %#v", header.TerrainParams)
+	}
 }
 
 func TestWriterManualFlush(t *testing.T) {
@@ -146,6 +162,8 @@ func TestWriterManualFlush(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create writer: %v", err)
 	}
+
+	writer.SetHeaderMetadata("seed-manual", TerrainParameters{"roughness": 0.3})
 
 	payload := []byte{0xAA, 0xBB}
 
@@ -183,6 +201,14 @@ func TestWriterManualFlush(t *testing.T) {
 	frames := decodeFrameBlobs(frameBytes)
 	if len(frames) != 2 {
 		t.Fatalf("expected 2 frames, got %d", len(frames))
+	}
+
+	header, err := ReadHeader(filepath.Join(writer.Directory(), "header.json"))
+	if err != nil {
+		t.Fatalf("read header: %v", err)
+	}
+	if header.MatchSeed != "seed-manual" {
+		t.Fatalf("unexpected manual header seed: %q", header.MatchSeed)
 	}
 }
 

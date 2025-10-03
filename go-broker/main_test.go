@@ -34,6 +34,7 @@ import (
 	"driftpursuit/broker/internal/logging"
 	"driftpursuit/broker/internal/networking"
 	pb "driftpursuit/broker/internal/proto/pb"
+	"driftpursuit/broker/internal/replay"
 	"driftpursuit/broker/internal/state"
 	"github.com/gorilla/websocket"
 	"google.golang.org/protobuf/encoding/protojson"
@@ -1507,5 +1508,44 @@ func TestPublishWorldSnapshotHonoursBandwidthThrottle(t *testing.T) {
 	sizes := broker.snapshotMetrics.BytesPerClient()
 	if sizes[client.id] != 0 {
 		t.Fatalf("expected bytes gauge to report throttled payload size 0, got %d", sizes[client.id])
+	}
+}
+
+func TestDumpReplayPersistsHeader(t *testing.T) {
+	tmp := t.TempDir()
+	base := time.Date(2024, 7, 15, 16, 0, 0, 0, time.UTC)
+	clock := func() time.Time { return base }
+
+	recorder, err := replay.NewRecorder(tmp, clock)
+	if err != nil {
+		t.Fatalf("NewRecorder: %v", err)
+	}
+
+	logger := logging.NewTestLogger()
+	broker := NewBroker(configpkg.DefaultMaxPayloadBytes, 0, base, logger,
+		WithReplayRecorder(recorder),
+		WithMatchMetadata("seed-test", replay.TerrainParameters{"roughness": 0.9}),
+	)
+
+	broker.replayRecorder.RecordTick(1, 0, []byte(`{"tick":1}`))
+
+	path, err := broker.DumpReplay(context.Background())
+	if err != nil {
+		t.Fatalf("DumpReplay: %v", err)
+	}
+
+	headerPath := path + ".header.json"
+	header, err := replay.ReadHeader(headerPath)
+	if err != nil {
+		t.Fatalf("ReadHeader: %v", err)
+	}
+	if header.MatchSeed != "seed-test" {
+		t.Fatalf("unexpected header seed: %q", header.MatchSeed)
+	}
+	if header.TerrainParams["roughness"] != 0.9 {
+		t.Fatalf("unexpected header terrain params: %#v", header.TerrainParams)
+	}
+	if header.FilePointer != filepath.Base(path) {
+		t.Fatalf("unexpected header file pointer: %q", header.FilePointer)
 	}
 }
