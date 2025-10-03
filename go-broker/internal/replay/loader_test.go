@@ -18,6 +18,7 @@ func TestLoaderReplayOrdering(t *testing.T) {
 		t.Fatalf("NewRecorder: %v", err)
 	}
 
+	recorder.SetHeaderMetadata("seed-beta", nil)
 	recorder.RecordEvent(5, 900, []byte(`{"event":"late"}`))
 	recorder.RecordWorldFrame(3, 600, []byte(`{"frame":3}`))
 	recorder.RecordTick(1, 100, []byte(`{"tick":1}`))
@@ -25,13 +26,16 @@ func TestLoaderReplayOrdering(t *testing.T) {
 	recorder.RecordWorldFrame(2, 400, []byte(`{"frame":2}`))
 	recorder.RecordTick(2, 300, []byte(`{"tick":2}`))
 
-	path, err := recorder.Roll("beta")
+	path, headerPath, err := recorder.Roll("beta")
 	if err != nil {
 		t.Fatalf("Roll: %v", err)
 	}
 
 	if filepath.Ext(path) != ".gz" {
 		t.Fatalf("expected gzip artefact, got %s", path)
+	}
+	if filepath.Ext(headerPath) != ".json" {
+		t.Fatalf("expected json header, got %s", headerPath)
 	}
 
 	loader, err := Load(path)

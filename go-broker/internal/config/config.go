@@ -1,6 +1,7 @@
 package config
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"strconv"
@@ -66,6 +67,8 @@ type Config struct {
 	ReplayDumpWindow      time.Duration
 	ReplayDumpBurst       int
 	ReplayDirectory       string
+	MatchSeed             string
+	TerrainParams         map[string]float64
 	Logging               LoggingConfig
 	StateSnapshotPath     string
 	StateSnapshotInterval time.Duration
@@ -106,6 +109,7 @@ func Load() (*Config, error) {
 		ReplayDumpWindow: DefaultReplayDumpWindow,
 		ReplayDumpBurst:  DefaultReplayDumpBurst,
 		ReplayDirectory:  strings.TrimSpace(os.Getenv("BROKER_REPLAY_DIR")),
+		MatchSeed:        strings.TrimSpace(os.Getenv("BROKER_MATCH_SEED")),
 		Logging: LoggingConfig{
 			Level:      strings.TrimSpace(getString("BROKER_LOG_LEVEL", DefaultLogLevel)),
 			Path:       strings.TrimSpace(getString("BROKER_LOG_PATH", DefaultLogPath)),
@@ -190,6 +194,15 @@ func Load() (*Config, error) {
 			problems = append(problems, fmt.Sprintf("BROKER_BOT_TARGET must be a non-negative integer, got %q", raw))
 		} else {
 			cfg.BotTargetPopulation = value
+		}
+	}
+
+	if raw := strings.TrimSpace(os.Getenv("BROKER_TERRAIN_PARAMS")); raw != "" {
+		var parsed map[string]float64
+		if err := json.Unmarshal([]byte(raw), &parsed); err != nil {
+			problems = append(problems, fmt.Sprintf("BROKER_TERRAIN_PARAMS must be JSON object of numeric values, got %q", raw))
+		} else {
+			cfg.TerrainParams = parsed
 		}
 	}
 

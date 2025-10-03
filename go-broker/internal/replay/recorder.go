@@ -39,16 +39,18 @@ type EventRecord struct {
 
 // Recorder buffers authoritative tick deltas until they are flushed to disk.
 type Recorder struct {
-	mu          sync.Mutex
-	dir         string
-	now         func() time.Time
-	frames      []TickFrame
-	worldFrames []WorldFrame
-	events      []EventRecord
-	bytes       int64
-	dumps       int64
-	lastDump    time.Time
-	lastDumpURI string
+	mu            sync.Mutex
+	dir           string
+	now           func() time.Time
+	frames        []TickFrame
+	worldFrames   []WorldFrame
+	events        []EventRecord
+	bytes         int64
+	dumps         int64
+	lastDump      time.Time
+	lastDumpURI   string
+	headerSeed    string
+	headerTerrain TerrainParameters
 }
 
 // Stats summarises recorder health for monitoring endpoints.
@@ -121,17 +123,30 @@ func (r *Recorder) RecordEvent(tick uint64, simulatedMs int64, payload []byte) {
 	r.mu.Unlock()
 }
 
-// Roll writes the buffered frames to disk and clears the in-memory buffer.
-func (r *Recorder) Roll(matchID string) (string, error) {
+// SetHeaderMetadata configures the replay metadata embedded in the header record.
+func (r *Recorder) SetHeaderMetadata(seed string, terrain TerrainParameters) {
 	if r == nil {
-		return "", fmt.Errorf("recorder not configured")
+		return
+	}
+	r.mu.Lock()
+	//1.- Store deterministic seed information for subsequent roll invocations.
+	r.headerSeed = seed
+	//2.- Clone the terrain parameters so future mutations by callers do not race.
+	r.headerTerrain = terrain.Clone()
+	r.mu.Unlock()
+}
+
+// Roll writes the buffered frames to disk and clears the in-memory buffer.
+func (r *Recorder) Roll(matchID string) (string, string, error) {
+	if r == nil {
+		return "", "", fmt.Errorf("recorder not configured")
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
 	//1.- Bail out gracefully when nothing has been recorded yet.
 	if len(r.frames) == 0 && len(r.worldFrames) == 0 && len(r.events) == 0 {
-		return "", fmt.Errorf("no replay frames buffered")
+		return "", "", fmt.Errorf("no replay frames buffered")
 	}
 
 	cleanedID := matchIDCleaner.ReplaceAllString(matchID, "")
@@ -206,24 +221,36 @@ func (r *Recorder) Roll(matchID string) (string, error) {
 
 	data, err := json.MarshalIndent(envelope, "", "  ")
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
 	file, err := os.Create(path)
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
 	writer := gzip.NewWriter(file)
 	if _, err := writer.Write(data); err != nil {
 		_ = writer.Close()
 		_ = file.Close()
-		return "", err
+		return "", "", err
 	}
 	if err := writer.Close(); err != nil {
 		_ = file.Close()
-		return "", err
+		return "", "", err
 	}
 	if err := file.Close(); err != nil {
-		return "", err
+		return "", "", err
+	}
+
+	//1.- Persist a companion header so catalogues can expose deterministic metadata.
+	header := Header{
+		SchemaVersion: HeaderSchemaVersion,
+		MatchSeed:     r.headerSeed,
+		TerrainParams: r.headerTerrain.Clone(),
+		FilePointer:   filename,
+	}
+	headerPath := path + ".header.json"
+	if err := WriteHeader(headerPath, header); err != nil {
+		return "", "", err
 	}
 
 	//3.- Reset the buffer so a fresh match can begin immediately.
@@ -234,7 +261,7 @@ func (r *Recorder) Roll(matchID string) (string, error) {
 	r.dumps++
 	r.lastDump = r.now().UTC()
 	r.lastDumpURI = path
-	return path, nil
+	return path, headerPath, nil
 }
 
 // Snapshot returns statistics describing the recorder state.

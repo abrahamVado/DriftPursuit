@@ -1,9 +1,27 @@
 # High-Frequency Replay Format
 
 ## Bundle Layout
+- `header.json` — JSON header describing match metadata for catalogue tooling.
 - `manifest.json` — JSON manifest describing paths and cadence metadata.
 - `events.jsonl.sz` — Snappy-compressed JSON lines, each describing a gameplay event.
 - `frames.bin.zst` — Zstandard-compressed binary stream containing cadence-controlled frame blobs.
+
+## Header Schema
+```json
+{
+  "schema_version": 1,
+  "match_seed": "deterministic match seed",
+  "terrain_params": {
+    "roughness": 0.5
+  },
+  "file_pointer": "manifest.json"
+}
+```
+
+1. The `schema_version` tracks compatibility for consumers parsing the header.
+2. The `match_seed` captures the deterministic RNG seed broadcast at match start.
+3. `terrain_params` stores numeric terrain tuning metadata when available.
+4. `file_pointer` references the replay entry point relative to the header file.
 
 ## Manifest Schema
 ```json

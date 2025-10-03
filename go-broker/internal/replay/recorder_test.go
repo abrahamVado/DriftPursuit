@@ -20,6 +20,8 @@ func TestRecorderRollsToDisk(t *testing.T) {
 		t.Fatalf("NewRecorder: %v", err)
 	}
 
+	recorder.SetHeaderMetadata("seed-123", TerrainParameters{"roughness": 0.8})
+
 	recorder.RecordTick(1, 0, []byte(`{"tick":1}`))
 	recorder.RecordWorldFrame(1, 0, []byte(`{"state":"frame"}`))
 	recorder.RecordEvent(1, 0, []byte(`{"event":"spawn"}`))
@@ -41,12 +43,15 @@ func TestRecorderRollsToDisk(t *testing.T) {
 		t.Fatalf("expected buffered bytes to be tracked")
 	}
 
-	path, err := recorder.Roll("alpha")
+	path, headerPath, err := recorder.Roll("alpha")
 	if err != nil {
 		t.Fatalf("Roll: %v", err)
 	}
 	if filepath.Dir(path) != dir {
 		t.Fatalf("unexpected roll directory: %s", path)
+	}
+	if filepath.Dir(headerPath) != dir {
+		t.Fatalf("unexpected header directory: %s", headerPath)
 	}
 
 	artifact, err := os.Open(path)
@@ -96,6 +101,23 @@ func TestRecorderRollsToDisk(t *testing.T) {
 	}
 	if len(dump.Events) != 2 {
 		t.Fatalf("expected two events, got %d", len(dump.Events))
+	}
+
+	header, err := ReadHeader(headerPath)
+	if err != nil {
+		t.Fatalf("ReadHeader: %v", err)
+	}
+	if header.SchemaVersion != HeaderSchemaVersion {
+		t.Fatalf("unexpected header schema version: %d", header.SchemaVersion)
+	}
+	if header.MatchSeed != "seed-123" {
+		t.Fatalf("unexpected header seed: %q", header.MatchSeed)
+	}
+	if header.FilePointer != filepath.Base(path) {
+		t.Fatalf("unexpected header file pointer: %q", header.FilePointer)
+	}
+	if header.TerrainParams == nil || header.TerrainParams["roughness"] != 0.8 {
+		t.Fatalf("unexpected terrain params: %#v", header.TerrainParams)
 	}
 
 	stats = recorder.Snapshot()
