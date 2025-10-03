@@ -2,12 +2,8 @@ import { describe, expect, it, vi } from "vitest";
 import type { InterpolatedState } from "../networking/interpolator";
 import type { VehicleRosterEntry } from "../vehicleRoster";
 import { VehicleGeometryFactory } from "./procedural/vehicleFactory";
-import {
-  CONTROL_PANEL_EVENT,
-  type ControlPanelIntentDetail,
-  VehicleSceneManager,
-  type VehicleStateSource,
-} from "./vehicleSceneManager";
+import { CONTROL_PANEL_EVENT, type ControlPanelIntentDetail } from "./controlPanelEvents";
+import { VehicleSceneManager, type VehicleStateSource } from "./vehicleSceneManager";
 
 class MockStateSource extends EventTarget implements VehicleStateSource {
   private readonly states = new Map<string, InterpolatedState>();

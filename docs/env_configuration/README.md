@@ -7,10 +7,14 @@ The Drift Pursuit sandbox relies on a small `.env.local` file inside `tunnelcave
 | Key | Purpose | Local sample |
 | --- | --- | --- |
 | `NEXT_PUBLIC_BROKER_URL` | Websocket endpoint for exchanging HUD telemetry with the broker service. | `ws://localhost:43127/ws` |
+| `SIM_BRIDGE_URL` | Server-side override for the simulation bridge origin used by the API proxy. | `http://localhost:8000` |
 | `NEXT_PUBLIC_SIM_BRIDGE_URL` | HTTP origin that exposes the simulation bridge handshake and command endpoints. | `http://localhost:8000` |
 
 > [!TIP]
-> Run `scripts/setup-env.sh` from the repository root to scaffold a `.env.local` file pre-populated with the values above, including inline comments that explain how to adjust them for non-local setups.
+> Run `scripts/setup-env.sh` from the repository root to scaffold a `.env.local` file pre-populated with the values above, including inline comments that explain how to adjust them for non-local setups. When deploying the Next.js frontend separately from the bridge, set `SIM_BRIDGE_URL` on the server to avoid CORS preflight failures.
+
+> [!NOTE]
+> When the Next.js frontend runs inside Docker, `localhost` resolves to the container itself. Point `SIM_BRIDGE_URL` (and `NEXT_PUBLIC_SIM_BRIDGE_URL` when needed) at `http://host.docker.internal:8000` so the proxy can reach a bridge running on your host machine.
 
 ## Manual Setup Checklist
 

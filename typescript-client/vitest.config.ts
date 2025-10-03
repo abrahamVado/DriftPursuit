@@ -5,8 +5,8 @@ export default defineConfig({
   test: {
     //1.- Use the node environment so three.js can run without DOM APIs.
     environment: "node",
-    //2.- Limit discovery to world geometry and scene manager tests to avoid executing legacy harness files.
-    include: ["src/world/procedural/**/*.test.ts", "src/world/vehicleSceneManager.test.ts"],
+    //2.- Discover all world scoped tests so shared event utilities run alongside scene manager coverage.
+    include: ["src/world/**/*.test.ts"],
     //3.- Enable globals for consistency with other TypeScript tests in the project.
     globals: false,
   },
