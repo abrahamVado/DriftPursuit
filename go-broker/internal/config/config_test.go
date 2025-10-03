@@ -26,6 +26,8 @@ func TestLoadDefaults(t *testing.T) {
 	t.Setenv("BROKER_REPLAY_DUMP_WINDOW", "")
 	t.Setenv("BROKER_REPLAY_DUMP_BURST", "")
 	t.Setenv("BROKER_REPLAY_DIR", "")
+	t.Setenv("BROKER_REPLAY_MAX_MATCHES", "")
+	t.Setenv("BROKER_REPLAY_MAX_AGE_DAYS", "")
 	t.Setenv("BROKER_MATCH_SEED", "")
 	t.Setenv("BROKER_TERRAIN_PARAMS", "")
 	t.Setenv("BROKER_STATE_PATH", "")
@@ -77,6 +79,12 @@ func TestLoadDefaults(t *testing.T) {
 	}
 	if cfg.ReplayDirectory != "" {
 		t.Fatalf("expected replay directory to default to empty string")
+	}
+	if cfg.ReplayRetentionMatches != DefaultReplayRetentionMatches {
+		t.Fatalf("expected default replay retention matches %d, got %d", DefaultReplayRetentionMatches, cfg.ReplayRetentionMatches)
+	}
+	if cfg.ReplayRetentionDays != DefaultReplayRetentionDays {
+		t.Fatalf("expected default replay retention days %d, got %d", DefaultReplayRetentionDays, cfg.ReplayRetentionDays)
 	}
 	if cfg.MatchSeed != "" {
 		t.Fatalf("expected match seed to default to empty string")
@@ -144,6 +152,8 @@ func TestLoadOverrides(t *testing.T) {
 	t.Setenv("BROKER_REPLAY_DUMP_WINDOW", "2m")
 	t.Setenv("BROKER_REPLAY_DUMP_BURST", "3")
 	t.Setenv("BROKER_REPLAY_DIR", "/var/run/replays")
+	t.Setenv("BROKER_REPLAY_MAX_MATCHES", "7")
+	t.Setenv("BROKER_REPLAY_MAX_AGE_DAYS", "14")
 	t.Setenv("BROKER_MATCH_SEED", "seed-42")
 	t.Setenv("BROKER_TERRAIN_PARAMS", "{\"roughness\":0.7}")
 	t.Setenv("BROKER_STATE_PATH", "/var/run/broker/state.json")
@@ -220,6 +230,12 @@ func TestLoadOverrides(t *testing.T) {
 	if cfg.ReplayDirectory != "/var/run/replays" {
 		t.Fatalf("expected replay directory override, got %q", cfg.ReplayDirectory)
 	}
+	if cfg.ReplayRetentionMatches != 7 {
+		t.Fatalf("expected replay retention matches 7, got %d", cfg.ReplayRetentionMatches)
+	}
+	if cfg.ReplayRetentionDays != 14 {
+		t.Fatalf("expected replay retention days 14, got %d", cfg.ReplayRetentionDays)
+	}
 	if cfg.MatchSeed != "seed-42" {
 		t.Fatalf("expected match seed override, got %q", cfg.MatchSeed)
 	}
@@ -261,6 +277,8 @@ func TestLoadReturnsValidationErrors(t *testing.T) {
 	t.Setenv("BROKER_LOG_COMPRESS", "notabool")
 	t.Setenv("BROKER_REPLAY_DUMP_WINDOW", "-")
 	t.Setenv("BROKER_REPLAY_DUMP_BURST", "0")
+	t.Setenv("BROKER_REPLAY_MAX_MATCHES", "-1")
+	t.Setenv("BROKER_REPLAY_MAX_AGE_DAYS", "-2")
 	t.Setenv("BROKER_TERRAIN_PARAMS", "not-json")
 	t.Setenv("BROKER_STATE_INTERVAL", "-1s")
 	t.Setenv("BROKER_WS_AUTH_MODE", "invalid")
@@ -282,6 +300,8 @@ func TestLoadReturnsValidationErrors(t *testing.T) {
 		"BROKER_LOG_COMPRESS",
 		"BROKER_REPLAY_DUMP_WINDOW",
 		"BROKER_REPLAY_DUMP_BURST",
+		"BROKER_REPLAY_MAX_MATCHES",
+		"BROKER_REPLAY_MAX_AGE_DAYS",
 		"BROKER_STATE_INTERVAL",
 		"BROKER_WS_AUTH_MODE",
 		"BROKER_GRPC_AUTH_MODE",

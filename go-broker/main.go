@@ -118,6 +118,7 @@ type Broker struct {
 	radarScanner      *radar.Scanner
 
 	replayRecorder      *replay.Recorder
+	replayCleaner       *replay.Cleaner
 	replayFrameInterval time.Duration
 	replayFrameBudget   time.Duration
 
@@ -214,6 +215,17 @@ func WithReplayRecorder(recorder *replay.Recorder) BrokerOption {
 		}
 		//1.- Capture the recorder so replay dumps persist buffered frames during shutdown hooks.
 		b.replayRecorder = recorder
+	}
+}
+
+// 5.- WithReplayCleaner registers a retention cleaner that manages replay artefacts on disk.
+func WithReplayCleaner(cleaner *replay.Cleaner) BrokerOption {
+	return func(b *Broker) {
+		if b == nil || cleaner == nil {
+			return
+		}
+		//1.- Attach the cleaner so metrics handlers can expose storage usage snapshots.
+		b.replayCleaner = cleaner
 	}
 }
 
@@ -1543,12 +1555,23 @@ func main() {
 	if cfg.ReplayDirectory == "" {
 		cfg.ReplayDirectory = filepath.Join("storage", "replays")
 	}
+	var replayCleaner *replay.Cleaner
 	if cfg.ReplayDirectory != "" {
 		recorder, err := replay.NewRecorder(cfg.ReplayDirectory, nil)
 		if err != nil {
 			logger.Fatal("failed to initialise replay recorder", logging.Error(err))
 		}
 		brokerOptions = append(brokerOptions, WithReplayRecorder(recorder))
+
+		policy := replay.RetentionPolicy{MaxMatches: cfg.ReplayRetentionMatches}
+		if cfg.ReplayRetentionDays > 0 {
+			policy.MaxAge = time.Duration(cfg.ReplayRetentionDays) * 24 * time.Hour
+		}
+		cleanerLogger := logger.With(logging.String("component", "replay_retention"))
+		replayCleaner = replay.NewCleaner(cfg.ReplayDirectory, policy, cleanerLogger)
+		if replayCleaner != nil {
+			brokerOptions = append(brokerOptions, WithReplayCleaner(replayCleaner))
+		}
 	}
 
 	brokerOptions = append(brokerOptions, WithMatchMetadata(cfg.MatchSeed, replay.TerrainParameters(cfg.TerrainParams)))
@@ -1566,6 +1589,14 @@ func main() {
 	}
 
 	broker := NewBroker(maxPayloadBytes, maxClients, startedAt, logger, brokerOptions...)
+
+	var retentionCancel context.CancelFunc
+	if replayCleaner != nil {
+		//1.- Launch the retention loop so replay artefacts are pruned in the background.
+		retentionCtx, cancel := context.WithCancel(context.Background())
+		retentionCancel = cancel
+		go replayCleaner.Run(retentionCtx, time.Hour)
+	}
 
 	grpcLogger := logger.With(logging.String("component", "grpc"))
 	grpcOptions, grpcCleanup, err := configureGRPCSecurity(cfg, grpcLogger)
@@ -1597,6 +1628,10 @@ func main() {
 	simLoop.Start(simCtx)
 	defer simCancel()
 	defer simLoop.Stop()
+
+	if retentionCancel != nil {
+		defer retentionCancel()
+	}
 
 	radarCtx, radarCancel := context.WithCancel(context.Background())
 	broker.StartRadar(radarCtx)
@@ -1661,6 +1696,14 @@ func buildHandler(b *Broker, cfg *configpkg.Config) http.Handler {
 				stats.LastDumpTime = snap.LastDumpTime
 			}
 			return stats
+		},
+		ReplayStorage: func() replay.StorageStats {
+			//1.- Default to zeroed stats so metrics render even when retention is disabled.
+			storage := replay.StorageStats{}
+			if b.replayCleaner != nil {
+				storage = b.replayCleaner.Stats()
+			}
+			return storage
 		},
 		AdminToken:  adminToken,
 		RateLimiter: limiter,

@@ -25,6 +25,10 @@ const (
 	DefaultReplayDumpWindow = time.Minute
 	// DefaultReplayDumpBurst sets how many replay dump requests may be made per window.
 	DefaultReplayDumpBurst = 1
+	// DefaultReplayRetentionMatches keeps all matches unless explicitly limited.
+	DefaultReplayRetentionMatches = 0
+	// DefaultReplayRetentionDays keeps all matches regardless of age by default.
+	DefaultReplayRetentionDays = 0
 
 	// DefaultLogLevel controls verbosity for broker logs.
 	DefaultLogLevel = "info"
@@ -55,32 +59,34 @@ const (
 
 // Config captures all runtime tunables for the broker service.
 type Config struct {
-	Address               string
-	GRPCAddress           string
-	AllowedOrigins        []string
-	MaxPayloadBytes       int64
-	PingInterval          time.Duration
-	MaxClients            int
-	TLSCertPath           string
-	TLSKeyPath            string
-	AdminToken            string
-	ReplayDumpWindow      time.Duration
-	ReplayDumpBurst       int
-	ReplayDirectory       string
-	MatchSeed             string
-	TerrainParams         map[string]float64
-	Logging               LoggingConfig
-	StateSnapshotPath     string
-	StateSnapshotInterval time.Duration
-	WSAuthMode            string
-	WSHMACSecret          string
-	GRPCAuthMode          string
-	GRPCSharedSecret      string
-	GRPCServerCertPath    string
-	GRPCServerKeyPath     string
-	GRPCClientCAPath      string
-	BotControllerURL      string
-	BotTargetPopulation   int
+	Address                string
+	GRPCAddress            string
+	AllowedOrigins         []string
+	MaxPayloadBytes        int64
+	PingInterval           time.Duration
+	MaxClients             int
+	TLSCertPath            string
+	TLSKeyPath             string
+	AdminToken             string
+	ReplayDumpWindow       time.Duration
+	ReplayDumpBurst        int
+	ReplayDirectory        string
+	ReplayRetentionMatches int
+	ReplayRetentionDays    int
+	MatchSeed              string
+	TerrainParams          map[string]float64
+	Logging                LoggingConfig
+	StateSnapshotPath      string
+	StateSnapshotInterval  time.Duration
+	WSAuthMode             string
+	WSHMACSecret           string
+	GRPCAuthMode           string
+	GRPCSharedSecret       string
+	GRPCServerCertPath     string
+	GRPCServerKeyPath      string
+	GRPCClientCAPath       string
+	BotControllerURL       string
+	BotTargetPopulation    int
 }
 
 // LoggingConfig captures structured logging configuration options.
@@ -97,19 +103,21 @@ type LoggingConfig struct {
 // and returning descriptive errors for invalid overrides.
 func Load() (*Config, error) {
 	cfg := &Config{
-		Address:          getString("BROKER_ADDR", DefaultAddr),
-		GRPCAddress:      getString("BROKER_GRPC_ADDR", DefaultGRPCAddr),
-		AllowedOrigins:   parseList(os.Getenv("BROKER_ALLOWED_ORIGINS")),
-		MaxPayloadBytes:  DefaultMaxPayloadBytes,
-		PingInterval:     DefaultPingInterval,
-		MaxClients:       DefaultMaxClients,
-		TLSCertPath:      strings.TrimSpace(os.Getenv("BROKER_TLS_CERT")),
-		TLSKeyPath:       strings.TrimSpace(os.Getenv("BROKER_TLS_KEY")),
-		AdminToken:       strings.TrimSpace(os.Getenv("BROKER_ADMIN_TOKEN")),
-		ReplayDumpWindow: DefaultReplayDumpWindow,
-		ReplayDumpBurst:  DefaultReplayDumpBurst,
-		ReplayDirectory:  strings.TrimSpace(os.Getenv("BROKER_REPLAY_DIR")),
-		MatchSeed:        strings.TrimSpace(os.Getenv("BROKER_MATCH_SEED")),
+		Address:                getString("BROKER_ADDR", DefaultAddr),
+		GRPCAddress:            getString("BROKER_GRPC_ADDR", DefaultGRPCAddr),
+		AllowedOrigins:         parseList(os.Getenv("BROKER_ALLOWED_ORIGINS")),
+		MaxPayloadBytes:        DefaultMaxPayloadBytes,
+		PingInterval:           DefaultPingInterval,
+		MaxClients:             DefaultMaxClients,
+		TLSCertPath:            strings.TrimSpace(os.Getenv("BROKER_TLS_CERT")),
+		TLSKeyPath:             strings.TrimSpace(os.Getenv("BROKER_TLS_KEY")),
+		AdminToken:             strings.TrimSpace(os.Getenv("BROKER_ADMIN_TOKEN")),
+		ReplayDumpWindow:       DefaultReplayDumpWindow,
+		ReplayDumpBurst:        DefaultReplayDumpBurst,
+		ReplayDirectory:        strings.TrimSpace(os.Getenv("BROKER_REPLAY_DIR")),
+		ReplayRetentionMatches: DefaultReplayRetentionMatches,
+		ReplayRetentionDays:    DefaultReplayRetentionDays,
+		MatchSeed:              strings.TrimSpace(os.Getenv("BROKER_MATCH_SEED")),
 		Logging: LoggingConfig{
 			Level:      strings.TrimSpace(getString("BROKER_LOG_LEVEL", DefaultLogLevel)),
 			Path:       strings.TrimSpace(getString("BROKER_LOG_PATH", DefaultLogPath)),
@@ -257,6 +265,24 @@ func Load() (*Config, error) {
 			problems = append(problems, fmt.Sprintf("BROKER_REPLAY_DUMP_BURST must be a positive integer, got %q", raw))
 		} else {
 			cfg.ReplayDumpBurst = value
+		}
+	}
+
+	if raw := strings.TrimSpace(os.Getenv("BROKER_REPLAY_MAX_MATCHES")); raw != "" {
+		value, err := strconv.Atoi(raw)
+		if err != nil || value < 0 {
+			problems = append(problems, fmt.Sprintf("BROKER_REPLAY_MAX_MATCHES must be a non-negative integer, got %q", raw))
+		} else {
+			cfg.ReplayRetentionMatches = value
+		}
+	}
+
+	if raw := strings.TrimSpace(os.Getenv("BROKER_REPLAY_MAX_AGE_DAYS")); raw != "" {
+		value, err := strconv.Atoi(raw)
+		if err != nil || value < 0 {
+			problems = append(problems, fmt.Sprintf("BROKER_REPLAY_MAX_AGE_DAYS must be a non-negative integer, got %q", raw))
+		} else {
+			cfg.ReplayRetentionDays = value
 		}
 	}
 
