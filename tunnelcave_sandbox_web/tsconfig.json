@@ -12,5 +12,5 @@
     "verbatimModuleSyntax": true,
     "noEmit": true
   },
-  "include": ["src", "env.d.ts"]
+  "include": ["src", "app", "env.d.ts"]
 }
