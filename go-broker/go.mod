@@ -7,6 +7,8 @@ toolchain go1.24.3
 require github.com/gorilla/websocket v1.5.0
 
 require (
+	github.com/golang/snappy v0.0.4
+	github.com/klauspost/compress v1.17.9
 	google.golang.org/grpc v1.75.1
 	google.golang.org/protobuf v1.36.6
 )
