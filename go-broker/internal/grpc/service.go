@@ -11,6 +11,8 @@ import (
 	"google.golang.org/grpc/status"
 )
 
+const intentProcessTimeout = 40 * time.Millisecond
+
 // Option customises the behaviour of the gRPC streaming service.
 type Option func(*Service)
 
@@ -173,7 +175,14 @@ func (s *Service) PublishIntents(stream brokerpb.BrokerStreamService_PublishInte
 			summary.Rejected++
 			continue
 		}
-		result := s.broker.ProcessIntent(ctx, &IntentSubmission{ClientID: frame.GetClientId(), Payload: payload})
+		//4.- Guard the broker call so bots receive feedback within the SLA.
+		intentCtx, cancel := context.WithTimeout(ctx, intentProcessTimeout)
+		result := s.broker.ProcessIntent(intentCtx, &IntentSubmission{ClientID: frame.GetClientId(), Payload: payload})
+		cancel()
+		if errors.Is(intentCtx.Err(), context.DeadlineExceeded) {
+			summary.Rejected++
+			continue
+		}
 		if result.Err != nil {
 			summary.Rejected++
 			if result.Disconnect {

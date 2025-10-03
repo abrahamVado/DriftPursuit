@@ -7,6 +7,9 @@ import {
   groundVehiclePlaceholders,
   skiffLoadouts,
   skiffStats,
+  resolveWeaponBalance,
+  weaponBalanceCatalog,
+  decoyBalance,
 } from "./gameplayConfig";
 
 //1.- Verify each stat so mismatches between client and server are immediately obvious.
@@ -82,3 +85,25 @@ assert.strictEqual(
 assert.strictEqual(clampDamageMultiplier(0), 1, "zero multiplier should clamp to neutral");
 assert.strictEqual(clampDamageMultiplier(-2), 1, "negative multiplier should clamp to neutral");
 assert.strictEqual(clampDamageMultiplier(1.5), 1.5, "positive multiplier should remain unchanged");
+
+//6.- Ensure the weapon balance catalog is immutable to prevent runtime drift.
+assert.ok(Object.isFrozen(weaponBalanceCatalog), "weapon balance catalog should be frozen");
+assert.ok(Object.isFrozen(weaponBalanceCatalog.archetypes), "archetype map should be frozen");
+assert.ok(Object.isFrozen(weaponBalanceCatalog.weapons), "weapon map should be frozen");
+
+//7.- Verify weapon resolution merges archetype defaults with variant overrides.
+const missileBalance = resolveWeaponBalance("micro-missile");
+assert.strictEqual(missileBalance.archetype, "missile", "micro missile should use missile archetype");
+assert.ok(missileBalance.projectileSpeed && missileBalance.projectileSpeed > 0, "missile should expose projectile speed");
+assert.ok(
+  Object.isFrozen(missileBalance),
+  "resolved weapon balance should be immutable to mirror server behaviour",
+);
+
+const plasmaBalance = resolveWeaponBalance("heavy-plasma");
+assert.strictEqual(plasmaBalance.damage, 12, "heavy plasma variant should override damage");
+assert.ok(plasmaBalance.beamEffect?.includes("plasma"), "heavy plasma should expose custom beam effect");
+
+//8.- Decoy balance should surface default ECM tuning to the presentation layer.
+assert.strictEqual(decoyBalance.activationDurationSeconds, 4, "decoy activation duration should match tuning");
+assert.ok(decoyBalance.breakProbability > 0 && decoyBalance.breakProbability < 1, "decoy probability should be within bounds");

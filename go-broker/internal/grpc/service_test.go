@@ -19,6 +19,7 @@ type bridgeStub struct {
 	results  []IntentResult
 	payloads []*IntentSubmission
 	err      error
+	delay    time.Duration
 }
 
 func (b *bridgeStub) SubscribeStateDiffs(ctx context.Context) (<-chan DiffEvent, func(), error) {
@@ -36,6 +37,13 @@ func (b *bridgeStub) SubscribeStateDiffs(ctx context.Context) (<-chan DiffEvent,
 }
 
 func (b *bridgeStub) ProcessIntent(ctx context.Context, submission *IntentSubmission) IntentResult {
+	if b.delay > 0 {
+		select {
+		case <-time.After(b.delay):
+		case <-ctx.Done():
+			return IntentResult{Err: ctx.Err()}
+		}
+	}
 	b.payloads = append(b.payloads, submission)
 	if len(b.results) == 0 {
 		return IntentResult{Accepted: true}
@@ -284,6 +292,33 @@ func TestServicePublishIntentsUnsupportedEncoding(t *testing.T) {
 	err := service.PublishIntents(stream)
 	if status.Code(err) != codes.InvalidArgument {
 		t.Fatalf("expected invalid argument, got %v", err)
+	}
+}
+
+func TestServicePublishIntentsTimeout(t *testing.T) {
+	compressor := NewGZIPCompressor()
+	frame := &brokerpb.IntentFrame{
+		ClientId: "bot-a",
+		Encoding: compressor.Name(),
+		Payload:  mustCompress(t, compressor, []byte("intent")),
+	}
+	bridge := &bridgeStub{delay: intentProcessTimeout + 10*time.Millisecond}
+	service := NewService(bridge)
+	stream := &intentStreamStub{ctx: context.Background(), frames: []*brokerpb.IntentFrame{frame}}
+
+	start := time.Now()
+	if err := service.PublishIntents(stream); err != nil {
+		t.Fatalf("publish intents: %v", err)
+	}
+	elapsed := time.Since(start)
+	if elapsed > 2*intentProcessTimeout {
+		t.Fatalf("publish intents took too long: %v", elapsed)
+	}
+	if stream.ack == nil {
+		t.Fatal("missing ack")
+	}
+	if stream.ack.Accepted != 0 || stream.ack.Rejected != 1 {
+		t.Fatalf("unexpected ack: %+v", stream.ack)
 	}
 }
 
