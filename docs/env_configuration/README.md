@@ -13,6 +13,10 @@ The Drift Pursuit sandbox relies on a small `.env.local` file inside `tunnelcave
 > [!TIP]
 > Run `scripts/setup-env.sh` from the repository root to scaffold a `.env.local` file pre-populated with the values above, including inline comments that explain how to adjust them for non-local setups. When deploying the Next.js frontend separately from the bridge, set `SIM_BRIDGE_URL` on the server to avoid CORS preflight failures.
 
+> [!NOTE]
+> When the Next.js frontend runs inside Docker, `localhost` resolves to the container itself. Point `SIM_BRIDGE_URL` (and `NEXT_PUBLIC_SIM_BRIDGE_URL` when needed) at `http://host.docker.internal:8000` so the proxy can reach a bridge running on your host machine.
+
+
 ## Manual Setup Checklist
 
 1. Create `tunnelcave_sandbox_web/.env.local` if it does not exist.
