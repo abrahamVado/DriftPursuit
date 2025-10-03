@@ -1,0 +1,31 @@
+name: Web client Vitest suites
+
+on:
+  push:
+    branches: ["main"]
+  pull_request:
+
+jobs:
+  vitest:
+    name: Run pnpm test (networking, geometry, UI)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: "pnpm"
+
+      - name: Enable pnpm via Corepack
+        run: corepack enable pnpm
+
+      - name: Install dependencies
+        working-directory: tunnelcave_sandbox_web
+        run: pnpm install --frozen-lockfile
+
+      - name: Run Vitest suites
+        working-directory: tunnelcave_sandbox_web
+        run: pnpm test -- --run
