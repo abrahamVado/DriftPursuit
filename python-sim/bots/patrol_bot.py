@@ -125,13 +125,21 @@ def build_patrol_bot(
     *,
     toggles: RuntimeToggles | None = None,
     auto_start: bool = True,
+    planning_frequency_hz: float | None = None,
 ) -> FSMIntentBot:
     """Factory that wires the patrol FSM into the shared runtime."""
 
     # //5.- Assemble the FSM with the three states backing the patrol behaviour.
     states = [PatrolState(config=config), InvestigateState(config=config), ReturnState(config=config)]
     machine = FiniteStateMachine(states, "patrol")
-    return FSMIntentBot(client, machine, config.controller_id, toggles=toggles, auto_start=auto_start)
+    return FSMIntentBot(
+        client,
+        machine,
+        config.controller_id,
+        toggles=toggles,
+        auto_start=auto_start,
+        planning_frequency_hz=planning_frequency_hz,
+    )
 
 
 __all__ = ["PatrolConfig", "build_patrol_bot"]

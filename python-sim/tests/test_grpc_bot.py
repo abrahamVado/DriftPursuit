@@ -1,5 +1,14 @@
+"""Integration tests for the gRPC bot helper."""
+
+from __future__ import annotations
+
 import gzip
 import json
+import sys
+from pathlib import Path
+
+sys.path.append(str(Path(__file__).resolve().parents[1]))
+sys.path.append(str(Path(__file__).resolve().parents[1] / "driftpursuit_proto" / "generated"))
 
 from driftpursuit_proto.generated.driftpursuit.broker.v0 import streaming_pb2
 

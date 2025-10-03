@@ -77,6 +77,8 @@ def create_parser() -> argparse.ArgumentParser:
     parser.add_argument("--address", default="127.0.0.1:43127", help="Broker gRPC endpoint")
     parser.add_argument("--client-id", required=True, help="Unique controller identifier")
     parser.add_argument("--rate-hz", type=float, default=10.0, help="Intent streaming rate")
+    # //9.- Expose a CLI knob so operators can throttle the planning cadence.
+    parser.add_argument("--planning-hz", type=float, default=0.0, help="Decision planning frequency (0 = every diff)")
     parser.add_argument("--allow-boost", action="store_true", help="Enable boost usage when applicable")
     parser.add_argument("--allow-handbrake", action="store_true", help="Enable handbrake usage where supported")
     parser.add_argument("--diff-log", default="-", help="Path to newline-delimited JSON diffs (default: stdin)")
@@ -108,7 +110,7 @@ def create_parser() -> argparse.ArgumentParser:
 
 
 def _build_bot(args: argparse.Namespace) -> FSMIntentBot:
-    # //9.- Instantiate the requested bot archetype with the provided configuration.
+    # //10.- Instantiate the requested bot archetype with the provided configuration.
     toggles = RuntimeToggles(allow_boost=args.allow_boost, allow_handbrake=args.allow_handbrake)
     if args.dry_run:
         client = _RecordingIntentClient(args.client_id)
@@ -116,6 +118,9 @@ def _build_bot(args: argparse.Namespace) -> FSMIntentBot:
     else:
         client = IntentClient(args.address, args.client_id, rate_hz=args.rate_hz)
         auto_start = True
+
+    # //11.- Treat non-positive values as a signal to keep planning on every diff.
+    planning_hz = args.planning_hz if args.planning_hz > 0 else None
 
     if args.archetype == "patrol":
         if not args.waypoints:
@@ -127,7 +132,13 @@ def _build_bot(args: argparse.Namespace) -> FSMIntentBot:
             linger_ticks=args.linger_ticks,
             patrol_throttle=args.patrol_throttle,
         )
-        return build_patrol_bot(client, config, toggles=toggles, auto_start=auto_start)
+        return build_patrol_bot(
+            client,
+            config,
+            toggles=toggles,
+            auto_start=auto_start,
+            planning_frequency_hz=planning_hz,
+        )
 
     if args.archetype == "chaser":
         config = ChaserConfig(
@@ -136,7 +147,13 @@ def _build_bot(args: argparse.Namespace) -> FSMIntentBot:
             attack_distance=args.attack_distance,
             chase_throttle=args.chase_throttle,
         )
-        return build_chaser_bot(client, config, toggles=toggles, auto_start=auto_start)
+        return build_chaser_bot(
+            client,
+            config,
+            toggles=toggles,
+            auto_start=auto_start,
+            planning_frequency_hz=planning_hz,
+        )
 
     if args.archetype == "coward":
         config = CowardConfig(
@@ -146,7 +163,13 @@ def _build_bot(args: argparse.Namespace) -> FSMIntentBot:
             safe_health=args.safe_health,
             retreat_throttle=args.retreat_throttle,
         )
-        return build_coward_bot(client, config, toggles=toggles, auto_start=auto_start)
+        return build_coward_bot(
+            client,
+            config,
+            toggles=toggles,
+            auto_start=auto_start,
+            planning_frequency_hz=planning_hz,
+        )
 
     config = AmbusherConfig(
         controller_id=args.client_id,
@@ -155,11 +178,17 @@ def _build_bot(args: argparse.Namespace) -> FSMIntentBot:
         strike_throttle=args.strike_throttle,
         stalk_throttle=args.stalk_throttle,
     )
-    return build_ambusher_bot(client, config, toggles=toggles, auto_start=auto_start)
+    return build_ambusher_bot(
+        client,
+        config,
+        toggles=toggles,
+        auto_start=auto_start,
+        planning_frequency_hz=planning_hz,
+    )
 
 
 def run(args: Sequence[str] | None = None) -> int:
-    # //10.- Parse arguments, run the bot against the diff stream, and flush intents.
+    # //12.- Parse arguments, run the bot against the diff stream, and flush intents.
     parser = create_parser()
     parsed = parser.parse_args(args)
     bot = _build_bot(parsed)
