@@ -30,6 +30,7 @@ import (
 	"time"
 
 	configpkg "driftpursuit/broker/internal/config"
+	"driftpursuit/broker/internal/events"
 	"driftpursuit/broker/internal/input"
 	"driftpursuit/broker/internal/logging"
 	"driftpursuit/broker/internal/networking"
@@ -963,6 +964,81 @@ func TestHandleStructuredMessageStoresGameEvent(t *testing.T) {
 	}
 	if diff.Events[0].GetEventId() != "evt-9" {
 		t.Fatalf("unexpected event id %q", diff.Events[0].GetEventId())
+	}
+}
+
+func TestHudEventStreamDeliversScoreUpdates(t *testing.T) {
+	t.Helper()
+	broker := NewBroker(configpkg.DefaultMaxPayloadBytes, configpkg.DefaultMaxClients, time.Now(), logging.NewTestLogger())
+	client := &Client{send: make(chan []byte, 1), id: "pilot-hud", log: logging.NewTestLogger()}
+	broker.lock.Lock()
+	broker.clients[client] = true
+	broker.lock.Unlock()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	stop := broker.startHudEventStream(ctx, client)
+	defer stop()
+
+	event := &pb.GameEvent{
+		SchemaVersion: "1.0.0",
+		EventId:       "score-1",
+		Type:          pb.EventType_EVENT_TYPE_SCORE_UPDATE,
+		Metadata: map[string]string{
+			"score_player_id":    "alpha",
+			"score_display_name": "Alpha",
+			"score_kills":        "3",
+		},
+	}
+
+	broker.publishScoreEvent(event)
+
+	select {
+	case msg := <-client.send:
+		var payload struct {
+			Type       string          `json:"type"`
+			Subscriber string          `json:"subscriber"`
+			Sequence   uint64          `json:"sequence"`
+			Kind       string          `json:"kind"`
+			Payload    json.RawMessage `json:"payload"`
+		}
+		if err := json.Unmarshal(msg, &payload); err != nil {
+			t.Fatalf("unmarshal hud event: %v", err)
+		}
+		if payload.Type != "event_stream" {
+			t.Fatalf("unexpected hud message type %q", payload.Type)
+		}
+		if !strings.HasPrefix(payload.Subscriber, hudSubscriberPrefix) {
+			t.Fatalf("unexpected subscriber %q", payload.Subscriber)
+		}
+		if payload.Kind != string(events.KindLifecycle) {
+			t.Fatalf("unexpected hud event kind %q", payload.Kind)
+		}
+		var decoded pb.GameEvent
+		if err := protojson.Unmarshal(payload.Payload, &decoded); err != nil {
+			t.Fatalf("decode game event: %v", err)
+		}
+		if decoded.GetEventId() != "score-1" {
+			t.Fatalf("unexpected game event id %q", decoded.GetEventId())
+		}
+
+		ackBody := map[string]any{
+			"type":       "event_ack",
+			"id":         payload.Subscriber,
+			"subscriber": payload.Subscriber,
+			"sequence":   payload.Sequence,
+		}
+		raw, err := json.Marshal(ackBody)
+		if err != nil {
+			t.Fatalf("marshal ack: %v", err)
+		}
+		envelope := inboundEnvelope{Type: "event_ack", ID: payload.Subscriber}
+		if consumed := broker.handleStructuredMessage(client, envelope, raw); !consumed {
+			t.Fatalf("expected event_ack to be consumed")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for hud event")
 	}
 }
 

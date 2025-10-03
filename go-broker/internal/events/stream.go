@@ -153,6 +153,14 @@ func (s *Subscription) Events() <-chan *Envelope {
 	return s.events
 }
 
+// ID returns the logical subscriber identifier associated with the stream.
+func (s *Subscription) ID() string {
+	if s == nil {
+		return ""
+	}
+	return s.id
+}
+
 // Ack informs the stream that the subscriber processed the given sequence.
 func (s *Subscription) Ack(sequence uint64) error {
 	if s == nil || s.stream == nil {
