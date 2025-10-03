@@ -21,16 +21,26 @@ export interface HudRadarContact {
   readonly id: string;
   readonly source: string;
   readonly occluded: boolean;
+  readonly state: "visible" | "occluded";
   readonly confidence: number;
   readonly lastSeenMs: number;
   readonly ageMs: number;
+  readonly fadeAlpha: number;
+  readonly dashed: boolean;
+  readonly timelineLabel: string;
   readonly position?: RadarVector;
   readonly velocity?: RadarVector;
+  readonly ghostTrail?: RadarGhostSample[];
 }
 
 export interface HudRadarSnapshot {
   readonly visible: HudRadarContact[];
   readonly lastKnown: HudRadarContact[];
+}
+
+export interface RadarGhostSample {
+  readonly offsetMs: number;
+  readonly position: RadarVector;
 }
 
 interface TrackedContact {
@@ -42,6 +52,7 @@ interface TrackedContact {
   occluded: boolean;
   lastSeenMs: number;
   updatedMs: number;
+  occludedSinceMs?: number;
 }
 
 function makeKey(source: string, target: string): string {
@@ -87,25 +98,30 @@ export class RadarContactTracker {
           occluded,
           lastSeenMs: timestampMs,
           updatedMs: timestampMs,
+          occludedSinceMs: occluded ? timestampMs : undefined,
         });
         continue;
       }
-      if (!occluded && entry.position) {
-        //3.- Visible updates refresh the last known kinematics immediately.
+      if (entry.position) {
+        //3.- Any payload position refreshes the cached location for both visible and occluded states.
         tracked.position = cloneVector(entry.position);
       }
-      if (!occluded && entry.velocity) {
+      if (entry.velocity) {
         tracked.velocity = cloneVector(entry.velocity);
       }
       if (!occluded) {
         tracked.lastSeenMs = timestampMs;
+        tracked.occludedSinceMs = undefined;
+      } else if (!tracked.occluded) {
+        //4.- Record the occlusion transition so HUD widgets can animate timeline overlays.
+        tracked.occludedSinceMs = timestampMs;
       }
       tracked.occluded = occluded;
       tracked.updatedMs = timestampMs;
       if (typeof entry.confidence === "number") {
         tracked.confidence = entry.confidence;
       } else if (occluded) {
-        //4.- Estimate confidence decay when the server omits an explicit value.
+        //5.- Estimate confidence decay when the server omits an explicit value.
         tracked.confidence = this.estimateConfidence(tracked, timestampMs);
       } else {
         tracked.confidence = 1;
@@ -118,17 +134,22 @@ export class RadarContactTracker {
     this.expire(nowMs);
     const visible: HudRadarContact[] = [];
     const lastKnown: HudRadarContact[] = [];
-    //5.- Materialise deterministic HUD datasets so widgets can render stable ordering.
+    //6.- Materialise deterministic HUD datasets so widgets can render stable ordering.
     for (const tracked of this.contacts.values()) {
       const contact: HudRadarContact = {
         id: tracked.id,
         source: tracked.source,
         occluded: tracked.occluded,
+        state: tracked.occluded ? "occluded" : "visible",
         confidence: tracked.confidence,
         lastSeenMs: tracked.lastSeenMs,
         ageMs: Math.max(0, nowMs - tracked.lastSeenMs),
+        fadeAlpha: this.calculateFade(tracked, nowMs),
+        dashed: this.isDashed(tracked, nowMs),
+        timelineLabel: this.formatTimelineLabel(tracked, nowMs),
         position: cloneVector(tracked.position),
         velocity: cloneVector(tracked.velocity),
+        ghostTrail: this.buildGhostTrail(tracked),
       };
       if (tracked.occluded) {
         lastKnown.push(contact);
@@ -156,13 +177,74 @@ export class RadarContactTracker {
     return Math.max(0.1, Math.min(1, ratio));
   }
 
+  private calculateFade(tracked: TrackedContact, nowMs: number): number {
+    if (!tracked.occluded) {
+      return 1;
+    }
+    if (this.retentionMs <= 0) {
+      return 0.4;
+    }
+    const elapsed = Math.max(0, nowMs - tracked.lastSeenMs);
+    const ratio = 1 - elapsed / this.retentionMs;
+    if (ratio <= 0) {
+      return 0.1;
+    }
+    return Math.max(0.1, Math.min(1, ratio));
+  }
+
+  private isDashed(tracked: TrackedContact, nowMs: number): boolean {
+    if (!tracked.occluded) {
+      return false;
+    }
+    const occlusionAge = this.computeOcclusionAge(tracked, nowMs);
+    return occlusionAge >= 2000;
+  }
+
+  private formatTimelineLabel(tracked: TrackedContact, nowMs: number): string {
+    const occlusionAge = tracked.occluded
+      ? this.computeOcclusionAge(tracked, nowMs)
+      : 0;
+    const seconds = Math.max(0, occlusionAge) / 1000;
+    return `${seconds.toFixed(1)}s`;
+  }
+
+  private buildGhostTrail(tracked: TrackedContact): RadarGhostSample[] | undefined {
+    if (!tracked.occluded || !tracked.position || !tracked.velocity) {
+      return undefined;
+    }
+    const samples: RadarGhostSample[] = [];
+    //7.- Generate trailing breadcrumbs in 250 ms steps for a one second ghost history.
+    for (let offsetMs = 0; offsetMs <= 1000; offsetMs += 250) {
+      samples.push({
+        offsetMs,
+        position: this.offsetPosition(tracked.position, tracked.velocity, offsetMs / 1000),
+      });
+    }
+    return samples;
+  }
+
+  private offsetPosition(position: RadarVector, velocity: RadarVector, seconds: number): RadarVector {
+    //8.- Extrapolate a breadcrumb backwards along the stored velocity vector.
+    return {
+      x: position.x - velocity.x * seconds,
+      y: position.y - velocity.y * seconds,
+      z: position.z - velocity.z * seconds,
+    };
+  }
+
+  private computeOcclusionAge(tracked: TrackedContact, nowMs: number): number {
+    //9.- Prefer explicit occlusion transition timestamps so the HUD can show accurate timers.
+    const baseline = tracked.occludedSinceMs ?? tracked.lastSeenMs;
+    return Math.max(0, nowMs - baseline);
+  }
+
   private expire(nowMs: number): void {
     if (this.retentionMs <= 0) {
       return;
     }
     for (const [key, tracked] of this.contacts.entries()) {
       if (nowMs - tracked.updatedMs >= this.retentionMs) {
-        //6.- Drop stale contacts once they exceed the retention window to avoid ghost blips.
+        //10.- Drop stale contacts once they exceed the retention window to avoid ghost blips.
         this.contacts.delete(key);
       }
     }
