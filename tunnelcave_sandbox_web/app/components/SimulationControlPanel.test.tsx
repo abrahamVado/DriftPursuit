@@ -92,13 +92,51 @@ describe('SimulationControlPanel', () => {
       await renderPanel(<SimulationControlPanel />)
       await flushMicrotasks()
 
-      expect(consoleSpy).toHaveBeenCalledWith(
-        '[SimulationControlPanel] Simulation bridge handshake via %s',
+      expect(consoleSpy).toHaveBeenNthCalledWith(
+        1,
+        '[SimulationControlPanel] Attempting simulation bridge handshake via %s',
+        'http://localhost:8000',
+      )
+      expect(consoleSpy).toHaveBeenNthCalledWith(
+        2,
+        '[SimulationControlPanel] Simulation bridge handshake succeeded via %s',
         'http://localhost:8000',
       )
     } finally {
       //1.- Always restore the console spy to avoid leaking mocks between tests.
       consoleSpy.mockRestore()
+    }
+  })
+
+  it('logs handshake failures with the attempted bridge URL', async () => {
+    process.env.NEXT_PUBLIC_SIM_BRIDGE_URL = 'http://localhost:8000'
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce({
+        ok: false,
+        status: 502,
+        json: async () => ({ message: 'Failed to reach simulation bridge.' }),
+      })
+    global.fetch = fetchMock as unknown as typeof global.fetch
+    const infoSpy = vi.spyOn(console, 'info').mockImplementation(() => {})
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+
+    try {
+      await renderPanel(<SimulationControlPanel />)
+      await flushMicrotasks()
+
+      expect(infoSpy).toHaveBeenCalledWith(
+        '[SimulationControlPanel] Attempting simulation bridge handshake via %s',
+        'http://localhost:8000',
+      )
+      expect(warnSpy).toHaveBeenCalledWith(
+        '[SimulationControlPanel] Simulation bridge handshake failed via %s: %s',
+        'http://localhost:8000',
+        'Failed to reach simulation bridge.',
+      )
+    } finally {
+      infoSpy.mockRestore()
+      warnSpy.mockRestore()
     }
   })
 

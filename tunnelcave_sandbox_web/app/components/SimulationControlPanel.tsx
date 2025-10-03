@@ -40,6 +40,12 @@ export default function SimulationControlPanel({ baseUrl }: PanelProps) {
     }
     return ''
   }, [envBaseUrl, overrideBaseUrl])
+  //6.- Precompute the most useful handshake target so logs can surface the expected upstream endpoint.
+  const resolvedHandshakeTarget = useMemo(() => {
+    return [overrideBaseUrl, envBaseUrl, handshakeUrl].find(
+      (candidate): candidate is string => Boolean(candidate),
+    )
+  }, [envBaseUrl, handshakeUrl, overrideBaseUrl])
   //4.- Compute the command endpoint, mirroring the handshake URL selection logic.
   const commandUrl = useMemo(() => {
     if (overrideBaseUrl) {
@@ -68,6 +74,10 @@ export default function SimulationControlPanel({ baseUrl }: PanelProps) {
     setStatus('Negotiating with simulation bridge…')
     setError('')
     //3.- Attempt to fetch the handshake payload from the bridge server.
+    const logTarget = resolvedHandshakeTarget ?? ''
+    if (logTarget) {
+      console.info('[SimulationControlPanel] Attempting simulation bridge handshake via %s', logTarget)
+    }
     fetch(handshakeUrl, { cache: 'no-store', signal: controller.signal })
       .then(async (response) => {
         const payload = await response.json()
@@ -82,17 +92,11 @@ export default function SimulationControlPanel({ baseUrl }: PanelProps) {
           return
         }
         //4.- Surface the resolved Go simulation bridge URL so operators can confirm the upstream endpoint.
-        const upstreamBridgeUrl = [
-          payload.bridgeUrl,
-          overrideBaseUrl,
-          envBaseUrl,
-          handshakeUrl,
-        ].find((candidate): candidate is string => Boolean(candidate))
+        const upstreamBridgeUrl = [payload.bridgeUrl, logTarget, handshakeUrl].find(
+          (candidate): candidate is string => Boolean(candidate),
+        )
         if (upstreamBridgeUrl) {
-          console.info(
-            '[SimulationControlPanel] Simulation bridge handshake via %s',
-            upstreamBridgeUrl,
-          )
+          console.info('[SimulationControlPanel] Simulation bridge handshake succeeded via %s', upstreamBridgeUrl)
         }
         setStatus(payload.message ?? 'Simulation bridge online')
         setError('')
@@ -103,13 +107,25 @@ export default function SimulationControlPanel({ baseUrl }: PanelProps) {
         }
         setStatus(DEFAULT_STATUS)
         setError(`Handshake error: ${reason.message}`)
+        if (logTarget) {
+          console.warn(
+            '[SimulationControlPanel] Simulation bridge handshake failed via %s: %s',
+            logTarget,
+            reason.message,
+          )
+        } else {
+          console.warn(
+            '[SimulationControlPanel] Simulation bridge handshake failed: %s',
+            reason.message,
+          )
+        }
       })
     //5.- Clean up the pending request if the component unmounts during negotiation.
     return () => {
       cancelled = true
       controller.abort()
     }
-  }, [handshakeUrl])
+  }, [handshakeUrl, resolvedHandshakeTarget])
 
   const sendCommand = useCallback(
     async (command: CommandName) => {
