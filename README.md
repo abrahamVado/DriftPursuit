@@ -1,53 +1,70 @@
-# Battle Royale Broker
+# DriftPursuit Prototype
 
-This repository hosts the Go WebSocket broker that powers the Battle Royale prototype. The broker fan-outs telemetry between gameplay clients and exposes lightweight operational endpoints. A Python bot runner and the web client live alongside the broker code so the entire prototype can be containerised together.
+DriftPursuit is a cross-service prototype for a cavernous aerial battle royale experience. The repository contains:
 
-All runtime tuning is controlled through environment variables. See [docs/configuration.md](docs/configuration.md) for the complete list and defaults.
+- **go-broker/** — an authoritative Go simulation server with WebSocket and gRPC interfaces.
+- **tunnelcave_sandbox_web/** — a three.js client that renders the cave world, HUD, and vehicle FX.
+- **python-sim/** — reference bots and SDK utilities for automated playtesting.
+
+Runtime behaviour is configuration-driven. Environment variable defaults and override guidance live in [docs/configuration.md](docs/configuration.md).
 
 ## Prerequisites
 
 - Go 1.20 or newer (for local Go development)
+- Node.js 18+ with npm (for the web client)
+- Python 3.11 with Poetry (for the bot runner)
 - Docker 24+ with the Compose plugin (for container workflows)
 
 ## Running Locally
 
-### Native Go workflow
+### Option A — Native development
 
 ```bash
+# Broker
 cd go-broker
 go run ./...
+
+# In a new shell, run client assets
+cd ../tunnelcave_sandbox_web
+npm install
+npm run dev
+
+# Optional: launch reference bots
+cd ../python-sim
+poetry install
+poetry run python scripts/run_bot.py
 ```
 
-The broker listens on `:43127` by default. Override the address or other tunables with the documented environment variables. When TLS certificate and key paths are supplied the server automatically serves HTTPS/WSS.
+- The broker listens on `:43127` and serves WebSocket plus gRPC endpoints.
+- The web client defaults to `http://localhost:3000` and expects `NEXT_PUBLIC_BROKER_URL` to reference the broker address.
+- Bots use gRPC/WebSocket endpoints; ensure `BROKER_WS_URL` and `BROKER_GRPC_ADDR` match your local broker settings.
 
-Health and monitoring endpoints:
+Key broker endpoints while iterating:
 
-- `GET /healthz` — liveness probe reporting broker uptime and connection counts.
-- `GET /api/stats` — JSON statistics about broadcast totals and active clients.
-- `GET /api/controls` — metadata describing available in-game controls.
+- `GET /healthz` — liveness probe reporting uptime and connection counts.
+- `GET /api/stats` — current broadcast totals and active clients.
+- `GET /api/controls` — metadata describing available in-game inputs.
 
-Structured JSON logs are emitted to a rotating file (default `broker.log`) and include a `trace_id` field. See [docs/tracing.md](docs/tracing.md) for guidance on propagating the `X-Trace-ID` header across bots and web clients.
+Structured JSON logs (default `broker.log`) include `trace_id` values so you can trace events across the stack. Propagation details live in [docs/tracing.md](docs/tracing.md).
 
-### Docker Compose stack
+### Option B — Docker Compose
 
-Spin up the full prototype — broker, bot runner, and web client — with Compose:
+The Compose workflow starts all three services with matching configuration:
 
 ```bash
 docker compose build
 docker compose up
 ```
 
-The services share the `battleground` network defined in [`docker-compose.yml`](docker-compose.yml):
+Service summary:
 
-- **broker** — exposed on `localhost:43127`; environment variables can be overridden via Compose or a `.env` file (for example `BROKER_ALLOWED_ORIGINS`).
-- **bot-runner** — connects to the broker using `BROKER_WS_URL=ws://broker:43127/ws` and forwards the trace header defined by `TRACE_HEADER`.
-- **web-client** — exposed on `localhost:3000` with `NEXT_PUBLIC_BROKER_URL` pointing at the broker service.
+- **broker** — exposed on `localhost:43127`; override environment variables via `.env` or inline Compose edits.
+- **bot-runner** — connects using `BROKER_WS_URL=ws://broker:43127/ws` and propagates the configured `TRACE_HEADER`.
+- **web-client** — served on `http://localhost:3000` with `NEXT_PUBLIC_BROKER_URL` pointed at the broker container.
 
-Stop the stack with `docker compose down`. Use `docker compose logs -f <service>` to inspect container output.
+Shut everything down with `docker compose down` and inspect logs using `docker compose logs -f <service>`.
 
-### Building individual images
-
-To build any image separately without Compose:
+### Building container images individually
 
 ```bash
 # Go broker
@@ -93,6 +110,10 @@ cd go-broker
 go test ./...
 ```
 
+## Screenshot Capture Task
+
+Planning a visual refresh? Follow the dedicated task at [docs/screenshot_task/task.md](docs/screenshot_task/task.md) to collect gameplay, map, and vehicle imagery with consistent metadata.
+
 ## Continuous Integration
 
 The [`Docker images`](.github/workflows/docker-images.yml) workflow builds all production containers on every push and pull request to ensure the Dockerfiles stay healthy.
@@ -102,6 +123,5 @@ The [`Docker images`](.github/workflows/docker-images.yml) workflow builds all p
 - `go-broker/` — the WebSocket broker service and tests.
 - `python-sim/` — Python bot runner assets and Dockerfile.
 - `tunnelcave_sandbox_web/` — the web client application and Dockerfile.
-- `docs/` — configuration reference material for operators, including
-  [networking schema versioning guidance](docs/networking_versioning.md).
+- `docs/` — configuration reference material for operators, including [networking schema versioning guidance](docs/networking_versioning.md).
 - `docker-compose.yml` — orchestration for the broker, bot runner, and web client.
