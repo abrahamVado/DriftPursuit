@@ -13,14 +13,43 @@ type PanelProps = {
 }
 
 const DEFAULT_STATUS = 'Simulation bridge offline.'
-const CONFIG_HINT = 'Set NEXT_PUBLIC_SIM_BRIDGE_URL (e.g. http://localhost:8000) to enable interactive control.'
+const CONFIG_HINT =
+  'Set SIM_BRIDGE_URL or NEXT_PUBLIC_SIM_BRIDGE_URL (e.g. http://localhost:8000) to enable interactive control.'
 
 export default function SimulationControlPanel({ baseUrl }: PanelProps) {
-  //1.- Resolve the bridge base URL lazily so runtime overrides and props are respected.
-  const resolvedBaseUrl = useMemo(() => {
-    const candidate = baseUrl ?? process.env.NEXT_PUBLIC_SIM_BRIDGE_URL ?? ''
+  //1.- Resolve a direct override so tests and same-origin deployments can bypass the API proxy.
+  const overrideBaseUrl = useMemo(() => {
+    const candidate = baseUrl ?? ''
     return candidate.trim()
   }, [baseUrl])
+  //2.- Capture the environment-provided bridge URL when no explicit override has been supplied.
+  const envBaseUrl = useMemo(() => {
+    if (overrideBaseUrl) {
+      return ''
+    }
+    const candidate = process.env.NEXT_PUBLIC_SIM_BRIDGE_URL ?? ''
+    return candidate.trim()
+  }, [overrideBaseUrl])
+  //3.- Compute the handshake endpoint, favouring the API proxy when only the environment variable is available.
+  const handshakeUrl = useMemo(() => {
+    if (overrideBaseUrl) {
+      return `${overrideBaseUrl}/handshake`
+    }
+    if (envBaseUrl) {
+      return '/api/sim-bridge/handshake'
+    }
+    return ''
+  }, [envBaseUrl, overrideBaseUrl])
+  //4.- Compute the command endpoint, mirroring the handshake URL selection logic.
+  const commandUrl = useMemo(() => {
+    if (overrideBaseUrl) {
+      return `${overrideBaseUrl}/command`
+    }
+    if (envBaseUrl) {
+      return '/api/sim-bridge/command'
+    }
+    return ''
+  }, [envBaseUrl, overrideBaseUrl])
   //2.- Track status and error messages so the UI communicates connection progress.
   const [status, setStatus] = useState(DEFAULT_STATUS)
   const [error, setError] = useState('')
@@ -28,7 +57,7 @@ export default function SimulationControlPanel({ baseUrl }: PanelProps) {
 
   useEffect(() => {
     //1.- Abort early when the bridge URL is not configured to avoid failing network calls.
-    if (!resolvedBaseUrl) {
+    if (!handshakeUrl) {
       setStatus(DEFAULT_STATUS)
       setError(CONFIG_HINT)
       return
@@ -39,12 +68,14 @@ export default function SimulationControlPanel({ baseUrl }: PanelProps) {
     setStatus('Negotiating with simulation bridge…')
     setError('')
     //3.- Attempt to fetch the handshake payload from the bridge server.
-    fetch(`${resolvedBaseUrl}/handshake`, { cache: 'no-store', signal: controller.signal })
+    fetch(handshakeUrl, { cache: 'no-store', signal: controller.signal })
       .then(async (response) => {
+        const payload = await response.json()
         if (!response.ok) {
-          throw new Error(`Handshake failed with status ${response.status}`)
+          const message = typeof payload?.message === 'string' ? payload.message : `Handshake failed with status ${response.status}`
+          throw new Error(message)
         }
-        return response.json()
+        return payload
       })
       .then((payload: { message?: string }) => {
         if (cancelled) {
@@ -65,33 +96,34 @@ export default function SimulationControlPanel({ baseUrl }: PanelProps) {
       cancelled = true
       controller.abort()
     }
-  }, [resolvedBaseUrl])
+  }, [handshakeUrl])
 
   const sendCommand = useCallback(
     async (command: CommandName) => {
       //1.- Prevent command dispatches when the bridge URL has not been configured yet.
-      if (!resolvedBaseUrl) {
+      if (!commandUrl) {
         setError(CONFIG_HINT)
         return
       }
       try {
         setError('')
-        const response = await fetch(`${resolvedBaseUrl}/command`, {
+        const response = await fetch(commandUrl, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ command, issuedAtMs: Date.now() }),
         })
+        const payload = await response.json().catch(() => ({}))
         if (!response.ok) {
-          throw new Error(`Command failed with status ${response.status}`)
+          const message = typeof payload?.message === 'string' ? payload.message : `Command failed with status ${response.status}`
+          throw new Error(message)
         }
-        const payload = await response.json()
         setLastCommand(payload.command?.command ?? command)
       } catch (cause) {
         const message = cause instanceof Error ? cause.message : 'Unknown error'
         setError(`Command error: ${message}`)
       }
     },
-    [resolvedBaseUrl],
+    [commandUrl],
   )
 
   const emitControlIntent = useCallback((command: CommandName) => {
