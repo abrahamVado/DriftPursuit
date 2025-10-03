@@ -16,6 +16,11 @@ const intentProcessTimeout = 40 * time.Millisecond
 // Option customises the behaviour of the gRPC streaming service.
 type Option func(*Service)
 
+// tickerFactory constructs cancellable tick channels for throttled streaming.
+type tickerFactory func(time.Duration) (<-chan time.Time, func())
+
+const diffStreamRateHz = 20
+
 // WithCompressor overrides the default payload compressor.
 func WithCompressor(compressor Compressor) Option {
 	return func(s *Service) {
@@ -29,18 +34,36 @@ func WithCompressor(compressor Compressor) Option {
 type Service struct {
 	broker     BrokerBridge
 	compressor Compressor
+	newTicker  tickerFactory
 	brokerpb.UnimplementedBrokerStreamServiceServer
 }
 
 // NewService wires the gRPC service to the broker bridge and optional settings.
 func NewService(broker BrokerBridge, opts ...Option) *Service {
-	service := &Service{broker: broker, compressor: NewGZIPCompressor()}
+	service := &Service{broker: broker, compressor: NewGZIPCompressor(), newTicker: defaultTickerFactory}
 	for _, opt := range opts {
 		if opt != nil {
 			opt(service)
 		}
 	}
 	return service
+}
+
+// WithTickerFactory overrides the throttling ticker factory (used in tests).
+func WithTickerFactory(factory tickerFactory) Option {
+	return func(s *Service) {
+		if factory != nil {
+			s.newTicker = factory
+		}
+	}
+}
+
+func defaultTickerFactory(interval time.Duration) (<-chan time.Time, func()) {
+	ticker := time.NewTicker(interval)
+	stop := func() {
+		ticker.Stop()
+	}
+	return ticker.C, stop
 }
 
 // StreamStateDiffs relays authoritative world diffs to connected bots.
@@ -61,6 +84,18 @@ func (s *Service) StreamStateDiffs(req *brokerpb.StreamStateDiffsRequest, stream
 		compressor = NewGZIPCompressor()
 	}
 
+	interval := time.Second / diffStreamRateHz
+	if interval <= 0 {
+		interval = time.Second / diffStreamRateHz
+	}
+	tickCh, stop := s.newTicker(interval)
+	defer stop()
+
+	var (
+		pending    []DiffEvent
+		diffClosed bool
+	)
+
 	for {
 		select {
 		case <-ctx.Done():
@@ -71,9 +106,27 @@ func (s *Service) StreamStateDiffs(req *brokerpb.StreamStateDiffsRequest, stream
 			return status.Error(codes.DeadlineExceeded, "stream deadline exceeded")
 		case event, ok := <-diffCh:
 			if !ok {
-				//3.- End the stream cleanly when the broker shuts down.
-				return nil
+				//3.- Note the closed channel so the loop terminates after draining.
+				diffClosed = true
+				diffCh = nil
+				if len(pending) == 0 {
+					return nil
+				}
+				continue
 			}
+			//4.- Buffer incoming diffs so they can be flushed at the throttled cadence.
+			pending = append(pending, event)
+		case <-tickCh:
+			if len(pending) == 0 {
+				//5.- Exit once all buffered diffs are drained and the source closed.
+				if diffClosed {
+					return nil
+				}
+				continue
+			}
+			//6.- Pop the oldest buffered diff to preserve deterministic ordering.
+			event := pending[0]
+			pending = pending[1:]
 			compressed, err := compressor.Compress(event.Payload)
 			if err != nil {
 				return status.Errorf(codes.Internal, "compress diff: %v", err)

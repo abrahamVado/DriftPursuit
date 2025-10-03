@@ -1,5 +1,6 @@
-"""SDK helpers for building Drift Pursuit bots."""
+"""Bot SDK utilities for interacting with the broker."""
 
-from .intent_client import IntentClient, LoopMetrics
+from .state_stream import ApplyCallback, CodecRegistry, DiffPayload, StateStreamReceiver
 
-__all__ = ["IntentClient", "LoopMetrics"]
+# //1.- Re-export the key primitives so consumers get a compact API surface.
+__all__ = ["ApplyCallback", "CodecRegistry", "DiffPayload", "StateStreamReceiver"]

@@ -102,14 +102,46 @@ func (s *intentStreamStub) RecvMsg(interface{}) error    { return nil }
 
 var _ grpc.ClientStreamingServer[brokerpb.IntentFrame, brokerpb.IntentStreamAck] = (*intentStreamStub)(nil)
 
+type manualDiffBridge struct {
+	ch <-chan DiffEvent
+}
+
+func (m *manualDiffBridge) SubscribeStateDiffs(context.Context) (<-chan DiffEvent, func(), error) {
+	return m.ch, func() {}, nil
+}
+
+func (m *manualDiffBridge) ProcessIntent(context.Context, *IntentSubmission) IntentResult {
+	return IntentResult{Accepted: true}
+}
+
+var _ BrokerBridge = (*manualDiffBridge)(nil)
+
 func TestServiceStreamStateDiffs(t *testing.T) {
 	compressor := NewGZIPCompressor()
 	payload := []byte("diff-json")
-	bridge := &bridgeStub{events: []DiffEvent{{Tick: 42, Payload: payload}}}
-	service := NewService(bridge)
+	diffCh := make(chan DiffEvent, 1)
+	diffCh <- DiffEvent{Tick: 42, Payload: payload}
+	close(diffCh)
+
+	tickCh := make(chan time.Time, 2)
+	service := NewService(&manualDiffBridge{ch: diffCh}, WithTickerFactory(func(time.Duration) (<-chan time.Time, func()) {
+		return tickCh, func() {}
+	}))
 
 	stream := &diffStreamStub{ctx: context.Background()}
-	if err := service.StreamStateDiffs(&brokerpb.StreamStateDiffsRequest{ClientId: "bot-a"}, stream); err != nil {
+	done := make(chan error, 1)
+	go func() {
+		done <- service.StreamStateDiffs(&brokerpb.StreamStateDiffsRequest{ClientId: "bot-a"}, stream)
+	}()
+
+	go func() {
+		time.Sleep(2 * time.Millisecond)
+		tickCh <- time.Now()
+		time.Sleep(2 * time.Millisecond)
+		tickCh <- time.Now()
+	}()
+
+	if err := <-done; err != nil {
 		t.Fatalf("stream state diffs: %v", err)
 	}
 	if len(stream.frames) != 1 {
@@ -138,6 +170,57 @@ func TestServiceStreamStateDiffsError(t *testing.T) {
 	err := service.StreamStateDiffs(&brokerpb.StreamStateDiffsRequest{}, stream)
 	if status.Code(err) != codes.Internal {
 		t.Fatalf("expected internal error, got %v", err)
+	}
+}
+
+func TestServiceStreamStateDiffsOrdering(t *testing.T) {
+	compressor := NewGZIPCompressor()
+	diffCh := make(chan DiffEvent, 3)
+	ticks := []uint64{1, 2, 3}
+	tickCh := make(chan time.Time, len(ticks)+1)
+	service := NewService(&manualDiffBridge{ch: diffCh}, WithTickerFactory(func(time.Duration) (<-chan time.Time, func()) {
+		return tickCh, func() {}
+	}))
+
+	stream := &diffStreamStub{ctx: context.Background()}
+	payload := []byte("ordered")
+
+	done := make(chan error, 1)
+	go func() {
+		done <- service.StreamStateDiffs(&brokerpb.StreamStateDiffsRequest{ClientId: "bot-a"}, stream)
+	}()
+
+	go func() {
+		for range ticks {
+			time.Sleep(2 * time.Millisecond)
+			tickCh <- time.Now()
+		}
+		time.Sleep(2 * time.Millisecond)
+		tickCh <- time.Now()
+	}()
+
+	for _, tick := range ticks {
+		diffCh <- DiffEvent{Tick: tick, Payload: payload}
+	}
+	close(diffCh)
+
+	if err := <-done; err != nil {
+		t.Fatalf("stream state diffs: %v", err)
+	}
+	if len(stream.frames) != len(ticks) {
+		t.Fatalf("expected %d frames, got %d", len(ticks), len(stream.frames))
+	}
+	for i, frame := range stream.frames {
+		if frame.Tick != ticks[i] {
+			t.Fatalf("frame %d tick mismatch: got %d want %d", i, frame.Tick, ticks[i])
+		}
+		decoded, err := compressor.Decompress(frame.Payload)
+		if err != nil {
+			t.Fatalf("frame %d decompress: %v", i, err)
+		}
+		if string(decoded) != string(payload) {
+			t.Fatalf("frame %d payload mismatch", i)
+		}
 	}
 }
 
