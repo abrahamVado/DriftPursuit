@@ -1,0 +1,2 @@
+{"bot": {"position": [5, 5], "heading": 1.57, "health": 0.3}, "target": {"position": [7, 5]}, "note": "panic retreat"}
+{"bot": {"position": [20, 15], "heading": 1.2, "health": 0.8}, "target": {"position": [30, 15]}, "note": "safe regroup"}

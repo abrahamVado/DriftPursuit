@@ -1,0 +1,2 @@
+{"bot": {"position": [0, 0], "heading": 0, "health": 1.0}, "target": {"position": [40, -5]}, "note": "search sweep"}
+{"bot": {"position": [10, -1], "heading": 0.2, "health": 1.0}, "target": {"position": [12, -1]}, "note": "attack braking"}
