@@ -97,6 +97,7 @@ Runtime behaviour is configuration‑driven. Environment variable defaults and o
    ```
    - Web: **http://localhost:3000**
    - Broker: **localhost:43127**
+   - Simulation bridge: **http://localhost:8000/handshake**
    - Stop with `docker compose down`.
 
 7. **(Optional) Build container images individually**

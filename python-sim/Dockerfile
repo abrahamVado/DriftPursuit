@@ -21,4 +21,5 @@ COPY --from=builder /install /usr/local
 COPY . .
 RUN useradd --create-home --uid 10001 appuser
 USER appuser
+EXPOSE 8000
 CMD ["python", "-m", "bot_runner"]
