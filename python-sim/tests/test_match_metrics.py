@@ -22,6 +22,7 @@ def test_match_metrics_snapshot_reports_medians() -> None:
 
     assert snapshot.samples == 3
     assert snapshot.planned_samples == 2
+    assert snapshot.dropped_frames == 1
     assert snapshot.median_total_ms == 4.0
     assert snapshot.median_decision_ms == 1.0
     assert snapshot.median_diff_ms == 1.0
@@ -38,3 +39,4 @@ def test_match_metrics_reset_clears_samples() -> None:
     snapshot = metrics.snapshot()
     assert snapshot.samples == 0
     assert snapshot.average_total_ms == 0.0
+    assert snapshot.dropped_frames == 0

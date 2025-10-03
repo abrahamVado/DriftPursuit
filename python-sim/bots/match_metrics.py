@@ -15,6 +15,7 @@ class CycleSnapshot:
 
     samples: int
     planned_samples: int
+    dropped_frames: int
     median_total_ms: float
     median_decision_ms: float
     median_send_ms: float
@@ -77,7 +78,7 @@ class MatchMetrics:
         with self._lock:
             if not self._total:
                 # //4.- Return a zeroed snapshot so callers can handle cold starts gracefully.
-                return CycleSnapshot(0, 0, 0.0, 0.0, 0.0, 0.0, 0.0)
+                return CycleSnapshot(0, 0, 0, 0.0, 0.0, 0.0, 0.0, 0.0)
             total = list(self._total)
             decision = list(self._decision)
             send = list(self._send)
@@ -88,6 +89,7 @@ class MatchMetrics:
         return CycleSnapshot(
             samples=samples,
             planned_samples=planned,
+            dropped_frames=max(samples - planned, 0),
             median_total_ms=statistics.median(total),
             median_decision_ms=statistics.median(decision),
             median_send_ms=statistics.median(send),

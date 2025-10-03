@@ -27,4 +27,5 @@ def test_planning_median_latency_within_budget() -> None:
     snapshot = metrics.snapshot()
 
     # //2.- Fail the test if the aggregated median breaches the 40 ms target.
+    assert snapshot.dropped_frames == 0
     assert snapshot.median_total_ms <= 40.0, f"Median planning latency {snapshot.median_total_ms}ms exceeds budget"

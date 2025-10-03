@@ -123,6 +123,7 @@ def test_fsm_intent_bot_throttles_planning_and_tracks_latency() -> None:
     snapshot = bot.metrics.snapshot()
     assert snapshot.samples == 3
     assert snapshot.planned_samples == 2
+    assert snapshot.dropped_frames == 1
     assert snapshot.median_total_ms == 6.0
     assert snapshot.median_decision_ms == 2.0
     assert snapshot.median_diff_ms == 3.0
