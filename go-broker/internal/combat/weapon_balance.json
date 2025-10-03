@@ -1,0 +1,64 @@
+{
+  "archetypes": {
+    "shell": {
+      "cooldownSeconds": 0.2,
+      "projectileSpeed": 780,
+      "projectileLifetimeSeconds": 2.0,
+      "damage": 14,
+      "muzzleEffect": "fx/muzzle/shell",
+      "impactEffect": "fx/impact/shell",
+      "trailEffect": "fx/trail/shell"
+    },
+    "missile": {
+      "cooldownSeconds": 1.8,
+      "projectileSpeed": 240,
+      "projectileLifetimeSeconds": 6.0,
+      "damage": 55,
+      "muzzleEffect": "fx/muzzle/missile",
+      "impactEffect": "fx/impact/missile",
+      "trailEffect": "fx/trail/missile",
+      "decoyBreakProbability": 0.35
+    },
+    "laser": {
+      "cooldownSeconds": 0.1,
+      "beamDurationSeconds": 0.25,
+      "damage": 9,
+      "beamEffect": "fx/beam/laser",
+      "impactEffect": "fx/impact/laser"
+    }
+  },
+  "weapons": {
+    "pulse-cannon": {
+      "archetype": "shell"
+    },
+    "flak-pod": {
+      "archetype": "shell",
+      "projectileLifetimeSeconds": 1.2,
+      "impactEffect": "fx/impact/flak"
+    },
+    "micro-missile": {
+      "archetype": "missile"
+    },
+    "emp-torpedo": {
+      "archetype": "missile",
+      "decoyBreakProbability": 0.5,
+      "impactEffect": "fx/impact/emp"
+    },
+    "scatter-laser": {
+      "archetype": "laser",
+      "beamDurationSeconds": 0.32,
+      "beamEffect": "fx/beam/scatter"
+    },
+    "heavy-plasma": {
+      "archetype": "laser",
+      "beamDurationSeconds": 0.4,
+      "beamEffect": "fx/beam/plasma",
+      "impactEffect": "fx/impact/plasma",
+      "damage": 12
+    }
+  },
+  "decoy": {
+    "activationDurationSeconds": 4.0,
+    "breakProbability": 0.45
+  }
+}

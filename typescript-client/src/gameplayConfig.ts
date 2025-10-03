@@ -18,6 +18,10 @@ const SKIFF_LOADOUT_PATH = resolve(
   __dirname,
   "../../go-broker/internal/gameplay/skiff_loadouts.json",
 );
+const WEAPON_BALANCE_PATH = resolve(
+  __dirname,
+  "../../go-broker/internal/combat/weapon_balance.json",
+);
 
 export interface WeaponConfig {
   //1.- Track the weapon archetype so the HUD can surface the correct iconography.
@@ -59,6 +63,99 @@ interface SkiffLoadoutPayload {
   loadouts: VehicleLoadoutConfig[];
 }
 
+export type WeaponArchetype = "shell" | "missile" | "laser";
+
+export interface WeaponArchetypeBalance {
+  //1.- Cooldown length expressed in seconds so runtimes can translate to durations.
+  cooldownSeconds: number;
+  //2.- Projectile speed in metres per second for ballistic archetypes.
+  projectileSpeed?: number;
+  //3.- Projectile lifetime in seconds to bound particle emissions.
+  projectileLifetimeSeconds?: number;
+  //4.- Beam persistence for hitscan style archetypes.
+  beamDurationSeconds?: number;
+  //5.- Baseline damage applied before loadout multipliers.
+  damage: number;
+  //6.- Visual effect identifiers used to spawn muzzle flashes.
+  muzzleEffect?: string;
+  //7.- Effect identifier for the impact burst.
+  impactEffect?: string;
+  //8.- Optional trail effect bound to the projectile flight path.
+  trailEffect?: string;
+  //9.- Beam effect resource for hitscan archetypes.
+  beamEffect?: string;
+  //10.- Default decoy break probability for ECM interactions.
+  decoyBreakProbability?: number;
+}
+
+export interface WeaponVariantBalance {
+  //1.- Link the weapon identifier back to its archetype defaults.
+  archetype: WeaponArchetype;
+  //2.- Optional cooldown override for specialised variants.
+  cooldownSeconds?: number;
+  //3.- Optional projectile speed override.
+  projectileSpeed?: number;
+  //4.- Optional projectile lifetime override.
+  projectileLifetimeSeconds?: number;
+  //5.- Optional beam duration override for lasers.
+  beamDurationSeconds?: number;
+  //6.- Damage override when the variant hits harder or softer than the archetype.
+  damage?: number;
+  //7.- Optional muzzle effect swap for art direction tweaks.
+  muzzleEffect?: string;
+  //8.- Optional impact effect swap.
+  impactEffect?: string;
+  //9.- Optional trail effect swap.
+  trailEffect?: string;
+  //10.- Optional beam effect override.
+  beamEffect?: string;
+  //11.- Override decoy probability for ECM centric weapons.
+  decoyBreakProbability?: number;
+}
+
+export interface DecoyBalanceConfig {
+  //1.- Duration in seconds that a decoy remains active after firing.
+  activationDurationSeconds: number;
+  //2.- Default spoof probability applied when missiles evaluate the decoy.
+  breakProbability: number;
+}
+
+export interface WeaponBalanceCatalog {
+  //1.- Archetype definitions keyed by the archetype identifier.
+  archetypes: Record<string, WeaponArchetypeBalance>;
+  //2.- Weapon entries referencing an archetype and optional overrides.
+  weapons: Record<string, WeaponVariantBalance>;
+  //3.- Shared decoy configuration influencing missile guidance.
+  decoy: DecoyBalanceConfig;
+}
+
+export interface ResolvedWeaponBalance {
+  //1.- Stable weapon identifier resolved from the catalog.
+  id: string;
+  //2.- Archetype classification used to select projectile or beam logic.
+  archetype: WeaponArchetype;
+  //3.- Cooldown seconds already merged with any overrides.
+  cooldownSeconds: number;
+  //4.- Damage value merged between archetype and variant definitions.
+  damage: number;
+  //5.- Optional projectile speed to inform travel time calculations.
+  projectileSpeed?: number;
+  //6.- Optional projectile lifetime to bound particle playback.
+  projectileLifetimeSeconds?: number;
+  //7.- Optional beam duration for hitscan archetypes.
+  beamDurationSeconds?: number;
+  //8.- Visual effect identifiers carried to the presentation layer.
+  muzzleEffect?: string;
+  //9.- Impact effect identifier selected for the weapon variant.
+  impactEffect?: string;
+  //10.- Trail effect identifier when the weapon emits a persistent trail.
+  trailEffect?: string;
+  //11.- Beam effect identifier for lasers and plasma weapons.
+  beamEffect?: string;
+  //12.- Decoy probability guiding missile spoof resolution.
+  decoyBreakProbability?: number;
+}
+
 export interface GroundVehicleConfig {
   //1.- Expose descriptive metadata so future UI work can surface the upcoming roster.
   displayName: string;
@@ -95,6 +192,65 @@ function loadSkiffLoadouts(): readonly VehicleLoadoutConfig[] {
 }
 
 export const skiffLoadouts: readonly VehicleLoadoutConfig[] = loadSkiffLoadouts();
+
+function mergeWeaponBalance(archetype: WeaponArchetypeBalance, variant: WeaponVariantBalance, id: string): ResolvedWeaponBalance {
+  //1.- Start with the archetype defaults and overlay variant overrides when they exist.
+  const cooldownSeconds = variant.cooldownSeconds ?? archetype.cooldownSeconds;
+  const projectileSpeed = variant.projectileSpeed ?? archetype.projectileSpeed;
+  const projectileLifetimeSeconds = variant.projectileLifetimeSeconds ?? archetype.projectileLifetimeSeconds;
+  const beamDurationSeconds = variant.beamDurationSeconds ?? archetype.beamDurationSeconds;
+  const damage = variant.damage ?? archetype.damage;
+  const muzzleEffect = variant.muzzleEffect ?? archetype.muzzleEffect;
+  const impactEffect = variant.impactEffect ?? archetype.impactEffect;
+  const trailEffect = variant.trailEffect ?? archetype.trailEffect;
+  const beamEffect = variant.beamEffect ?? archetype.beamEffect;
+  const decoyBreakProbability = variant.decoyBreakProbability ?? archetype.decoyBreakProbability;
+  //2.- Return a frozen object so consumers cannot mutate shared configuration.
+  return Object.freeze({
+    id,
+    archetype: variant.archetype,
+    cooldownSeconds,
+    damage,
+    projectileSpeed,
+    projectileLifetimeSeconds,
+    beamDurationSeconds,
+    muzzleEffect,
+    impactEffect,
+    trailEffect,
+    beamEffect,
+    decoyBreakProbability,
+  });
+}
+
+function loadWeaponBalance(): WeaponBalanceCatalog {
+  //1.- Parse the shared JSON payload so both client and server read identical tuning values.
+  const payload = readFileSync(WEAPON_BALANCE_PATH, "utf-8");
+  const parsed = JSON.parse(payload) as WeaponBalanceCatalog;
+  //2.- Freeze nested maps to avoid accidental mutation during gameplay.
+  const archetypes = Object.freeze({ ...parsed.archetypes });
+  const weapons = Object.freeze({ ...parsed.weapons });
+  const decoy = Object.freeze({ ...parsed.decoy });
+  return Object.freeze({ archetypes, weapons, decoy });
+}
+
+export const weaponBalanceCatalog: WeaponBalanceCatalog = loadWeaponBalance();
+
+export const decoyBalance: DecoyBalanceConfig = Object.freeze({ ...weaponBalanceCatalog.decoy });
+
+export function resolveWeaponBalance(weaponId: string): ResolvedWeaponBalance {
+  //1.- Lookup the variant entry and raise if the identifier is unknown.
+  const variant = weaponBalanceCatalog.weapons[weaponId];
+  if (!variant) {
+    throw new Error(`Unknown weapon balance entry: ${weaponId}`);
+  }
+  //2.- Fetch the archetype defaults and ensure the catalog contains the requested archetype.
+  const archetype = weaponBalanceCatalog.archetypes[variant.archetype];
+  if (!archetype) {
+    throw new Error(`Missing archetype balance for ${variant.archetype}`);
+  }
+  //3.- Merge the archetype baseline with the variant overrides into an immutable payload.
+  return mergeWeaponBalance(archetype, variant, weaponId);
+}
 
 export function deriveStatsWithModifiers(base: VehicleStats, modifiers: PassiveModifiers): VehicleStats {
   //1.- Start from a shallow copy so downstream code receives an isolated structure.
