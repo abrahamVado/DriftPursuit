@@ -56,8 +56,11 @@ describe('SimulationControlPanel', () => {
     await renderPanel(<SimulationControlPanel baseUrl="" />)
     const status = container.querySelector('[data-testid="bridge-status"]')
     const error = container.querySelector('[data-testid="bridge-error"]')
-    expect(status?.textContent ?? '').toContain('offline')
-    expect(error?.textContent ?? '').toContain('NEXT_PUBLIC_SIM_BRIDGE_URL')
+    const statusText = status?.textContent ?? ''
+    const errorText = error?.textContent ?? ''
+    expect(statusText).toContain('offline')
+    expect(errorText).toContain('NEXT_PUBLIC_SIM_BRIDGE_URL')
+    expect(errorText).toContain('http://localhost:8000')
   })
 
   it('reports a successful handshake', async () => {

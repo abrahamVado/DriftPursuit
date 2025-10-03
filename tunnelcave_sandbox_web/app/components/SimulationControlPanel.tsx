@@ -9,7 +9,7 @@ type PanelProps = {
 }
 
 const DEFAULT_STATUS = 'Simulation bridge offline.'
-const CONFIG_HINT = 'Set NEXT_PUBLIC_SIM_BRIDGE_URL to enable interactive control.'
+const CONFIG_HINT = 'Set NEXT_PUBLIC_SIM_BRIDGE_URL (e.g. http://localhost:8000) to enable interactive control.'
 
 export default function SimulationControlPanel({ baseUrl }: PanelProps) {
   //1.- Resolve the bridge base URL lazily so runtime overrides and props are respected.
