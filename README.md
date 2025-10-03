@@ -60,6 +60,23 @@ docker build -t driftpursuit/bot-runner:local python-sim
 docker build -t driftpursuit/web-client:local tunnelcave_sandbox_web
 ```
 
+## Web Client Controls
+
+The Tunnelcave sandbox web client ships with the following keyboard layout. Each action maps to the underlying vehicle control axis noted below:
+
+| Action | Default Key | Axis |
+| --- | --- | --- |
+| Accelerate | W | Throttle (positive) |
+| Brake / Reverse | S | Brake (positive) |
+| Steer Left | A | Steer (negative) |
+| Steer Right | D | Steer (positive) |
+| Handbrake | Space | Handbrake (toggle) |
+| Boost | Left Shift | Boost (toggle) |
+| Shift Down | Q | Gear (negative) |
+| Shift Up | E | Gear (positive) |
+
+Accessibility settings allow players to rebind any action while still displaying the original defaults for reference. The in-game help overlay lists the current key along with the default so customised layouts remain easy to share during cooperative play.
+
 ## Development
 
 Run the unit tests to validate protocol handling and configuration parsing:
