@@ -113,6 +113,7 @@ type Broker struct {
 	tierManager       *networking.TierManager
 	radarEvents       chan<- *pb.RadarContact
 	radarProc         *radar.Processor
+	radarScanner      *radar.Scanner
 
 	replayRecorder      *replay.Recorder
 	replayFrameInterval time.Duration
@@ -254,6 +255,13 @@ func NewBroker(maxPayloadBytes int64, maxClients int, startedAt time.Time, logge
 
 	if broker.radarProc == nil {
 		broker.radarProc = radar.NewProcessor(broker.radarEvents)
+	}
+	if broker.radarScanner == nil && broker.world != nil && broker.world.Vehicles != nil {
+		//1.- Bridge radar sweeps into the tier manager and event processor.
+		handler := func(frame *pb.RadarFrame) {
+			broker.ingestRadarFrame(frame)
+		}
+		broker.radarScanner = radar.NewScanner(radar.Options{Vehicles: broker.world.Vehicles, Handler: handler})
 	}
 
 	if broker.snapshotter != nil {
@@ -990,6 +998,36 @@ func (b *Broker) advanceSimulation(step time.Duration) {
 	b.publishWorldDiff(tick, diff)
 }
 
+func (b *Broker) ingestRadarFrame(frame *pb.RadarFrame) {
+	if b == nil || frame == nil {
+		return
+	}
+	if b.tierManager != nil {
+		b.tierManager.ApplyRadarFrame(frame)
+	}
+	if b.radarProc != nil {
+		b.radarProc.Process(frame)
+	}
+}
+
+// StartRadar activates the autonomous radar scanner using the supplied context lifetime.
+func (b *Broker) StartRadar(ctx context.Context) {
+	if b == nil || b.radarScanner == nil {
+		return
+	}
+	//1.- Delegate lifecycle management to the scanner so it honours the 4 Hz sweep cadence.
+	b.radarScanner.Start(ctx)
+}
+
+// StopRadar halts the radar scanner loop and waits for a graceful shutdown.
+func (b *Broker) StopRadar() {
+	if b == nil || b.radarScanner == nil {
+		return
+	}
+	//1.- Ensure the goroutine exits before broker teardown completes.
+	b.radarScanner.Stop()
+}
+
 func (b *Broker) maybeRecordReplayFrame(step time.Duration) {
 	if b == nil || b.replayRecorder == nil || b.world == nil {
 		return
@@ -1185,10 +1223,8 @@ func (b *Broker) handleStructuredMessage(client *Client, envelope inboundEnvelop
 			}
 			return false
 		}
-		b.tierManager.ApplyRadarFrame(&frame)
-		if b.radarProc != nil {
-			b.radarProc.Process(&frame)
-		}
+		b.ingestRadarFrame(&frame)
+		return true
 	case "world_snapshot":
 		var snapshot pb.WorldSnapshot
 		if err := unmarshal.Unmarshal(raw, &snapshot); err != nil {
@@ -1385,6 +1421,11 @@ func main() {
 	simLoop.Start(simCtx)
 	defer simCancel()
 	defer simLoop.Stop()
+
+	radarCtx, radarCancel := context.WithCancel(context.Background())
+	broker.StartRadar(radarCtx)
+	defer radarCancel()
+	defer broker.StopRadar()
 
 	// build handler with consistent mux
 	handler := buildHandler(broker, cfg)

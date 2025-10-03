@@ -4,7 +4,7 @@
   "description": "",
   "main": "index.js",
   "scripts": {
-    "test": "ts-node src/gameplayConfig.test.ts && ts-node src/vehicleRoster.test.ts && ts-node src/vehicleLoadoutBridge.test.ts && ts-node src/vehicle_state.test.ts && ts-node src/combat_event.test.ts && ts-node src/intentPublisher.test.ts && ts-node src/interpolator.test.ts && ts-node src/physics/integrator.test.ts && ts-node src/timeSync.test.ts && ts-node src/authToken.test.ts && ts-node src/eventStream.test.ts && ts-node src/world_chunk_loader.test.ts && ts-node src/hud/damageFeed.test.ts"
+    "test": "ts-node src/gameplayConfig.test.ts && ts-node src/vehicleRoster.test.ts && ts-node src/vehicleLoadoutBridge.test.ts && ts-node src/vehicle_state.test.ts && ts-node src/combat_event.test.ts && ts-node src/intentPublisher.test.ts && ts-node src/interpolator.test.ts && ts-node src/physics/integrator.test.ts && ts-node src/timeSync.test.ts && ts-node src/authToken.test.ts && ts-node src/eventStream.test.ts && ts-node src/world_chunk_loader.test.ts && ts-node src/hud/damageFeed.test.ts && ts-node src/hud/radarContacts.test.ts"
   },
   "keywords": [],
   "author": "",
