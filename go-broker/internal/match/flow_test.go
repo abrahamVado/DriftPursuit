@@ -96,3 +96,43 @@ func TestSpawnShieldWindowExpires(t *testing.T) {
 		t.Fatalf("expected shield to expire, still have %v", eta)
 	}
 }
+
+func TestRespawnLifecycleSelectsSafeRingAndShield(t *testing.T) {
+	//1.- Configure a deterministic clock and rings arranged around the player.
+	current := time.Unix(0, 0)
+	rings := []SafeRing{
+		{ID: "west", Position: &pb.Vector3{X: -500}, Volumes: []SafeVolume{{Center: &pb.Vector3{X: -520}}}},
+		{ID: "forward", Position: &pb.Vector3{X: 300}, Volumes: []SafeVolume{{Center: &pb.Vector3{X: 320}}}},
+	}
+	flow := NewFlow(rings, WithClock(func() time.Time { return current }), WithRespawnDelay(2*time.Second))
+
+	//2.- Record the elimination and confirm the respawn is delayed appropriately.
+	flow.RegisterElimination("alpha")
+	if eta := flow.RespawnETA("alpha"); eta != 2*time.Second {
+		t.Fatalf("expected 2s respawn delay, got %v", eta)
+	}
+
+	//3.- Advance beyond the delay and request a safe ring using the forward vector.
+	current = current.Add(2100 * time.Millisecond)
+	if eta := flow.RespawnETA("alpha"); eta != 0 {
+		t.Fatalf("expected respawn readiness, got %v", eta)
+	}
+	ring, err := flow.SelectSafeRing(&pb.Vector3{X: 0, Y: 0, Z: 0}, &pb.Vector3{X: 1})
+	if err != nil {
+		t.Fatalf("unexpected error selecting ring: %v", err)
+	}
+	if ring.ID != "forward" {
+		t.Fatalf("expected forward ring for safe placement, got %q", ring.ID)
+	}
+	if len(ring.Volumes) == 0 {
+		t.Fatal("expected safe volumes to guide placement")
+	}
+
+	//4.- Clear the respawn to simulate the player returning and validate the spawn shield.
+	flow.ClearRespawn("alpha")
+	remaining := flow.SpawnShieldRemaining("alpha")
+	if remaining != DefaultSpawnShieldDuration {
+		t.Fatalf("expected default shield duration, got %v", remaining)
+	}
+	t.Logf("QA_LOG_RESPAWN ring=%s shield=%v", ring.ID, remaining)
+}
