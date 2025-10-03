@@ -30,6 +30,7 @@ type VehicleLoadoutConfig struct {
 	Selectable       bool             `json:"selectable"`
 	Weapons          []WeaponConfig   `json:"weapons"`
 	PassiveModifiers PassiveModifiers `json:"passiveModifiers"`
+	RadarRangeMeters float64          `json:"radarRangeMeters"`
 }
 
 type skiffLoadoutFile struct {
@@ -118,6 +119,33 @@ func LoadoutDamageMultiplier(loadoutID string) float64 {
 		}
 	}
 	return 1
+}
+
+// LoadoutRadarRange returns the tuned radar detection radius for the requested loadout.
+func LoadoutRadarRange(loadoutID string) float64 {
+	const (
+		minimumRange = 600.0
+		maximumRange = 900.0
+	)
+	//1.- Clamp the configured range to the supported envelope so gameplay tuning remains safe.
+	clamp := func(value float64) float64 {
+		if value < minimumRange {
+			return minimumRange
+		}
+		if value > maximumRange {
+			return maximumRange
+		}
+		return value
+	}
+	for _, loadout := range SkiffLoadouts() {
+		if loadout.ID == loadoutID {
+			if loadout.RadarRangeMeters > 0 {
+				return clamp(loadout.RadarRangeMeters)
+			}
+			break
+		}
+	}
+	return minimumRange
 }
 
 // DefaultSkiffLoadoutID returns the first selectable loadout identifier.

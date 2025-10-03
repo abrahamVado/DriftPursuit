@@ -15,7 +15,8 @@
         "agilityMultiplier": 1.0,
         "damageMultiplier": 1.0,
         "boostCooldownScale": 1.0
-      }
+      },
+      "radarRangeMeters": 720
     },
     {
       "id": "skiff-raider",
@@ -32,7 +33,8 @@
         "agilityMultiplier": 0.85,
         "damageMultiplier": 0.9,
         "boostCooldownScale": 0.85
-      }
+      },
+      "radarRangeMeters": 900
     },
     {
       "id": "skiff-tank",
@@ -49,7 +51,8 @@
         "agilityMultiplier": 0.8,
         "damageMultiplier": 1.25,
         "boostCooldownScale": 1.15
-      }
+      },
+      "radarRangeMeters": 600
     }
   ]
 }

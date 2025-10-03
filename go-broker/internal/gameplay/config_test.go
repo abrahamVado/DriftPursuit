@@ -73,4 +73,15 @@ func TestSkiffLoadoutsExposeSelectableCatalog(t *testing.T) {
 	if id := DefaultSkiffLoadoutID(); id != "skiff-strike" {
 		t.Fatalf("unexpected default loadout %q", id)
 	}
+
+	//5.- Radar range helper must respect the tuning window per loadout configuration.
+	if rng := LoadoutRadarRange("skiff-raider"); rng != 900 {
+		t.Fatalf("unexpected raider radar range %.2f", rng)
+	}
+	if rng := LoadoutRadarRange("skiff-strike"); rng != 720 {
+		t.Fatalf("unexpected strike radar range %.2f", rng)
+	}
+	if rng := LoadoutRadarRange("unknown"); rng != 600 {
+		t.Fatalf("unknown loadout should fall back to minimum range, got %.2f", rng)
+	}
 }
