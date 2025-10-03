@@ -11,6 +11,9 @@ importers:
       '@bufbuild/protobuf':
         specifier: ^2.9.0
         version: 2.9.0
+      '@rollup/rollup-linux-x64-gnu':
+        specifier: ^4.24.0
+        version: 4.52.4
       three:
         specifier: ^0.168.0
         version: 0.168.0
@@ -1619,8 +1622,7 @@ snapshots:
   '@rollup/rollup-linux-s390x-gnu@4.52.4':
     optional: true
 
-  '@rollup/rollup-linux-x64-gnu@4.52.4':
-    optional: true
+  '@rollup/rollup-linux-x64-gnu@4.52.4': {}
 
   '@rollup/rollup-linux-x64-musl@4.52.4':
     optional: true
