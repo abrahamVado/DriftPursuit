@@ -1,0 +1,7 @@
+{"level":"info","message":"no allowed origins configured; permitting only local development origins","service":"broker","timestamp":"2025-10-03T06:17:38.047588434Z"}
+{"bytes":1048576,"level":"info","message":"maximum WebSocket payload configured","service":"broker","timestamp":"2025-10-03T06:17:38.047614423Z"}
+{"level":"info","max_clients":256,"message":"limiting WebSocket clients","service":"broker","timestamp":"2025-10-03T06:17:38.047622127Z"}
+{"level":"info","message":"websocket authentication disabled","service":"broker","timestamp":"2025-10-03T06:17:38.047692169Z"}
+{"component":"grpc","level":"info","message":"gRPC shared-secret authentication enabled","service":"broker","timestamp":"2025-10-03T06:17:38.047719179Z"}
+{"address":":43127","level":"info","message":"broker listening","service":"broker","timestamp":"2025-10-03T06:17:38.047791505Z","tls":false}
+{"address":":43128","level":"info","message":"gRPC time sync server listening","service":"broker","timestamp":"2025-10-03T06:17:38.048003985Z"}
