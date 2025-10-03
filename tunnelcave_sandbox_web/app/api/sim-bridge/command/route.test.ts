@@ -60,9 +60,9 @@ describe('sim-bridge command route', () => {
     expect(body).toEqual(upstreamResponse)
   })
 
-  it('reports gateway errors when the upstream request fails', async () => {
+  it('reports gateway errors when the upstream request fails with actionable tips', async () => {
     process.env.NEXT_PUBLIC_SIM_BRIDGE_URL = 'http://localhost:8000'
-    const fetchMock = vi.fn().mockRejectedValueOnce(new Error('timeout'))
+    const fetchMock = vi.fn().mockRejectedValueOnce(new Error('fetch failed', { cause: { code: 'ECONNREFUSED' } }))
     global.fetch = fetchMock as unknown as typeof global.fetch
 
     const request = new Request('http://localhost/api/sim-bridge/command', {
@@ -76,5 +76,7 @@ describe('sim-bridge command route', () => {
 
     expect(response.status).toBe(502)
     expect(body.message).toContain('Failed to forward command to simulation bridge at http://localhost:8000')
+    expect(body.message).toContain('Ensure the simulation bridge service is running')
+    expect(body.message).toContain('host.docker.internal')
   })
 })

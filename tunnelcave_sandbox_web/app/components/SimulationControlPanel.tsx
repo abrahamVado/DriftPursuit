@@ -50,7 +50,7 @@ export default function SimulationControlPanel({ baseUrl }: PanelProps) {
     }
     return ''
   }, [envBaseUrl, overrideBaseUrl])
-  //2.- Track status and error messages so the UI communicates connection progress.
+  //5.- Track status and error messages so the UI communicates connection progress.
   const [status, setStatus] = useState(DEFAULT_STATUS)
   const [error, setError] = useState('')
   const [lastCommand, setLastCommand] = useState('none')
@@ -77,9 +77,22 @@ export default function SimulationControlPanel({ baseUrl }: PanelProps) {
         }
         return payload
       })
-      .then((payload: { message?: string }) => {
+      .then((payload: { message?: string; bridgeUrl?: string }) => {
         if (cancelled) {
           return
+        }
+        //4.- Surface the resolved Go simulation bridge URL so operators can confirm the upstream endpoint.
+        const upstreamBridgeUrl = [
+          payload.bridgeUrl,
+          overrideBaseUrl,
+          envBaseUrl,
+          handshakeUrl,
+        ].find((candidate): candidate is string => Boolean(candidate))
+        if (upstreamBridgeUrl) {
+          console.info(
+            '[SimulationControlPanel] Simulation bridge handshake via %s',
+            upstreamBridgeUrl,
+          )
         }
         setStatus(payload.message ?? 'Simulation bridge online')
         setError('')
@@ -91,7 +104,7 @@ export default function SimulationControlPanel({ baseUrl }: PanelProps) {
         setStatus(DEFAULT_STATUS)
         setError(`Handshake error: ${reason.message}`)
       })
-    //4.- Clean up the pending request if the component unmounts during negotiation.
+    //5.- Clean up the pending request if the component unmounts during negotiation.
     return () => {
       cancelled = true
       controller.abort()

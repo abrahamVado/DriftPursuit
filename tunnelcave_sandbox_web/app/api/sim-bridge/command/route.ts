@@ -1,4 +1,5 @@
 import { missingBridgeConfigMessage, resolveBridgeBaseUrl } from '../config'
+import { bridgeTroubleshootingSuffix } from '../errors'
 
 export async function POST(request: Request): Promise<Response> {
   //1.- Resolve the upstream simulation bridge URL before forwarding the command payload.
@@ -25,11 +26,12 @@ export async function POST(request: Request): Promise<Response> {
       headers: { 'Content-Type': 'application/json' },
     })
   } catch (error) {
-    //4.- Surface a gateway error that includes the upstream address for easier troubleshooting.
+    //4.- Surface a gateway error that includes the upstream address and actionable recovery guidance.
     const message = error instanceof Error ? error.message : 'Unknown error'
+    const hint = bridgeTroubleshootingSuffix(baseUrl, error)
     const payload = {
       status: 'error',
-      message: `Failed to forward command to simulation bridge at ${baseUrl}: ${message}`,
+      message: `Failed to forward command to simulation bridge at ${baseUrl}: ${message}${hint}`,
     }
     return new Response(JSON.stringify(payload), {
       status: 502,

@@ -1,4 +1,5 @@
 import { missingBridgeConfigMessage, resolveBridgeBaseUrl } from '../config'
+import { bridgeTroubleshootingSuffix } from '../errors'
 
 export async function GET(): Promise<Response> {
   //1.- Resolve the upstream simulation bridge URL before issuing the proxy request.
@@ -24,11 +25,12 @@ export async function GET(): Promise<Response> {
       headers: { 'Content-Type': 'application/json' },
     })
   } catch (error) {
-    //4.- Map network failures to a gateway error so the UI can inform the operator.
+    //4.- Map network failures to a gateway error so the UI can inform the operator and include troubleshooting hints.
     const message = error instanceof Error ? error.message : 'Unknown error'
+    const hint = bridgeTroubleshootingSuffix(baseUrl, error)
     const payload = {
       status: 'error',
-      message: `Failed to reach simulation bridge at ${baseUrl}: ${message}`,
+      message: `Failed to reach simulation bridge at ${baseUrl}: ${message}${hint}`,
     }
     return new Response(JSON.stringify(payload), {
       status: 502,

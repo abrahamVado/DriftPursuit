@@ -81,6 +81,27 @@ describe('SimulationControlPanel', () => {
     expect(fetchMock).toHaveBeenCalledWith('http://localhost:8080/handshake', expect.any(Object))
   })
 
+  it('logs the upstream bridge URL after a successful handshake', async () => {
+    const handshake = { message: 'Simulation bridge online', bridgeUrl: 'http://localhost:8000' }
+    const fetchMock = vi.fn().mockResolvedValueOnce({ ok: true, json: async () => handshake })
+    global.fetch = fetchMock as unknown as typeof global.fetch
+    const consoleSpy = vi.spyOn(console, 'info').mockImplementation(() => {})
+    process.env.NEXT_PUBLIC_SIM_BRIDGE_URL = 'http://localhost:8000'
+
+    try {
+      await renderPanel(<SimulationControlPanel />)
+      await flushMicrotasks()
+
+      expect(consoleSpy).toHaveBeenCalledWith(
+        '[SimulationControlPanel] Simulation bridge handshake via %s',
+        'http://localhost:8000',
+      )
+    } finally {
+      //1.- Always restore the console spy to avoid leaking mocks between tests.
+      consoleSpy.mockRestore()
+    }
+  })
+
   it('surfaces detailed handshake errors from the API proxy', async () => {
     process.env.NEXT_PUBLIC_SIM_BRIDGE_URL = 'http://localhost:8000'
     const fetchMock = vi
