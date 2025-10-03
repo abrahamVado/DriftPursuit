@@ -1,6 +1,9 @@
 'use client'
 
-import React, { useEffect, useMemo, useState } from 'react'
+import React, { useCallback, useEffect, useMemo, useState } from 'react'
+
+import SimulationControlPanel, { type CommandName } from './SimulationControlPanel'
+import VehicleScene, { type ExternalCommand } from './VehicleScene'
 
 const DEFAULT_STATUS = 'Loading web client shell…'
 
@@ -9,6 +12,13 @@ export default function ClientBootstrap() {
   const brokerUrl = useMemo(() => process.env.NEXT_PUBLIC_BROKER_URL?.trim() ?? '', [])
   //2.- Track the status message that guides visitors through the setup flow.
   const [status, setStatus] = useState(DEFAULT_STATUS)
+  const [externalCommand, setExternalCommand] = useState<ExternalCommand | undefined>(undefined)
+
+  const handleCommandSent = useCallback((command: CommandName) => {
+    //1.- Convert the successful button press into a high-resolution timestamp for the vehicle scene.
+    const issuedAtMs = typeof performance !== 'undefined' ? performance.now() : Date.now()
+    setExternalCommand({ command, issuedAtMs })
+  }, [])
 
   useEffect(() => {
     //1.- Explain how to configure the broker when the environment variable is absent.
@@ -38,9 +48,10 @@ export default function ClientBootstrap() {
         </ol>
       </section>
       <section>
-        <div id="canvas-root" aria-label="3D world mount" />
+        <VehicleScene externalCommand={externalCommand} />
         <div id="hud-root" aria-label="HUD overlay mount" />
       </section>
+      <SimulationControlPanel onCommandSent={handleCommandSent} />
     </main>
   )
 }
