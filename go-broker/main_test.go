@@ -438,6 +438,27 @@ func listenOnce(conn *websocket.Conn) <-chan wsReadResult {
 	return ch
 }
 
+func drainInitialMatchStatus(t *testing.T, ch <-chan wsReadResult) {
+	t.Helper()
+	select {
+	case res := <-ch:
+		if res.err != nil {
+			t.Fatalf("initial match status read failed: %v", res.err)
+		}
+		var envelope struct {
+			Type string `json:"type"`
+		}
+		if err := json.Unmarshal(res.msg, &envelope); err != nil {
+			t.Fatalf("decode initial match status: %v", err)
+		}
+		if envelope.Type != "match_status" {
+			t.Fatalf("unexpected initial message type: %s", res.msg)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for initial match status")
+	}
+}
+
 func waitForBrokerRecovery(t *testing.T, broker *Broker) {
 	t.Helper()
 	deadline := time.Now().Add(2 * time.Second)
@@ -462,8 +483,11 @@ func TestServeWSDropsInvalidMessages(t *testing.T) {
 
 	sender := dialTestWebSocket(t, server.URL)
 	defer sender.Close()
+	drainInitialMatchStatus(t, listenOnce(sender))
 
 	pending := listenOnce(receiver)
+	drainInitialMatchStatus(t, pending)
+	pending = listenOnce(receiver)
 
 	// Send invalid (non-JSON) message; should be dropped and not broadcast.
 	if err := sender.WriteMessage(websocket.TextMessage, []byte("not json")); err != nil {
@@ -516,6 +540,8 @@ func TestServeWSRejectsOversizedMessages(t *testing.T) {
 	defer sender.Close()
 
 	pending := listenOnce(receiver)
+	drainInitialMatchStatus(t, pending)
+	pending = listenOnce(receiver)
 
 	// Build an envelope that exceeds the 64-byte limit.
 	oversized := []byte(fmt.Sprintf(`{"type":"big","id":"%s"}`, strings.Repeat("x", 80)))
@@ -530,11 +556,33 @@ func TestServeWSRejectsOversizedMessages(t *testing.T) {
 	if err := sender.SetReadDeadline(time.Now().Add(time.Second)); err != nil {
 		t.Fatalf("set read deadline: %v", err)
 	}
-	if _, _, err := sender.ReadMessage(); err == nil {
-		t.Fatal("expected connection to close after oversized message")
-	} else if !websocket.IsCloseError(err, websocket.CloseMessageTooBig) && !strings.Contains(strings.ToLower(err.Error()), "close 1009") {
-		// some stacks map this to 1009 (Message Too Big)
-		t.Fatalf("expected CloseMessageTooBig/1009 error, got %v", err)
+	closeDeadline := time.Now().Add(time.Second)
+	for {
+		if err := sender.SetReadDeadline(closeDeadline); err != nil {
+			t.Fatalf("update read deadline while awaiting close: %v", err)
+		}
+		mt, msg, err := sender.ReadMessage()
+		if err != nil {
+			if !websocket.IsCloseError(err, websocket.CloseMessageTooBig) && !strings.Contains(strings.ToLower(err.Error()), "close 1009") {
+				t.Fatalf("expected CloseMessageTooBig/1009 error, got %v", err)
+			}
+			break
+		}
+		if mt != websocket.TextMessage {
+			t.Fatalf("unexpected message type before close: %d", mt)
+		}
+		var envelope struct {
+			Type string `json:"type"`
+		}
+		if err := json.Unmarshal(msg, &envelope); err != nil {
+			t.Fatalf("decode message before close: %v", err)
+		}
+		if envelope.Type != "match_status" {
+			t.Fatalf("unexpected payload before close: %s", msg)
+		}
+		if time.Now().After(closeDeadline) {
+			t.Fatal("timed out waiting for close frame after match_status update")
+		}
 	}
 	if err := sender.SetReadDeadline(time.Time{}); err != nil {
 		t.Fatalf("reset read deadline: %v", err)
@@ -731,6 +779,19 @@ func TestBrokerSnapshotRecovery(t *testing.T) {
 	defer conn.Close()
 	if err := conn.SetReadDeadline(time.Now().Add(time.Second)); err != nil {
 		t.Fatalf("set read deadline: %v", err)
+	}
+	if _, payload, err := conn.ReadMessage(); err != nil {
+		t.Fatalf("read initial match status: %v", err)
+	} else {
+		var first struct {
+			Type string `json:"type"`
+		}
+		if err := json.Unmarshal(payload, &first); err != nil {
+			t.Fatalf("decode initial match status: %v", err)
+		}
+		if first.Type != "match_status" {
+			t.Fatalf("unexpected first message: %s", payload)
+		}
 	}
 	var receivedTypes []string
 	for i := 0; i < 2; i++ {
