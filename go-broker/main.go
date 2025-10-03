@@ -1811,7 +1811,14 @@ func main() {
 
 	server := &http.Server{Addr: cfg.Address, Handler: handler}
 
-	logger.Info("broker listening", logging.String("address", cfg.Address), logging.Bool("tls", certProvided))
+	//1.- Surface the externally reachable URL so terminal output immediately shows where the broker can be reached.
+	advertisedURL := listenerURL(cfg.Address, certProvided)
+	logger.Info(
+		"broker listening",
+		logging.String("address", cfg.Address),
+		logging.Bool("tls", certProvided),
+		logging.String("url", advertisedURL),
+	)
 
 	if certProvided {
 		if err := server.ListenAndServeTLS(cfg.TLSCertPath, cfg.TLSKeyPath); err != nil {
