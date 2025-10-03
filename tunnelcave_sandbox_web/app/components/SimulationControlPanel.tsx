@@ -1,6 +1,10 @@
 'use client'
 
 import React, { useCallback, useEffect, useMemo, useState } from 'react'
+import {
+  CONTROL_PANEL_EVENT,
+  type ControlPanelIntentDetail,
+} from '../../../typescript-client/src/world/vehicleSceneManager'
 
 type CommandName = 'throttle' | 'brake'
 
@@ -90,6 +94,33 @@ export default function SimulationControlPanel({ baseUrl }: PanelProps) {
     [resolvedBaseUrl],
   )
 
+  const emitControlIntent = useCallback((command: CommandName) => {
+    //1.- Forward UI interactions as DOM events so other subsystems can mirror HTTP commands.
+    const target: EventTarget | null =
+      typeof window !== 'undefined'
+        ? window
+        : typeof document !== 'undefined'
+          ? document
+          : null
+    if (!target) {
+      return
+    }
+    const detail: ControlPanelIntentDetail = {
+      control: command,
+      value: 1,
+      issuedAtMs: Date.now(),
+    }
+    target.dispatchEvent(new CustomEvent(CONTROL_PANEL_EVENT, { detail }))
+  }, [])
+
+  const handleControl = useCallback(
+    (command: CommandName) => {
+      emitControlIntent(command)
+      void sendCommand(command)
+    },
+    [emitControlIntent, sendCommand],
+  )
+
   //3.- Render the control panel with buttons that dispatch commands to the simulation bridge.
   return (
     <section aria-label="Simulation control panel">
@@ -101,10 +132,10 @@ export default function SimulationControlPanel({ baseUrl }: PanelProps) {
         </p>
       ) : null}
       <div>
-        <button type="button" onClick={() => void sendCommand('throttle')}>
+        <button type="button" onClick={() => handleControl('throttle')}>
           Throttle
         </button>
-        <button type="button" onClick={() => void sendCommand('brake')}>
+        <button type="button" onClick={() => handleControl('brake')}>
           Brake
         </button>
       </div>

@@ -4,6 +4,10 @@ import { createRoot, type Root } from 'react-dom/client'
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import SimulationControlPanel from './SimulationControlPanel'
+import {
+  CONTROL_PANEL_EVENT,
+  type ControlPanelIntentDetail,
+} from '../../../typescript-client/src/world/vehicleSceneManager'
 
 const originalFetch = global.fetch
 
@@ -101,5 +105,30 @@ describe('SimulationControlPanel', () => {
       headers: { 'Content-Type': 'application/json' },
       body: expect.stringContaining('throttle'),
     })
+  })
+
+  it('emits control intents when buttons are pressed', async () => {
+    const handshake = { message: 'Simulation bridge online' }
+    const fetchMock = vi.fn().mockResolvedValueOnce({ ok: true, json: async () => handshake })
+    global.fetch = fetchMock as unknown as typeof global.fetch
+
+    const listener = vi.fn()
+    window.addEventListener(CONTROL_PANEL_EVENT, listener as EventListener)
+
+    await renderPanel(<SimulationControlPanel baseUrl="http://localhost:8080" />)
+    await flushMicrotasks()
+
+    const throttleButton = container.querySelector('button') as HTMLButtonElement
+    await act(async () => {
+      throttleButton.click()
+    })
+    await flushMicrotasks()
+
+    expect(listener).toHaveBeenCalledTimes(1)
+    const event = listener.mock.calls[0]?.[0] as CustomEvent<ControlPanelIntentDetail>
+    expect(event?.detail.control).toBe('throttle')
+    expect(event?.detail.value).toBe(1)
+
+    window.removeEventListener(CONTROL_PANEL_EVENT, listener as EventListener)
   })
 })
