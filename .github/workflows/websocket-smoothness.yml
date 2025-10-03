@@ -1,0 +1,26 @@
+name: WebSocket smoothness
+
+on:
+  push:
+    branches: ["main"]
+  workflow_dispatch:
+
+jobs:
+  packet-loss-harness:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install dependencies
+        run: npm ci
+        working-directory: tunnelcave_sandbox_web
+
+      - name: Run smoothness harness
+        run: npm test
+        working-directory: tunnelcave_sandbox_web

@@ -36,6 +36,15 @@ class FakeWebSocket {
   }
 }
 
+function makeDeterministicRandom(seed: number): () => number {
+  //1.- Provide a reproducible pseudo-random generator so packet loss simulation stays deterministic.
+  let state = seed >>> 0;
+  return () => {
+    state = (state * 1664525 + 1013904223) >>> 0;
+    return state / 0xffffffff;
+  };
+}
+
 function encodeVector3(vector: Vector3, fieldNumber: number, writer: BinaryWriter): void {
   //1.- Marshal a Vector3 message using the same structure as the protobuf encoder.
   const nested = writer.uint32((fieldNumber << 3) | 2).fork();
@@ -277,6 +286,117 @@ describe("WebSocketClient", () => {
     const after = client.getEntityState("alpha", 600);
     expect(after).toBeDefined();
     expect(after?.position.x).toBeCloseTo(1);
+  });
+
+  it("maintains smooth interpolation under 2% packet loss", async () => {
+    const entityId = "alpha";
+    const tickSpacingMs = 50;
+    const totalSnapshots = 200;
+    const expectedVelocityMetersPerMs = 0.04;
+    const reconciliationDelayMs = 150;
+    const rng = makeDeterministicRandom(0xdeadbeef);
+
+    let now = 0;
+    const socket = new FakeWebSocket();
+    const client = buildClient({
+      socket,
+      now: () => now,
+      reconciliationDelayMs,
+      logger: { debug: () => {}, info: () => {}, warn: () => {} },
+    });
+
+    await client.connect();
+
+    type ScheduledSnapshot = {
+      capturedAt: number;
+      deliveryAt: number;
+      dropped: boolean;
+      payload: Uint8Array;
+    };
+
+    const snapshots: ScheduledSnapshot[] = [];
+    for (let index = 0; index < totalSnapshots; index += 1) {
+      const capturedAt = index * tickSpacingMs;
+      const position: Vector3 = { x: capturedAt * expectedVelocityMetersPerMs, y: 0, z: 0 };
+      const orientation: Orientation = { yawDeg: 0, pitchDeg: 0, rollDeg: 0 };
+      const payload = encodeWorldSnapshot({
+        tickId: index + 1,
+        capturedAtMs: capturedAt,
+        keyframe: index === 0,
+        entities: [
+          encodeEntitySnapshot({
+            entityId,
+            tickId: index + 1,
+            capturedAtMs: capturedAt,
+            keyframe: index === 0,
+            position,
+            orientation,
+          }),
+        ],
+      });
+
+      const networkDelay = 60 + rng() * 40;
+      const dropPacket = index !== 0 && rng() < 0.02;
+      snapshots.push({
+        capturedAt,
+        deliveryAt: capturedAt + networkDelay,
+        dropped: dropPacket,
+        payload,
+      });
+    }
+
+    //1.- Step the simulation clock in ascending order while injecting snapshots at their delivery time.
+    snapshots.sort((a, b) => a.deliveryAt - b.deliveryAt);
+    let delivered = 0;
+    const sampleIntervalMs = 20;
+    const samples: { time: number; position: number }[] = [];
+    const endTime = snapshots[snapshots.length - 1]!.capturedAt + reconciliationDelayMs + 500;
+
+    for (let currentTime = 0; currentTime <= endTime; currentTime += sampleIntervalMs) {
+      now = currentTime;
+      while (delivered < snapshots.length && snapshots[delivered]!.deliveryAt <= currentTime) {
+        const snapshot = snapshots[delivered]!;
+        now = snapshot.deliveryAt;
+        if (!snapshot.dropped) {
+          socket.simulateMessage(snapshot.payload);
+        }
+        delivered += 1;
+      }
+
+      const state = client.getEntityState(entityId, currentTime);
+      if (state) {
+        samples.push({ time: currentTime, position: state.position.x });
+      }
+    }
+
+    //2.- Require a minimum sample density so the jitter measurement is meaningful.
+    expect(samples.length).toBeGreaterThan(50);
+
+    const warmupMs = reconciliationDelayMs * 2;
+    const filtered = samples.filter((sample) => sample.time >= warmupMs);
+    expect(filtered.length).toBeGreaterThan(40);
+
+    //3.- Evaluate instantaneous velocity between successive samples and flag large deviations.
+    let comparisons = 0;
+    const deviations: number[] = [];
+    for (let index = 1; index < filtered.length; index += 1) {
+      const prev = filtered[index - 1]!;
+      const next = filtered[index]!;
+      const deltaTime = next.time - prev.time;
+      if (deltaTime <= 0 || deltaTime > tickSpacingMs * 4) {
+        continue;
+      }
+      const velocity = (next.position - prev.position) / deltaTime;
+      const deviation = Math.abs(velocity - expectedVelocityMetersPerMs);
+      comparisons += 1;
+      deviations.push(deviation);
+    }
+
+    deviations.sort((a, b) => a - b);
+    const p95 = deviations[Math.floor(Math.max(0, deviations.length - 1) * 0.95)] ?? 0;
+
+    expect(comparisons).toBeGreaterThan(40);
+    expect(p95).toBeLessThanOrEqual(0.07);
   });
 });
 
