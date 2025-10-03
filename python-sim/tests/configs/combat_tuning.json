@@ -1,0 +1,16 @@
+{
+  "global_tolerance": 0.05,
+  "scenarios": {
+    "missile_alpha_strike": {
+      "expected_damage": 34.40151,
+      "tolerance": 0.04
+    },
+    "laser_lance_barrage": {
+      "expected_damage": 50.844394
+    },
+    "missile_close_intercept": {
+      "expected_damage": 59.871787,
+      "tolerance": 0.03
+    }
+  }
+}
