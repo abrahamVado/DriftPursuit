@@ -77,6 +77,13 @@ The Tunnelcave sandbox web client ships with the following keyboard layout. Each
 
 Accessibility settings allow players to rebind any action while still displaying the original defaults for reference. The in-game help overlay lists the current key along with the default so customised layouts remain easy to share during cooperative play.
 
+### Accessibility Features
+
+- **Rebind controls in-game** — The sandbox includes a keybinding menu that listens for the next key press and stores overrides locally so every session honours player preferences.
+- **Colour-safe radar palettes** — Switch between the classic high-contrast palette and a deuteranopia-friendly variant; the HUD updates immediately without a reload.
+- **Reduced-motion mode** — Toggle calmer interface animations to assist players sensitive to rapid movement.
+- Accessibility preferences persist to the browser's local storage and can be reset by clearing the stored data.
+
 ## Development
 
 Run the unit tests to validate protocol handling and configuration parsing:
