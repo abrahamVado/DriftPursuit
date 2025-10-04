@@ -1,4 +1,4 @@
-import { RadarPaletteId } from '../input/accessibilityOptions'
+import type { RadarPaletteId } from '../input/accessibilityOptions'
 
 export interface RadarPaletteDefinition {
   //1.- Stable identifier persisted in settings and reflected in data attributes.

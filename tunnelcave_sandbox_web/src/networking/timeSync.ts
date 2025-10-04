@@ -1,1 +1,1 @@
-export { TimeSyncController } from "../../../typescript-client/src/networking/timeSync";
+export { TimeSyncController } from "@client/networking/timeSync";

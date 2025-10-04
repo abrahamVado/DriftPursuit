@@ -1,0 +1,10 @@
+# .dockerignore (repo root)
+.git
+**/node_modules
+**/.next
+**/dist
+**/out
+**/.venv
+**/__pycache__
+*.log
+.DS_Store

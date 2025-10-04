@@ -1,5 +1,5 @@
-import { WebSocketClient, type WebSocketClientOptions } from "../../../tunnelcave_sandbox_web/src/networking/WebSocketClient";
-import type { SocketDialOptions } from "../../../tunnelcave_sandbox_web/src/networking/authenticatedSocket";
+import { WebSocketClient, type WebSocketClientOptions } from "@web/networking/WebSocketClient";
+import type { SocketDialOptions } from "@web/networking/authenticatedSocket";
 import type { Orientation, Vector3 } from "../generated/types";
 import type { InterpolatedState } from "./interpolator";
 

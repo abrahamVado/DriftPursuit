@@ -1,8 +1,6 @@
-import {
-  decoyBalance,
-  resolveWeaponBalance,
-  ResolvedWeaponBalance,
-} from "../../../typescript-client/src/gameplayConfig";
+import { decoyBalance, resolveWeaponBalance } from "@client/gameplayConfig";
+import type { ResolvedWeaponBalance } from "@client/gameplayConfig";
+
 import { createHash } from "node:crypto";
 
 export interface WeaponFirePlan {

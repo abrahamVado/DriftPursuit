@@ -1,37 +1,36 @@
 {
-  "name": "tunnelcave_sandbox_web",
-  "version": "1.0.0",
-  "type": "module",
-  "private": true,
-  "scripts": {
-    "dev": "next dev -p 3000",
-    "build": "next build",
-    "start": "next start -p 3000",
-    "test": "vitest run"
-  },
-  "devDependencies": {
-    "@playwright/test": "^1.49.0",
-    "@testing-library/jest-dom": "^6.6.3",
-    "@testing-library/react": "^16.1.0",
-    "@types/node": "^24.6.2",
-    "@types/react": "^19.2.0",
-    "@types/react-dom": "^19.2.0",
-    "@types/three": "^0.168.0",
-    "dev": "^0.1.3",
-    "i": "^0.3.7",
-    "jsdom": "^24.0.0",
-    "next": "^15.5.4",
-    "pnpm": "^10.18.0",
-    "react": "^19.2.0",
-    "react-dom": "^19.2.0",
-    "run": "^1.5.0",
-    "typescript": "latest",
-    "vite": "^5.2.0",
-    "vitest": "^1.6.0"
-  },
-  "dependencies": {
-    "@bufbuild/protobuf": "^2.9.0",
-    "@rollup/rollup-linux-x64-gnu": "^4.24.0",
-    "three": "^0.168.0"
-  }
+    "name": "tunnelcave_sandbox_web",
+    "version": "1.0.0",
+    "type": "module",
+    "private": true,
+    "scripts": {
+        "dev": "next dev -p 3000",
+        "build": "next build",
+        "start": "next start -p 3000",
+        "test": "vitest run"
+    },
+    "devDependencies": {
+        "@playwright/test": "^1.49.0",
+        "@testing-library/jest-dom": "^6.6.3",
+        "@testing-library/react": "^16.1.0",
+        "@types/node": "^24.6.2",
+        "@types/react": "^19.2.0",
+        "@types/react-dom": "^19.2.0",
+        "@types/three": "^0.168.0",
+        "i": "^0.3.7",
+        "jsdom": "^24.0.0",
+        "pnpm": "^10.18.0",
+        "run": "^1.5.0",
+        "typescript": "latest",
+        "vite": "^5.2.0",
+        "vitest": "^1.6.0"
+    },
+    "dependencies": {
+        "@bufbuild/protobuf": "^2.9.0",
+        "@rollup/rollup-linux-x64-gnu": "^4.24.0",
+        "next": "^15.5.4",
+        "react": "^19.2.0",
+        "react-dom": "^19.2.0",
+        "three": "^0.168.0"
+    }
 }

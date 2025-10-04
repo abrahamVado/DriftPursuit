@@ -1,5 +1,3 @@
-version: "3.9"
-
 services:
   broker:
     build:
@@ -8,10 +6,14 @@ services:
     environment:
       BROKER_ADDR: 0.0.0.0:43127
       BROKER_LOG_LEVEL: info
+      # If you're not using gRPC from other services, disable it to avoid secret errors:
+      BROKER_GRPC_AUTH_MODE: shared_secret
+      BROKER_GRPC_SHARED_SECRET: local-development-shared-secret
     ports:
       - "43127:43127"
     networks:
       - battleground
+    restart: unless-stopped
 
   bot-runner:
     build:
@@ -20,7 +22,7 @@ services:
     depends_on:
       - broker
     environment:
-      BROKER_WS_URL: ws://broker:43127/ws
+      BROKER_WS_URL: ws://broker:43127/ws   # container-to-container DNS works
       TRACE_HEADER: X-Trace-ID
       WEB_BRIDGE_HOST: 0.0.0.0
       WEB_BRIDGE_PORT: 8000
@@ -28,20 +30,27 @@ services:
       - "8000:8000"
     networks:
       - battleground
+    restart: unless-stopped
 
   web-client:
     build:
-      context: ./tunnelcave_sandbox_web
+      context: .
+      dockerfile: tunnelcave_sandbox_web/Dockerfile
     image: driftpursuit/web-client:latest
     depends_on:
       - broker
     environment:
       NODE_ENV: production
-      NEXT_PUBLIC_BROKER_URL: ws://broker:43127/ws
+      # IMPORTANT: this is read by the browser, not the container
+      NEXT_PUBLIC_BROKER_URL: ws://host.docker.internal:43127/ws
     ports:
       - "3000:3000"
     networks:
       - battleground
+    # Linux: map host.docker.internal to the Docker host gateway
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    restart: unless-stopped
 
 networks:
   battleground:

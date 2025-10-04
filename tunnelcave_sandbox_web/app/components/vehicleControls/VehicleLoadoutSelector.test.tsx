@@ -4,7 +4,7 @@ import { describe, expect, it, vi } from 'vitest'
 import { fireEvent, render, screen } from '@testing-library/react'
 
 import { VehicleLoadoutSelector } from './VehicleLoadoutSelector'
-import { getSelectableVehicles } from '../../../../typescript-client/src/webLoadoutBridge'
+import { getSelectableVehicles } from '../@client/webLoadoutBridge'
 
 describe('VehicleLoadoutSelector', () => {
   it('renders vehicle and loadout options from the roster', () => {

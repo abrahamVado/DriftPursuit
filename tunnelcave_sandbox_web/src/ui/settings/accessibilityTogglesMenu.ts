@@ -1,6 +1,6 @@
 import {
   AccessibilityOptions,
-  AccessibilityToggleState,
+  type AccessibilityToggleState,
 } from '../../input/accessibilityOptions'
 import { RADAR_PALETTES, RadarPaletteController } from '../../hud/radarPalettes'
 import { AccessibilityPreferenceStore } from './accessibilityPreferenceStore'

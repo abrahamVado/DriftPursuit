@@ -1,5 +1,5 @@
 import { HudController } from "../hud/controller"
-import type { EventStreamClient } from "../../../typescript-client/src/eventStream"
+import type { EventStreamClient } from "@client/eventStream"
 import type { ConnectionStatus } from "../networking/WebSocketClient"
 
 export interface HudSession {

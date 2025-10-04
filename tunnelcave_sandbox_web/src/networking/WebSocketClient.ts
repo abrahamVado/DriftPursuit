@@ -1,5 +1,5 @@
 import { BinaryReader } from "@bufbuild/protobuf/wire";
-import type { Orientation, Vector3 } from "../../../typescript-client/src/generated/types";
+import type { Orientation, Vector3 } from "@client/generated/types";
 import { openAuthenticatedSocket, type SocketDialOptions } from "./authenticatedSocket";
 import { SnapshotInterpolator, type InterpolatedState, type SnapshotSample } from "./interpolator";
 import { TimeSyncController } from "./timeSync";

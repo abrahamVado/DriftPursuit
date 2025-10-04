@@ -7,7 +7,7 @@ import SimulationControlPanel from './SimulationControlPanel'
 import {
   CONTROL_PANEL_EVENT,
   type ControlPanelIntentDetail,
-} from '../../../typescript-client/src/world/controlPanelEvents'
+} from '@client/world/controlPanelEvents'
 
 const originalFetch = global.fetch
 

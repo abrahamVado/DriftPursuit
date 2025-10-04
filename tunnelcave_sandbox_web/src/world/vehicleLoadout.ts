@@ -4,4 +4,4 @@ export {
   getSelectableVehicles,
   getVehicleLoadouts,
   type LoadoutOption,
-} from "../../../typescript-client/src/webLoadoutBridge";
+} from "@client/webLoadoutBridge";

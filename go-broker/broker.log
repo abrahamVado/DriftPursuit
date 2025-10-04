@@ -5,3 +5,45 @@
 {"component":"grpc","level":"info","message":"gRPC shared-secret authentication enabled","service":"broker","timestamp":"2025-10-03T06:17:38.047719179Z"}
 {"address":":43127","level":"info","message":"broker listening","service":"broker","timestamp":"2025-10-03T06:17:38.047791505Z","tls":false}
 {"address":":43128","level":"info","message":"gRPC time sync server listening","service":"broker","timestamp":"2025-10-03T06:17:38.048003985Z"}
+{"level":"info","message":"no allowed origins configured; permitting only local development origins","service":"broker","timestamp":"2025-10-03T20:48:19.740635522Z"}
+{"bytes":1048576,"level":"info","message":"maximum WebSocket payload configured","service":"broker","timestamp":"2025-10-03T20:48:19.740663144Z"}
+{"level":"info","max_clients":256,"message":"limiting WebSocket clients","service":"broker","timestamp":"2025-10-03T20:48:19.740672111Z"}
+{"level":"info","message":"websocket authentication disabled","service":"broker","timestamp":"2025-10-03T20:48:19.740692499Z"}
+{"component":"grpc","level":"info","message":"gRPC shared-secret authentication enabled","service":"broker","timestamp":"2025-10-03T20:48:19.740727214Z"}
+{"address":":43127","level":"info","message":"broker listening","service":"broker","timestamp":"2025-10-03T20:48:19.740897113Z","tls":false}
+{"address":":43128","level":"info","message":"gRPC time sync server listening","service":"broker","timestamp":"2025-10-03T20:48:19.740984918Z"}
+{"level":"info","message":"no allowed origins configured; permitting only local development origins","service":"broker","timestamp":"2025-10-03T21:14:10.984761976Z"}
+{"bytes":1048576,"level":"info","message":"maximum WebSocket payload configured","service":"broker","timestamp":"2025-10-03T21:14:10.984803875Z"}
+{"level":"info","max_clients":256,"message":"limiting WebSocket clients","service":"broker","timestamp":"2025-10-03T21:14:10.984812862Z"}
+{"level":"info","message":"websocket authentication disabled","service":"broker","timestamp":"2025-10-03T21:14:10.984832519Z"}
+{"component":"grpc","level":"info","message":"gRPC shared-secret authentication enabled","service":"broker","timestamp":"2025-10-03T21:14:10.98485984Z"}
+{"address":":43128","level":"info","message":"gRPC time sync server listening","service":"broker","timestamp":"2025-10-03T21:14:10.985047973Z"}
+{"address":":43127","level":"info","message":"broker listening","service":"broker","timestamp":"2025-10-03T21:14:10.985064795Z","tls":false}
+{"level":"info","message":"no allowed origins configured; permitting only local development origins","service":"broker","timestamp":"2025-10-03T21:28:33.06769423Z"}
+{"bytes":1048576,"level":"info","message":"maximum WebSocket payload configured","service":"broker","timestamp":"2025-10-03T21:28:33.067732482Z"}
+{"level":"info","max_clients":256,"message":"limiting WebSocket clients","service":"broker","timestamp":"2025-10-03T21:28:33.067741449Z"}
+{"level":"info","message":"websocket authentication disabled","service":"broker","timestamp":"2025-10-03T21:28:33.067759593Z"}
+{"component":"grpc","level":"info","message":"gRPC shared-secret authentication enabled","service":"broker","timestamp":"2025-10-03T21:28:33.067795119Z"}
+{"address":":43128","level":"info","message":"gRPC time sync server listening","service":"broker","timestamp":"2025-10-03T21:28:33.067998441Z"}
+{"address":":43127","level":"info","message":"broker listening","service":"broker","timestamp":"2025-10-03T21:28:33.067990065Z","tls":false}
+{"level":"info","message":"no allowed origins configured; permitting only local development origins","service":"broker","timestamp":"2025-10-03T21:50:02.830620106Z"}
+{"bytes":1048576,"level":"info","message":"maximum WebSocket payload configured","service":"broker","timestamp":"2025-10-03T21:50:02.830657176Z"}
+{"level":"info","max_clients":256,"message":"limiting WebSocket clients","service":"broker","timestamp":"2025-10-03T21:50:02.83066478Z"}
+{"level":"info","message":"websocket authentication disabled","service":"broker","timestamp":"2025-10-03T21:50:02.830681472Z"}
+{"component":"grpc","level":"info","message":"gRPC shared-secret authentication enabled","service":"broker","timestamp":"2025-10-03T21:50:02.830705296Z"}
+{"address":":43127","level":"info","message":"broker listening","service":"broker","timestamp":"2025-10-03T21:50:02.830868844Z","tls":false}
+{"address":":43128","level":"info","message":"gRPC time sync server listening","service":"broker","timestamp":"2025-10-03T21:50:02.830913668Z"}
+{"level":"info","message":"no allowed origins configured; permitting only local development origins","service":"broker","timestamp":"2025-10-03T21:58:50.003899779Z"}
+{"bytes":1048576,"level":"info","message":"maximum WebSocket payload configured","service":"broker","timestamp":"2025-10-03T21:58:50.003942188Z"}
+{"level":"info","max_clients":256,"message":"limiting WebSocket clients","service":"broker","timestamp":"2025-10-03T21:58:50.003951937Z"}
+{"level":"info","message":"websocket authentication disabled","service":"broker","timestamp":"2025-10-03T21:58:50.003970702Z"}
+{"component":"grpc","level":"info","message":"gRPC shared-secret authentication enabled","service":"broker","timestamp":"2025-10-03T21:58:50.003998133Z"}
+{"address":":43128","level":"info","message":"gRPC time sync server listening","service":"broker","timestamp":"2025-10-03T21:58:50.004215682Z"}
+{"address":":43127","level":"info","message":"broker listening","service":"broker","timestamp":"2025-10-03T21:58:50.004204561Z","tls":false}
+{"level":"info","message":"no allowed origins configured; permitting only local development origins","service":"broker","timestamp":"2025-10-03T22:06:47.279112531Z"}
+{"bytes":1048576,"level":"info","message":"maximum WebSocket payload configured","service":"broker","timestamp":"2025-10-03T22:06:47.27916009Z"}
+{"level":"info","max_clients":256,"message":"limiting WebSocket clients","service":"broker","timestamp":"2025-10-03T22:06:47.279177122Z"}
+{"level":"info","message":"websocket authentication disabled","service":"broker","timestamp":"2025-10-03T22:06:47.279215574Z"}
+{"component":"grpc","level":"info","message":"gRPC shared-secret authentication enabled","service":"broker","timestamp":"2025-10-03T22:06:47.279254087Z"}
+{"address":":43127","level":"info","message":"broker listening","service":"broker","timestamp":"2025-10-03T22:06:47.279507843Z","tls":false,"url":"http://localhost:43127"}
+{"address":":43128","level":"info","message":"gRPC time sync server listening","service":"broker","timestamp":"2025-10-03T22:06:47.279582624Z"}

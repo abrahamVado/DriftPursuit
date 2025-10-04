@@ -1,7 +1,7 @@
 import { BinaryWriter } from "@bufbuild/protobuf/wire";
 import { describe, expect, it, vi } from "vitest";
 
-import type { Orientation, Vector3 } from "../../../typescript-client/src/generated/types";
+import type { Orientation, Vector3 } from "@client/generated/types";
 import type { SocketDialOptions } from "./authenticatedSocket";
 import { WebSocketClient, decodeWorldSnapshot, type CorrectionEventDetail } from "./WebSocketClient";
 

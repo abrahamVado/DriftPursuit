@@ -1,9 +1,6 @@
-import {
-  VehicleLoadoutSummary,
-  vehicleRoster,
-  VehicleRosterEntry,
-} from "./vehicleRoster";
 
+import { vehicleRoster } from "./vehicleRoster";
+import type { VehicleLoadoutSummary, VehicleRosterEntry } from "./vehicleRoster";
 export interface LoadoutOption {
   //1.- Provide the identifier for binding UI selection state.
   id: string;

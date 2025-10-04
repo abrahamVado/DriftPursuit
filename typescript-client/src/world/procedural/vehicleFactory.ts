@@ -3,6 +3,7 @@ import type {
   VehicleLoadoutSummary,
   VehicleRosterEntry,
 } from "../../vehicleRoster";
+import type * as THREE from "three";
 
 //1.- Provide a strongly typed shape describing runtime overrides applied to geometry generation.
 export interface VehicleFactoryConfig {
@@ -111,11 +112,11 @@ export interface VehicleGeometryDimensions {
 //1.- Bundle the geometry instances along with metadata for downstream use.
 export interface VehicleGeometryResult {
   //1.- Procedurally generated body mesh aligned to the origin.
-  body: import("three").BufferGeometry;
+  body: THREE.BufferGeometry;
   //2.- Wheel mesh oriented with the rotation axis along the local X axis.
-  wheel: import("three").BufferGeometry;
+  wheel: THREE.BufferGeometry;
   //3.- Spoiler mesh already translated to sit above the rear of the chassis.
-  spoiler: import("three").BufferGeometry;
+  spoiler: THREE.BufferGeometry;
   //4.- Reference metadata describing the generated dimensions and provenance.
   metadata: {
     //1.- Source roster identifier informing asset selection pipelines.

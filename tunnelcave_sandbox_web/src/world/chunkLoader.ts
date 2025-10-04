@@ -5,4 +5,4 @@ export {
   type ArcChunkLoaderOptions,
   type ChunkTransport,
   type Vector3,
-} from "../../../typescript-client/src/world/chunkLoader";
+} from "@client/world/chunkLoader";

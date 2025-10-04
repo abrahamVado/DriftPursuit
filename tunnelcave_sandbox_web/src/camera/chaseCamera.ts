@@ -1,4 +1,4 @@
-import { CameraRig, Vector3 } from './countdownSpectator'
+import type { CameraRig, Vector3 } from './countdownSpectator'
 
 export interface VehicleTransform {
   position: Vector3

@@ -4,7 +4,7 @@ import { beforeEach, describe, expect, it } from 'vitest'
 import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 
 import { VehicleControlSettings } from './VehicleControlSettings'
-import { getSelectableVehicles } from '../../../../typescript-client/src/webLoadoutBridge'
+import { getSelectableVehicles } from '../@client/webLoadoutBridge'
 
 describe('VehicleControlSettings', () => {
   beforeEach(() => {

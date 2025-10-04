@@ -1,4 +1,4 @@
-import { appendTokenToURL, buildHMACToken } from "../../../typescript-client/src/authToken";
+import { appendTokenToURL, buildHMACToken } from "@client/authToken";
 
 export type SocketAuthConfig = {
   subject: string;

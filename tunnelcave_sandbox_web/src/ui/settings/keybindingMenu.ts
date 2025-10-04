@@ -1,6 +1,6 @@
 import { AccessibilityOptions } from '../../input/accessibilityOptions'
 import { formatKeyLabel } from '../../input/keyLabels'
-import {
+import type {
   Keybinding,
   KeybindingConfiguration,
   KeybindingOverrides,

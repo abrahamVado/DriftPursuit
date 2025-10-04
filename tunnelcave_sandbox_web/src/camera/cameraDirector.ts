@@ -1,5 +1,5 @@
 import { CountdownSpectatorCamera } from './countdownSpectator'
-import {
+import type {
   ChaseCameraController,
   ChaseCameraRuntimeOptions,
   ChaseCameraEvent,

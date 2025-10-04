@@ -1,4 +1,4 @@
-import type { EventStreamClient } from '../../../typescript-client/src/eventStream'
+import type { EventStreamClient } from '@client/eventStream'
 import type { ConnectionStatus } from '../networking/WebSocketClient'
 import { ConnectionMetric } from './connectionMetric'
 import { CorrectionMetric } from './correctionMetric'

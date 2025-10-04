@@ -1,5 +1,5 @@
-import type { GameEvent } from '../../../typescript-client/src/generated/events'
-import { EventStreamClient, type EventEnvelope } from '../../../typescript-client/src/eventStream'
+import type { GameEvent } from '@client/generated/events'
+import { EventStreamClient, type EventEnvelope } from '@client/eventStream'
 
 export interface ScoreboardEntry {
   //1.- Stable identifier used for deduplicating rows.

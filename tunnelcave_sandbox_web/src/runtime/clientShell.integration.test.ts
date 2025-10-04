@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
-import { EventStreamClient, MemoryEventStore } from '../../../typescript-client/src/eventStream'
+import { EventStreamClient, MemoryEventStore } from '@client/eventStream'
 import type { CorrectionEventDetail, ConnectionStatus } from '../networking/WebSocketClient'
 
 //1.- Provide a test double exposing minimal telemetry controls for HUD rendering assertions.

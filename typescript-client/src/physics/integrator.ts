@@ -1,4 +1,4 @@
-import { VehicleStats, skiffStats } from "../gameplayConfig";
+import { type VehicleStats, skiffStats } from "../gameplayConfig";
 
 export interface Vec3 {
   x: number;

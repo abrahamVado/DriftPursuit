@@ -1,8 +1,5 @@
-import {
-  AccessibilityToggleState,
-  DEFAULT_ACCESSIBILITY_TOGGLES,
-} from '../../input/accessibilityOptions'
-import { KeybindingOverrides } from '../../input/keybindings'
+import { type AccessibilityToggleState, DEFAULT_ACCESSIBILITY_TOGGLES } from '../../input/accessibilityOptions'
+import type { KeybindingOverrides } from '../../input/keybindings'
 
 export interface StoredAccessibilityPreferences {
   //1.- Serialised keybinding overrides keyed by the gameplay action name.

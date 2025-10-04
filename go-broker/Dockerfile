@@ -1,6 +1,7 @@
 # syntax=docker/dockerfile:1
 
 FROM golang:1.21-alpine AS builder
+ENV GOTOOLCHAIN=auto
 WORKDIR /src
 RUN apk add --no-cache build-base ca-certificates
 COPY go.mod go.sum ./

@@ -1,9 +1,11 @@
-import {
+import type {
   AccessibilitySummary,
   KeybindingConfiguration,
   KeybindingOverrides,
-  createKeybindingConfiguration,
 } from './keybindings'
+
+
+import { createKeybindingConfiguration } from './keybindings'
 
 export type RadarPaletteId = 'classic' | 'colorSafe'
 

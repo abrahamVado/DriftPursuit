@@ -4,7 +4,7 @@ import React, { useCallback, useEffect, useMemo, useState } from 'react'
 import {
   CONTROL_PANEL_EVENT,
   type ControlPanelIntentDetail,
-} from '../../../typescript-client/src/world/controlPanelEvents'
+} from '@client/world/controlPanelEvents'
 
 type CommandName = 'throttle' | 'brake'
 

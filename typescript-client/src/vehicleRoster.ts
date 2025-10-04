@@ -1,11 +1,13 @@
 import {
-  GroundVehicleConfig,
   groundVehiclePlaceholders,
   skiffLoadouts,
   skiffStats,
+  deriveStatsWithModifiers,
+} from "./gameplayConfig";
+import type {
+  GroundVehicleConfig,
   VehicleLoadoutConfig,
   VehicleStats,
-  deriveStatsWithModifiers,
 } from "./gameplayConfig";
 
 export interface VehicleLoadoutSummary {

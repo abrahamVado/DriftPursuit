@@ -1,4 +1,4 @@
-import { ClockSynchronizer, TimeSyncUpdate } from "../timeSync";
+import { ClockSynchronizer, type TimeSyncUpdate } from "../timeSync";
 
 type TimeSyncEnvelope = {
   type?: string;

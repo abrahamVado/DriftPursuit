@@ -1,5 +1,11 @@
 {
   "compilerOptions": {
+    "types": ["node", "three"],
+   "baseUrl": ".",
+   "paths": {
+      "@web/*": ["src/*"],
+      "@client/*": ["typescript-client/src/*"]
+   },    
     "target": "ES2022",
     "module": "ESNext",
     "moduleResolution": "Bundler",
@@ -28,7 +34,9 @@
     "app",
     "env.d.ts",
     "src",
-    ".next/types/**/*.ts"
+    ".next/types/**/*.ts",
+    "../typescript-client/src/**/*.ts",   // local monorepo layout
+    "typescript-client/src/**/*.ts"       // Docker: lib copied inside /app
   ],
   "exclude": [
     "node_modules"
