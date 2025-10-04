@@ -1,11 +1,16 @@
 {
   "compilerOptions": {
     "types": ["node", "three"],
-   "baseUrl": ".",
-   "paths": {
+    "typeRoots": [
+      "./types",
+      "./node_modules/@types"
+    ],
+    "baseUrl": ".",
+    "paths": {
       "@web/*": ["src/*"],
-      "@client/*": ["typescript-client/src/*"]
-   },    
+      "@client/*": ["../typescript-client/src/*"],
+      "three": ["types/three/index.d.ts"]
+    },
     "target": "ES2022",
     "module": "ESNext",
     "moduleResolution": "Bundler",

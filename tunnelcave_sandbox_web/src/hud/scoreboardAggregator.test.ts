@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest'
 
 import type { GameEvent } from '@client/generated/events'
-import { EventStreamClient, MemoryEventStore } from '@cliente/ventStream'
+import { EventStreamClient, MemoryEventStore } from '@client/eventStream'
 import { ScoreboardAggregator } from './scoreboardAggregator'
 
 function createScoreEvent(overrides: Partial<GameEvent> = {}): GameEvent {

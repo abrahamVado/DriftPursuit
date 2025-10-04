@@ -6,6 +6,8 @@ export default defineConfig({
     alias: {
       //1.- Provide a lightweight stub for three.js so unit tests avoid heavy WebGL dependencies.
       three: path.resolve(__dirname, 'test/mocks/three.ts'),
+      //2.- Mirror the monorepo client alias so Vitest matches Next.js module resolution.
+      '@client': path.resolve(__dirname, '../typescript-client/src'),
     },
   },
   test: {
