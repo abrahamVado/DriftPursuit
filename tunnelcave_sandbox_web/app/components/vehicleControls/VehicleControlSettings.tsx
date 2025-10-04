@@ -8,7 +8,7 @@ import VehicleGeometryControls, {
 import VehicleLoadoutSelector from './VehicleLoadoutSelector'
 import { usePersistentSetting } from '../../../src/ui/settings/usePersistentSetting'
 import { KeybindingConfiguration } from '../../../src/input/keybindings'
-import { getSelectableVehicles } from '../@client/webLoadoutBridge'
+import { getSelectableVehicles } from '@client/webLoadoutBridge'
 
 interface VehicleLoadoutSelection {
   //1.- Track the selected vehicle identifier so spawns remain deterministic across reloads.

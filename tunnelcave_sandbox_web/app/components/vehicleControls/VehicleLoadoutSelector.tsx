@@ -5,7 +5,7 @@ import React, { useMemo } from 'react'
 import {
   getSelectableVehicles,
   type LoadoutOption,
-} from '../@client/webLoadoutBridge'
+} from '@client/webLoadoutBridge'
 
 interface VehicleLoadoutSelectorProps {
   //1.- Provide the currently selected vehicle identifier so the UI stays controlled.
