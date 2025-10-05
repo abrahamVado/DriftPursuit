@@ -209,3 +209,73 @@ body {
   font-size: 0.9rem;
   color: #cbd5f5;
 }
+
+.hud-minimap {
+  /* 1.- Position the minimap within the HUD stack without overwhelming the primary text. */
+  margin-top: 0.75rem;
+  padding: 0.75rem;
+  border-radius: 0.75rem;
+  background: rgba(15, 23, 42, 0.6);
+  display: grid;
+  grid-template-columns: 120px 1fr;
+  gap: 0.75rem;
+  align-items: center;
+}
+
+.hud-minimap__canvas {
+  /* 1.- Ensure the SVG scales cleanly with the layout grid. */
+  width: 120px;
+  height: 120px;
+  display: block;
+}
+
+.hud-minimap__background {
+  /* 1.- Apply subtle styling so the battlefield outline remains legible. */
+  fill: rgba(30, 41, 59, 0.85);
+  stroke: rgba(148, 163, 184, 0.4);
+  stroke-width: 1.5;
+}
+
+.hud-minimap__peer {
+  /* 1.- Render peers with a neutral hue that contrasts the player marker. */
+  fill: var(--radar-neutral, #38bdf8);
+  stroke: rgba(15, 23, 42, 0.8);
+  stroke-width: 1.2;
+}
+
+.hud-minimap__player {
+  /* 1.- Highlight the local pilot with a distinct accent colour. */
+  fill: var(--radar-friendly, #facc15);
+  stroke: rgba(15, 23, 42, 0.9);
+  stroke-width: 1.6;
+}
+
+.hud-minimap__legend {
+  /* 1.- Stack the legend items vertically beside the minimap canvas. */
+  display: grid;
+  gap: 0.25rem;
+}
+
+.hud-minimap__legend-title {
+  /* 1.- Label the legend heading with a softer colour to match the HUD. */
+  margin: 0;
+  font-size: 0.75rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: #94a3b8;
+}
+
+.hud-minimap__legend-list {
+  /* 1.- Remove default list styling and align entries with consistent spacing. */
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 0.25rem;
+}
+
+.hud-minimap__legend-item {
+  /* 1.- Present each callsign with legible typography inside the compact legend. */
+  color: #e2e8f0;
+  font-size: 0.8rem;
+}

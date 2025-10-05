@@ -1,11 +1,12 @@
 'use client'
 
-import { useEffect, useMemo, useRef } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import * as THREE from 'three'
 
 import type { BattlefieldConfig, TreeInstance } from './generateBattlefield'
 import { createChaseCamera } from './chaseCamera'
 import { createVehicleController } from './vehicleController'
+import { MiniMapOverlay, type MiniMapEntitySnapshot } from './miniMapOverlay'
 
 interface TreeRenderState {
   position: THREE.Vector3
@@ -17,6 +18,15 @@ interface TreeRenderState {
   farScale: THREE.Vector3
   branchStart: number
   branchCount: number
+}
+
+interface PeerState {
+  //1.- Track the peer identifier and legend label.
+  id: string
+  label: string
+  //2.- Maintain world space position and planar velocity for lightweight motion updates.
+  position: THREE.Vector3
+  velocity: THREE.Vector3
 }
 
 function mulberry32(seed: number) {
@@ -125,6 +135,26 @@ function createTreeState(
   }
 }
 
+function createPeerSwarm(config: BattlefieldConfig): PeerState[] {
+  //1.- Generate a compact formation sized to the battlefield with deterministic spacing.
+  const random = mulberry32(config.seed + 4096)
+  const count = Math.max(2, Math.min(6, Math.round(config.fieldSize / 160)))
+  const peers: PeerState[] = []
+  for (let index = 0; index < count; index += 1) {
+    const id = `wing-${index + 1}`
+    const label = `Wing ${index + 1}`
+    const horizontalSpread = config.fieldSize * 0.6
+    const position = new THREE.Vector3(
+      (random() - 0.5) * horizontalSpread,
+      config.spawnPoint.y + 6 + random() * 18,
+      (random() - 0.5) * horizontalSpread,
+    )
+    const velocity = new THREE.Vector3((random() - 0.5) * 18, 0, (random() - 0.5) * 18)
+    peers.push({ id, label, position, velocity })
+  }
+  return peers
+}
+
 export default function BattlefieldCanvas({ config, playerName, vehicleId, sessionId }: {
   config: BattlefieldConfig
   playerName: string
@@ -135,6 +165,14 @@ export default function BattlefieldCanvas({ config, playerName, vehicleId, sessi
   const mountRef = useRef<HTMLDivElement | null>(null)
   //5.- Cache the welcome banner so the overlay remains stable between renders.
   const welcomeMessage = useMemo(() => `${playerName || 'Rookie'} piloting ${vehicleId}`, [playerName, vehicleId])
+  const peerTemplates = useMemo(() => createPeerSwarm(config), [config])
+  const peersRef = useRef<PeerState[]>([])
+  const [miniMapSnapshot, setMiniMapSnapshot] = useState<{ player: { x: number; z: number }; peers: MiniMapEntitySnapshot[] }>(
+    () => ({
+      player: { x: config.spawnPoint.x, z: config.spawnPoint.z },
+      peers: peerTemplates.map((peer) => ({ id: peer.id, label: peer.label, x: peer.position.x, z: peer.position.z })),
+    }),
+  )
 
   useEffect(() => {
     const mount = mountRef.current
@@ -375,10 +413,31 @@ export default function BattlefieldCanvas({ config, playerName, vehicleId, sessi
 
     let animationFrame = 0
     let previousTime = performance.now()
+    let miniMapTimer = 0
+    let disposed = false
+
+    //10.- Clone the generated peer formation so their motion persists across animation frames.
+    peersRef.current = peerTemplates.map((peer) => ({
+      id: peer.id,
+      label: peer.label,
+      position: peer.position.clone(),
+      velocity: peer.velocity.clone(),
+    }))
+    const publishMiniMap = () => {
+      if (disposed) {
+        return
+      }
+      setMiniMapSnapshot({
+        player: { x: vehicleBody.position.x, z: vehicleBody.position.z },
+        peers: peersRef.current.map((peer) => ({ id: peer.id, label: peer.label, x: peer.position.x, z: peer.position.z })),
+      })
+    }
+    publishMiniMap()
 
     const billboardQuaternion = new THREE.Quaternion()
     const farMatrix = new THREE.Matrix4()
     const farPosition = new THREE.Vector3()
+    const peerNormal = new THREE.Vector3()
 
     //10.- Refresh LOD instances so nearby trees show branches while distant ones collapse to impostors.
     const updateTreeLods = () => {
@@ -416,6 +475,8 @@ export default function BattlefieldCanvas({ config, playerName, vehicleId, sessi
       }
     }
 
+    const boundsRadius = config.environment.boundsRadius
+
     //11.- Advance the simulation with a clamped delta time before rendering the latest frame.
     const animate = () => {
       animationFrame = requestAnimationFrame(animate)
@@ -425,6 +486,26 @@ export default function BattlefieldCanvas({ config, playerName, vehicleId, sessi
       controller.step(delta, vehicleBody)
       chaseRig.update(camera, vehicleBody, controller.getSpeed(), delta)
       updateTreeLods()
+      //1.- Integrate simple peer motion and keep markers within the battlefield bounds.
+      peersRef.current.forEach((peer) => {
+        peer.position.addScaledVector(peer.velocity, delta)
+        const planarDistance = Math.hypot(peer.position.x, peer.position.z)
+        if (planarDistance > boundsRadius) {
+          peerNormal.set(peer.position.x, 0, peer.position.z).normalize()
+          const outward = peer.velocity.dot(peerNormal)
+          if (outward > 0) {
+            peer.velocity.addScaledVector(peerNormal, -2 * outward)
+          }
+          const clampScale = boundsRadius / planarDistance
+          peer.position.x *= clampScale
+          peer.position.z *= clampScale
+        }
+      })
+      miniMapTimer += delta
+      if (miniMapTimer >= 0.12) {
+        miniMapTimer = 0
+        publishMiniMap()
+      }
       renderer.render(scene, camera)
     }
 
@@ -443,6 +524,7 @@ export default function BattlefieldCanvas({ config, playerName, vehicleId, sessi
 
     //13.- Dispose Three.js resources and detach DOM nodes when the component unmounts.
     return () => {
+      disposed = true
       cancelAnimationFrame(animationFrame)
       controller.dispose()
       window.removeEventListener('resize', handleResize)
@@ -481,14 +563,15 @@ export default function BattlefieldCanvas({ config, playerName, vehicleId, sessi
       ;(thruster.material as THREE.Material).dispose()
       mount.removeChild(canvas)
     }
-  }, [config, playerName, sessionId, vehicleId])
+  }, [config, peerTemplates, playerName, sessionId, vehicleId])
 
   return (
     <div className="battlefield-wrapper" data-testid="battlefield-wrapper" ref={mountRef}>
       <div className="hud-overlay" data-testid="battlefield-hud">
         <p className="hud-session">Session: {sessionId}</p>
         <p className="hud-welcome">{welcomeMessage}</p>
-        <p className="hud-tip">Use W/A/S/D, Shift, and R/F (or PageUp/PageDown) to fly across the valley.</p>
+        <p className="hud-tip">Use Arrow Keys or PageUp/PageDown to adjust speed, W/S to climb or dive, and Shift to boost.</p>
+        <MiniMapOverlay fieldSize={config.fieldSize} peers={miniMapSnapshot.peers} player={miniMapSnapshot.player} />
       </div>
     </div>
   )

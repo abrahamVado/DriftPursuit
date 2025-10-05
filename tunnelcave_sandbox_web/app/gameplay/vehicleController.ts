@@ -147,15 +147,15 @@ export function createVehicleController(options: VehicleControllerOptions = {}):
     window.addEventListener('keyup', handleKeyUp)
   }
 
-  const forwardKeys = ['w', 'arrowup']
-  const backwardKeys = ['s', 'arrowdown']
+  const forwardKeys = ['arrowup', 'pageup']
+  const backwardKeys = ['arrowdown', 'pagedown']
   const leftKeys = ['a', 'arrowleft']
   const rightKeys = ['d', 'arrowright']
 
   const brakeKeys = [' ', 'space', 'spacebar']
   const boostKeys = ['shift']
-  const ascendKeys = ['r', 'pageup']
-  const descendKeys = ['f', 'pagedown', 'control', 'ctrl', 'leftctrl']
+  const ascendKeys = ['r', 'w']
+  const descendKeys = ['f', 's', 'control', 'ctrl', 'leftctrl']
 
   const step = (delta: number, object: THREE.Object3D) => {
     //1.- Determine the frame delta, active control intents, and whether boost or brake modifiers are engaged.
