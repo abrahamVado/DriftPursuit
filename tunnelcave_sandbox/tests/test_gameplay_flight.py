@@ -1,6 +1,8 @@
 """Flight model behavioral tests covering control modes and boost."""
 from __future__ import annotations
 
+from dataclasses import replace
+
 from tunnelcave_sandbox.src.gameplay.flight import ControlMode, FlightInput, FlightParameters, integrate_flight, spawn_state
 from tunnelcave_sandbox.src.gameplay.terrain import TerrainSampler
 
@@ -32,3 +34,27 @@ def test_boost_increases_forward_velocity() -> None:
     inputs = FlightInput(mode=ControlMode.DIRECT, throttle_delta=1.0, boost=True)
     boosted = integrate_flight(state, inputs, sampler, params, dt=0.5)
     assert boosted.velocity[2] > state.velocity[2]
+
+
+def test_arcade_mode_softens_stalls() -> None:
+    sampler = TerrainSampler(11)
+    params = FlightParameters()
+    state = spawn_state(position=(0.0, 220.0, 0.0))
+    stalled = replace(state, velocity=(0.0, 0.0, 5.0))
+    arcade_inputs = FlightInput(mode=ControlMode.ARCADE, aim_direction=(0.0, 0.6, 1.0))
+    direct_inputs = FlightInput(mode=ControlMode.DIRECT, pitch=0.8)
+    arcade_state = integrate_flight(stalled, arcade_inputs, sampler, params, dt=0.3)
+    direct_state = integrate_flight(stalled, direct_inputs, sampler, params, dt=0.3)
+    assert arcade_state.stall_level < direct_state.stall_level
+    assert arcade_state.buffet_intensity <= direct_state.buffet_intensity
+
+
+def test_buffet_intensity_scales_with_angle_of_attack() -> None:
+    sampler = TerrainSampler(12)
+    params = FlightParameters()
+    state = spawn_state(position=(0.0, 240.0, 0.0))
+    level_flight = replace(state, velocity=(0.0, 0.0, 120.0))
+    steep_climb = replace(state, velocity=(0.0, 80.0, 20.0))
+    baseline = integrate_flight(level_flight, FlightInput(mode=ControlMode.DIRECT), sampler, params, dt=0.2)
+    climbing = integrate_flight(steep_climb, FlightInput(mode=ControlMode.DIRECT), sampler, params, dt=0.2)
+    assert climbing.buffet_intensity > baseline.buffet_intensity

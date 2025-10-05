@@ -8,6 +8,9 @@ function createSpectatorCamera() {
     //1.- No-op rig methods because the countdown camera handles its own math in tests.
     setPosition: vi.fn(),
     lookAt: vi.fn(),
+    //2.- Provide optional roll/FOV handlers for compatibility with chase camera logic.
+    setRoll: vi.fn(),
+    setFov: vi.fn(),
   }
   const focus = { x: 0, y: 0, z: 0 }
   const camera = new CountdownSpectatorCamera(rig, {
@@ -36,6 +39,10 @@ describe('CameraDirector', () => {
   const vehicle: VehicleTransform = {
     position: { x: 1, y: 0, z: 0 },
     forward: { x: 0, y: 0, z: 1 },
+    up: { x: 0, y: 1, z: 0 },
+    velocity: { x: 0, y: 0, z: 0 },
+    speed: 0,
+    boostActive: false,
   }
 
   it('delegates chase updates when following a vehicle', () => {
