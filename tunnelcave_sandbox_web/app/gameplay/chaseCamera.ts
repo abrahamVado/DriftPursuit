@@ -40,8 +40,6 @@ export function createChaseCamera(options: ChaseCameraOptions = {}): ChaseCamera
   const lookTarget = new THREE.Vector3()
   const desiredLook = new THREE.Vector3()
   const reportedLook = new THREE.Vector3()
-  const upVector = new THREE.Vector3(0, 1, 0)
-
   const applyQuaternionToVector = (vector: THREE.Vector3, quaternion: THREE.Quaternion) => {
     //2.- Inline quaternion rotation handling so the rig functions in lightweight test environments.
     const vx = vector.x
@@ -67,13 +65,17 @@ export function createChaseCamera(options: ChaseCameraOptions = {}): ChaseCamera
     //3.- Clamp the frame step for stability, derive a speed ratio, and expand the follow distance as velocity builds.
     const dt = Math.min(delta, deltaClamp)
     const speedRatio = Math.max(0, Math.min(1, Math.abs(speed) / referenceSpeed))
-    const followDistance = baseDistance + distanceGain * speedRatio
-    const followHeight = baseHeight + heightGain * speedRatio
+    const altitude = target.position.y
+    const altitudeLift = Math.max(0, Math.min(1, (altitude - 5) / 110))
+    const lowAltitudeDamp = Math.max(0, Math.min(1, 1 - altitude / 18))
+    const followDistance = baseDistance + distanceGain * speedRatio + altitudeLift * 6
+    const baseHeightBlend = baseHeight + heightGain * speedRatio
+    const followHeight = baseHeightBlend + altitudeLift * 8 - lowAltitudeDamp * 3
 
     //4.- Project the target's forward vector to build the anchor point behind and above the craft while respecting minimum spacings.
     forward.set(0, 0, -1)
     applyQuaternionToVector(forward, target.quaternion)
-    const verticalOffset = Math.max(followHeight, minHeightOffset)
+    const verticalOffset = Math.max(minHeightOffset, followHeight)
     anchor.x = target.position.x - forward.x * followDistance
     anchor.y = target.position.y - forward.y * followDistance + verticalOffset
     anchor.z = target.position.z - forward.z * followDistance
