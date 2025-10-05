@@ -12,7 +12,8 @@ body {
   color: #e2e8f0;
 }
 
-main {
+.bootstrap-layout {
+  /* 1.- Maintain the lobby grid while allowing other routes to opt into different layouts. */
   display: grid;
   grid-template-columns: 320px 1fr;
   gap: 2rem;
@@ -20,7 +21,44 @@ main {
 }
 
 @media (max-width: 900px) {
-  main {
+  .bootstrap-layout {
+    /* 1.- Collapse the grid to a single column on smaller screens for readability. */
     grid-template-columns: 1fr;
   }
+}
+
+.full-session {
+  /* 1.- Fill the viewport with the immersive play surface. */
+  position: relative;
+  width: 100%;
+  min-height: 100vh;
+  overflow: hidden;
+}
+
+.full-session__stage {
+  /* 1.- Provide an anchor for both the canvas and HUD overlays. */
+  position: relative;
+  width: 100%;
+  min-height: 100vh;
+}
+
+.full-session__canvas-root,
+.full-session__hud-root {
+  /* 1.- Allow the renderer and HUD to fully cover the viewport. */
+  position: absolute;
+  inset: 0;
+}
+
+.full-session__status {
+  /* 1.- Surface connection details without obscuring the action. */
+  position: absolute;
+  top: 1.5rem;
+  left: 1.5rem;
+  padding: 0.75rem 1.25rem;
+  border-radius: 9999px;
+  background: rgba(15, 23, 42, 0.72);
+  color: #e2e8f0;
+  font-size: 0.95rem;
+  letter-spacing: 0.01em;
+  pointer-events: none;
 }
