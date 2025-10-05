@@ -112,14 +112,18 @@ export default function ClientBootstrap() {
         if (cancelled) {
           return
         }
-        await runtimeModule.mountClientShell({
+        const result = await runtimeModule.mountClientShell({
           brokerUrl,
           playerProfile: { pilotName: playerName, vehicleId },
         })
+        if (!cancelled && result === 'passive') {
+          //4.- Surface a descriptive status when the runtime cannot negotiate a live session.
+          setStatus('Client shell started without a live broker session. Offline preview is still available on /play.')
+        }
       } catch (error) {
         console.error('Failed to start client shell', error)
         if (!cancelled) {
-          //4.- Surface a descriptive status message so the user can diagnose issues quickly.
+          //5.- Surface a descriptive status message so the user can diagnose issues quickly.
           setStatus('Client shell failed to start. Check the developer console for details.')
         }
       }
@@ -128,7 +132,7 @@ export default function ClientBootstrap() {
     startShell()
 
     return () => {
-      //5.- Flag the effect as cancelled before unmounting to avoid racing asynchronous imports.
+      //6.- Flag the effect as cancelled before unmounting to avoid racing asynchronous imports.
       cancelled = true
       if (runtimeModule) {
         runtimeModule.unmountClientShell()

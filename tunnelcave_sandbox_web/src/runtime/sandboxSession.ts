@@ -1,4 +1,4 @@
-import type { HudSession } from './clientShell'
+import type { ClientShellMountResult, HudSession } from './clientShell'
 import type { ConnectionStatus } from '../networking/WebSocketClient'
 import type { SocketDialOptions } from '../networking/authenticatedSocket'
 import { createWorldSession, type WorldSessionHandle } from '@client/networking/worldSession'
@@ -333,6 +333,7 @@ export async function createSandboxHudSession(
   }
 
   const client = connectedClient ?? passiveClient
+  const mode: ClientShellMountResult = connectedClient ? 'active' : 'passive'
 
   return {
     client,
@@ -344,5 +345,6 @@ export async function createSandboxHudSession(
         session.dispose()
       }
     },
+    mode,
   }
 }

@@ -4,7 +4,7 @@ import { fireEvent, waitFor } from '@testing-library/react'
 import { createRoot, type Root } from 'react-dom/client'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
-const mountClientShell = vi.fn(async () => true)
+const mountClientShell = vi.fn(async () => 'active')
 const unmountClientShell = vi.fn()
 
 vi.mock('../../src/runtime/clientShell', () => ({
@@ -88,6 +88,22 @@ describe('ClientBootstrap', () => {
     })
     await teardown()
     expect(unmountClientShell).toHaveBeenCalled()
+  })
+
+  it('reports passive startup when the runtime cannot establish a live session', async () => {
+    process.env.NEXT_PUBLIC_BROKER_URL = 'ws://localhost:43127/ws'
+    mountClientShell.mockResolvedValueOnce('passive')
+    const { default: ClientBootstrap } = await import('./ClientBootstrap')
+    await renderComponent(<ClientBootstrap />)
+    await act(async () => {
+      //1.- Allow the async runtime import and passive mount result to propagate to state updates.
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+    const message = container.querySelector('[data-testid="status-message"]')
+    const statusText = message?.textContent ?? ''
+    expect(statusText).toContain('Client shell started without a live broker session')
+    await teardown()
   })
 
   it('commits lobby selections and remounts the client shell on start', async () => {

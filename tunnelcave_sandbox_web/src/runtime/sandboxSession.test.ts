@@ -115,6 +115,7 @@ describe('sandboxSession', () => {
     expect(session.client.getConnectionStatus()).toBe('disconnected')
     expect(buildVehicle).toHaveBeenCalledWith('arrowhead')
     expect(rendererState.renderers).toHaveLength(1)
+    expect(session.mode).toBe('passive')
 
     session.dispose?.()
 
@@ -165,6 +166,7 @@ describe('sandboxSession', () => {
     expect(dial.auth.subject).toBe('ace-pilot')
     expect(connect).toHaveBeenCalledTimes(1)
     expect(session.client).toBe(client)
+    expect(session.mode).toBe('active')
 
     session.dispose?.()
 

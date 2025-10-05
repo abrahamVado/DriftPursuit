@@ -70,7 +70,7 @@ describe('clientShell', () => {
     })
     document.dispatchEvent(new Event('DOMContentLoaded'))
     const mounted = await mountPromise
-    expect(mounted).toBe(true)
+    expect(mounted).toBe('active')
     expect(module.isClientShellMounted()).toBe(true)
     expect(createWorldSession).toHaveBeenCalledTimes(1)
     expect(sandboxSession).not.toHaveBeenCalled()
@@ -92,7 +92,7 @@ describe('clientShell', () => {
     Object.defineProperty(document, 'readyState', { configurable: true, value: 'complete' })
     const module = await import('./clientShell')
     const mounted = await module.mountClientShell()
-    expect(mounted).toBe(false)
+    expect(mounted).toBe('passive')
     expect(module.isClientShellMounted()).toBe(false)
     expect(hudConstructor).not.toHaveBeenCalled()
     expect(sandboxSession).not.toHaveBeenCalled()
