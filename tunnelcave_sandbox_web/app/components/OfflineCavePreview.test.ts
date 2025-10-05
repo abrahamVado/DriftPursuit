@@ -1,180 +1,19 @@
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest'
+import * as THREE from 'three'
+import { startOfflineCavePreview, __testing } from './OfflineCavePreview'
 
-const disposeMock = vi.fn()
-
-class Vector3 {
-  x: number
-  y: number
-  z: number
-
-  constructor(x = 0, y = 0, z = 0) {
-    this.x = x
-    this.y = y
-    this.z = z
-  }
-
-  clone(): Vector3 {
-    return new Vector3(this.x, this.y, this.z)
-  }
-
-  copy(vector: Vector3): this {
-    this.x = vector.x
-    this.y = vector.y
-    this.z = vector.z
-    return this
-  }
-
-  set(x: number, y: number, z: number): this {
-    this.x = x
-    this.y = y
-    this.z = z
-    return this
-  }
-
-  add(vector: Vector3): this {
-    this.x += vector.x
-    this.y += vector.y
-    this.z += vector.z
-    return this
-  }
-}
-
-class BufferAttribute {
-  array: Float32Array
-  itemSize: number
-  count: number
-  needsUpdate = false
-
-  constructor(array: Float32Array, itemSize: number) {
-    this.array = array
-    this.itemSize = itemSize
-    this.count = array.length / itemSize
-  }
-
-  getZ(index: number): number {
-    return this.array[index * this.itemSize + 2]
-  }
-
-  setZ(index: number, value: number): void {
-    this.array[index * this.itemSize + 2] = value
-  }
-}
-
-class BufferGeometry {
-  private attributes = new Map<string, BufferAttribute>()
-
-  setAttribute(name: string, attribute: BufferAttribute): void {
-    this.attributes.set(name, attribute)
-  }
-
-  getAttribute(name: string): BufferAttribute {
-    const attribute = this.attributes.get(name)
-    if (!attribute) {
-      throw new Error(`Attribute ${name} missing`)
-    }
-    return attribute
-  }
-
-  dispose(): void {
-    disposeMock('geometry')
-  }
-}
-
-class Material {
-  dispose(): void {
-    disposeMock('material')
-  }
-}
-
-class MeshStandardMaterial extends Material {}
-class PointsMaterial extends Material {}
-
-class TubeGeometry extends BufferGeometry {
-  constructor(public curve: CatmullRomCurve3) {
-    super()
-  }
-}
-
-class CatmullRomCurve3 {
-  constructor(private readonly points: Vector3[]) {}
-
-  getPointAt(t: number): Vector3 {
-    const index = Math.floor(t * (this.points.length - 1))
-    return this.points[index % this.points.length].clone()
-  }
-}
-
-class Points {
-  geometry: BufferGeometry
-  material: Material
-
-  constructor(geometry: BufferGeometry, material: Material) {
-    this.geometry = geometry
-    this.material = material
-  }
-}
-
-class Mesh {
-  geometry: BufferGeometry
-  material: Material
-
-  constructor(geometry: BufferGeometry, material: Material) {
-    this.geometry = geometry
-    this.material = material
-  }
-}
-
-class Scene {
-  fog: unknown
-  private children: unknown[] = []
-
-  add(object: unknown): void {
-    this.children.push(object)
-  }
-}
-
-class PerspectiveCamera {
-  aspect = 1
-  position = new Vector3()
-
-  lookAt(): void {
-    //1.- Stubbed implementation required by the offline preview loop.
-  }
-
-  updateProjectionMatrix(): void {
-    //2.- Stubbed implementation avoids relying on WebGL internals.
-  }
-}
-
-class AmbientLight {
-  constructor(public color: Color, public intensity: number) {}
-}
-
-class DirectionalLight {
-  position = new Vector3()
-
-  constructor(public color: Color, public intensity: number) {}
-}
-
-class Color {
-  constructor(public value: number) {}
-}
-
-class FogExp2 {
-  constructor(public color: Color, public density: number) {}
-}
-
-class WebGLRenderer {
-  clearColor?: Color
+class MockWebGLRenderer {
+  //1.- Stand-in renderer captures lifecycle hooks without touching WebGL APIs.
+  clearColor?: unknown
   size?: { width: number; height: number }
 
-  constructor(public options: { canvas: HTMLCanvasElement }) {}
+  constructor(public readonly options: { canvas: HTMLCanvasElement }) {}
 
   setPixelRatio(): void {
-    //1.- Stubbed to avoid device specific logic inside tests.
+    //2.- Pixel ratio control is irrelevant for the mock renderer.
   }
 
-  setClearColor(color: Color): void {
+  setClearColor(color: unknown): void {
     this.clearColor = color
   }
 
@@ -183,53 +22,41 @@ class WebGLRenderer {
   }
 
   render(): void {
-    //2.- Rendering no-op keeps the animation loop deterministic for assertions.
+    //3.- Rendering no-op keeps the animation loop synchronous for tests.
   }
 
   dispose(): void {
-    disposeMock('renderer')
+    rendererDisposeMock('renderer')
   }
 }
 
-const AdditiveBlending = 1
-const BackSide = 2
+const rendererDisposeMock = vi.fn()
+const rendererCtorMock = vi.fn<(options: { canvas: HTMLCanvasElement }) => MockWebGLRenderer>()
 
-vi.mock('three', () => ({
-  AmbientLight,
-  AdditiveBlending,
-  BackSide,
-  BufferAttribute,
-  BufferGeometry,
-  CatmullRomCurve3,
-  Color,
-  DirectionalLight,
-  FogExp2,
-  Material,
-  Mesh,
-  MeshStandardMaterial,
-  PerspectiveCamera,
-  Points,
-  PointsMaterial,
-  Scene,
-  TubeGeometry,
-  Vector3,
-  WebGLRenderer,
-}))
+function createMockRenderer(canvas: HTMLCanvasElement): THREE.WebGLRenderer {
+  const renderer = new MockWebGLRenderer({ canvas })
+  rendererCtorMock({ canvas })
+  return renderer as unknown as THREE.WebGLRenderer
+}
 
 describe('OfflineCavePreview', () => {
   let rafSpy: ReturnType<typeof vi.spyOn>
   let cafSpy: ReturnType<typeof vi.spyOn>
   let addListenerSpy: ReturnType<typeof vi.spyOn>
   let removeListenerSpy: ReturnType<typeof vi.spyOn>
+  let geometryDisposeSpy: ReturnType<typeof vi.spyOn>
+  let materialDisposeSpy: ReturnType<typeof vi.spyOn>
   let canvasRoot: HTMLDivElement
 
   beforeEach(() => {
-    //1.- Prepare DOM anchors and stub browser APIs that drive the animation loop.
-    disposeMock.mockClear()
+    //1.- Reset DOM fixtures and stub animation utilities to keep tests deterministic.
+    rendererDisposeMock.mockClear()
+    rendererCtorMock.mockClear()
     canvasRoot = document.createElement('div')
     canvasRoot.style.width = '800px'
     canvasRoot.style.height = '600px'
     document.body.appendChild(canvasRoot)
+
     let executed = false
     rafSpy = vi.spyOn(window, 'requestAnimationFrame').mockImplementation((callback: FrameRequestCallback) => {
       if (!executed) {
@@ -241,33 +68,105 @@ describe('OfflineCavePreview', () => {
     cafSpy = vi.spyOn(window, 'cancelAnimationFrame').mockImplementation(() => {})
     addListenerSpy = vi.spyOn(window, 'addEventListener')
     removeListenerSpy = vi.spyOn(window, 'removeEventListener')
+
+    if (typeof THREE.Color !== 'function' || typeof THREE.CatmullRomCurve3 !== 'function') {
+      throw new Error('three primitives unavailable in test environment')
+    }
+
+    const geometryPrototype = THREE.BufferGeometry.prototype as THREE.BufferGeometry & {
+      dispose: () => void
+    }
+    if (typeof geometryPrototype.dispose !== 'function') {
+      geometryPrototype.dispose = () => {}
+    }
+    geometryDisposeSpy = vi
+      .spyOn(geometryPrototype, 'dispose')
+      .mockImplementation(function mockDispose(this: THREE.BufferGeometry) {
+        rendererDisposeMock('geometry')
+      })
+
+    const materialPrototype = THREE.MeshStandardMaterial.prototype as THREE.Material & {
+      dispose: () => void
+    }
+    if (typeof materialPrototype.dispose !== 'function') {
+      materialPrototype.dispose = () => {}
+    }
+    materialDisposeSpy = vi
+      .spyOn(materialPrototype, 'dispose')
+      .mockImplementation(function mockDispose(this: THREE.Material) {
+        rendererDisposeMock('material')
+      })
   })
 
   afterEach(() => {
-    //1.- Restore DOM and animation spies to keep tests isolated.
+    //1.- Restore spies and detach DOM nodes so every test starts from a clean slate.
     rafSpy.mockRestore()
     cafSpy.mockRestore()
     addListenerSpy.mockRestore()
     removeListenerSpy.mockRestore()
+    geometryDisposeSpy.mockRestore()
+    materialDisposeSpy.mockRestore()
     canvasRoot.remove()
   })
 
-  it('mounts the preview canvas and tears it down on cleanup', async () => {
-    const { startOfflineCavePreview } = await import('./OfflineCavePreview')
-    const cleanup = startOfflineCavePreview({ canvasRoot })
+  it('mounts the preview canvas and tears it down on cleanup', () => {
+    const cleanup = startOfflineCavePreview({ canvasRoot, createRenderer: createMockRenderer })
+
     expect(addListenerSpy).toHaveBeenCalledWith('resize', expect.any(Function))
+    expect(rendererCtorMock).toHaveBeenCalled()
     expect(canvasRoot.querySelectorAll('canvas[data-role="offline-cave-canvas"]').length).toBe(1)
+
     cleanup()
+
     expect(removeListenerSpy).toHaveBeenCalledWith('resize', expect.any(Function))
     expect(canvasRoot.querySelectorAll('canvas[data-role="offline-cave-canvas"]').length).toBe(0)
     expect(cafSpy).toHaveBeenCalledWith(1)
-    expect(disposeMock).toHaveBeenCalled()
+    expect(rendererDisposeMock).toHaveBeenCalledWith('renderer')
+    expect(rendererDisposeMock).toHaveBeenCalledWith('geometry')
+    expect(rendererDisposeMock).toHaveBeenCalledWith('material')
   })
 
-  it('replaces an existing preview when invoked again', async () => {
-    const { startOfflineCavePreview } = await import('./OfflineCavePreview')
-    startOfflineCavePreview({ canvasRoot })
-    startOfflineCavePreview({ canvasRoot })
+  it('replaces an existing preview when invoked again', () => {
+    startOfflineCavePreview({ canvasRoot, createRenderer: createMockRenderer })
+    startOfflineCavePreview({ canvasRoot, createRenderer: createMockRenderer })
     expect(canvasRoot.querySelectorAll('canvas[data-role="offline-cave-canvas"]').length).toBe(1)
+  })
+
+  it('applies procedural colouring to the cave tunnel mesh', () => {
+    const curve = __testing.buildTunnelCurve()
+    const mesh = __testing.createTunnelMesh(curve)
+    const geometry = mesh.geometry as THREE.TubeGeometry
+
+    const colorAttribute = geometry.getAttribute('color') as THREE.BufferAttribute | undefined
+    expect(colorAttribute).toBeDefined()
+
+    const colorArray = (colorAttribute?.array ?? new Float32Array()) as Float32Array
+    expect(colorArray.length).toBeGreaterThan(0)
+
+    let varied = false
+    for (let index = 3; index < colorArray.length; index += 3) {
+      if (colorArray[index] !== colorArray[index - 3]) {
+        varied = true
+        break
+      }
+    }
+    expect(varied).toBe(true)
+  })
+
+  it('creates decorative cave props for the preview scene', () => {
+    const curve = __testing.buildTunnelCurve()
+    const stalactites = __testing.createStalactiteMeshes(curve, 10)
+    expect(stalactites).toHaveLength(10)
+    stalactites.forEach((mesh) => {
+      expect(mesh.position.y).not.toBe(0)
+    })
+
+    const crystals = __testing.createCrystalClusters(curve, 6)
+    expect(crystals.group.children).toHaveLength(6)
+    expect(crystals.materials).toHaveLength(6)
+
+    const dust = __testing.createDustField()
+    const dustPositions = dust.geometry.getAttribute('position') as THREE.BufferAttribute
+    expect(dustPositions.count).toBeGreaterThan(0)
   })
 })

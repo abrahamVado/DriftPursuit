@@ -1,3 +1,13 @@
+export class Color {
+  //1.- Minimal color container mirrors the three.js constructor signature.
+  constructor(public value: number | string = 0xffffff) {}
+
+  set(value: number | string): this {
+    this.value = value
+    return this
+  }
+}
+
 export class Vector3 {
   //1.- Track the vector components to support translation interpolation.
   x: number
@@ -14,6 +24,17 @@ export class Vector3 {
     this.x = x
     this.y = y
     this.z = z
+    return this
+  }
+
+  clone(): Vector3 {
+    return new Vector3(this.x, this.y, this.z)
+  }
+
+  add(vector: Vector3): this {
+    this.x += vector.x
+    this.y += vector.y
+    this.z += vector.z
     return this
   }
 
@@ -97,6 +118,11 @@ export class Quaternion {
   }
 }
 
+export class FogExp2 {
+  //1.- Preserve fog parameters so consumers can validate density settings.
+  constructor(public color: Color, public density: number) {}
+}
+
 export class Object3D {
   //1.- Emulate the scene graph hierarchy with parent/child relationships.
   children: Object3D[] = []
@@ -146,6 +172,11 @@ export class Object3D {
 
 export class Group extends Object3D {}
 
+export class Material {
+  //1.- Allow resources to be released explicitly in cleanup routines.
+  dispose(): void {}
+}
+
 export class Mesh extends Object3D {
   //1.- Persist geometry and material references for metadata access.
   geometry: unknown
@@ -167,9 +198,62 @@ export class Mesh extends Object3D {
   }
 }
 
-export class MeshStandardMaterial {
+export class Points extends Object3D {
+  //1.- Support particle systems with geometry/material references for assertions.
+  constructor(public geometry: BufferGeometry, public material: Material) {
+    super()
+  }
+}
+
+export class MeshStandardMaterial extends Material {
   //1.- Store the options so tests can inspect them if required.
-  constructor(public parameters: Record<string, unknown> = {}) {}
+  constructor(public parameters: Record<string, unknown> = {}) {
+    super()
+  }
+}
+
+export class PointsMaterial extends Material {
+  //1.- Mirror the points material interface for additive particle effects.
+  constructor(public parameters: Record<string, unknown> = {}) {
+    super()
+  }
+}
+
+export class AmbientLight extends Object3D {
+  //1.- Preserve light metadata so tests can validate intensity tuning.
+  constructor(public color: Color, public intensity: number) {
+    super()
+  }
+}
+
+export class DirectionalLight extends Object3D {
+  //1.- Mimic directional light placement for scene graph assertions.
+  constructor(public color: Color, public intensity: number) {
+    super()
+  }
+}
+
+export class Scene extends Object3D {
+  //1.- Track fog assignment for atmospheric previews.
+  fog: FogExp2 | null = null
+}
+
+export class PerspectiveCamera extends Object3D {
+  //1.- Mirror camera properties used during preview animation.
+  aspect: number
+
+  constructor(public fov: number, aspect: number, public near: number, public far: number) {
+    super()
+    this.aspect = aspect
+  }
+
+  lookAt(): void {
+    //1.- No-op placeholder to satisfy the interface.
+  }
+
+  updateProjectionMatrix(): void {
+    //1.- Mocked camera does not need to recalculate matrices.
+  }
 }
 
 export const MathUtils = {
@@ -179,10 +263,48 @@ export const MathUtils = {
   },
 }
 
-export class Float32BufferAttribute {
-  //1.- Provide minimal attribute storage for BufferGeometry usage.
-  constructor(public array: ArrayLike<number>, public itemSize: number) {}
+export class BufferAttribute {
+  //1.- Lightweight attribute helper exposing per-axis accessors.
+  array: Float32Array
+  itemSize: number
+  count: number
+  needsUpdate = false
+
+  constructor(array: ArrayLike<number>, itemSize: number) {
+    this.array = array instanceof Float32Array ? array : new Float32Array(array)
+    this.itemSize = itemSize
+    this.count = this.array.length / itemSize
+  }
+
+  getX(index: number): number {
+    return this.array[index * this.itemSize]
+  }
+
+  getY(index: number): number {
+    return this.array[index * this.itemSize + 1]
+  }
+
+  getZ(index: number): number {
+    return this.array[index * this.itemSize + 2]
+  }
+
+  setX(index: number, value: number): this {
+    this.array[index * this.itemSize] = value
+    return this
+  }
+
+  setY(index: number, value: number): this {
+    this.array[index * this.itemSize + 1] = value
+    return this
+  }
+
+  setZ(index: number, value: number): this {
+    this.array[index * this.itemSize + 2] = value
+    return this
+  }
 }
+
+export class Float32BufferAttribute extends BufferAttribute {}
 
 export class BufferGeometry {
   //1.- Track indices and attributes to imitate three.js geometry containers.
@@ -197,6 +319,10 @@ export class BufferGeometry {
   setAttribute(name: string, attribute: unknown): this {
     this.attributes[name] = attribute
     return this
+  }
+
+  getAttribute(name: string): unknown {
+    return this.attributes[name]
   }
 
   computeVertexNormals(): this {
@@ -238,5 +364,60 @@ export class TorusGeometry extends BufferGeometry {
   //1.- Capture torus dimensions for inspection.
   constructor(public radius: number, public tube: number, public radialSegments: number, public tubularSegments: number) {
     super()
+  }
+}
+
+export class SphereGeometry extends BufferGeometry {
+  //1.- Maintain radius metadata for spherical crystal generation.
+  constructor(public radius: number, public widthSegments: number, public heightSegments: number) {
+    super()
+  }
+}
+
+export class ConeGeometry extends BufferGeometry {
+  //1.- Capture cone dimensions for stalactite generation assertions.
+  constructor(public radius: number, public height: number, public radialSegments: number) {
+    super()
+  }
+}
+
+export class CatmullRomCurve3 {
+  //1.- Sample along stored waypoints to approximate spline behaviour for tests.
+  constructor(private readonly points: Vector3[], private readonly closed = false) {}
+
+  getPointAt(t: number): Vector3 {
+    const total = this.points.length
+    if (total === 0) {
+      return new Vector3()
+    }
+    const scaled = t * (total - 1)
+    const index = Math.floor(scaled)
+    const alpha = scaled - index
+    const start = this.points[index % total]
+    const end = this.points[(index + 1) % total]
+    return new Vector3(
+      start.x + (end.x - start.x) * alpha,
+      start.y + (end.y - start.y) * alpha,
+      start.z + (end.z - start.z) * alpha
+    )
+  }
+}
+
+export class TubeGeometry extends BufferGeometry {
+  //1.- Prepare placeholder vertex data so attribute warping logic can run in tests.
+  parameters: { path: CatmullRomCurve3; tubularSegments: number; radialSegments: number }
+
+  constructor(path: CatmullRomCurve3, tubularSegments: number, radius: number, radialSegments: number) {
+    super()
+    this.parameters = { path, tubularSegments, radialSegments }
+    const vertexCount = Math.max(1, tubularSegments) * Math.max(1, radialSegments)
+    const array = new Float32Array(vertexCount * 3)
+    for (let index = 0; index < vertexCount; index += 1) {
+      const base = index * 3
+      array[base] = index
+      array[base + 1] = index
+      array[base + 2] = index
+    }
+    this.setAttribute('position', new BufferAttribute(array, 3))
   }
 }
