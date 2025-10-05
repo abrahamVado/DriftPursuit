@@ -8,7 +8,10 @@
     "baseUrl": ".",
     "paths": {
       "@web/*": ["src/*"],
-      "@client/*": ["../typescript-client/src/*"],
+      "@client/*": [
+        "../typescript-client/src/*",
+        "./typescript-client/src/*"
+      ],
       "three": ["types/three/index.d.ts"]
     },
     "target": "ES2022",
