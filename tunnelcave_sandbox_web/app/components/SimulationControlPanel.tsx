@@ -15,6 +15,7 @@ type PanelProps = {
 const DEFAULT_STATUS = 'Simulation bridge offline.'
 const CONFIG_HINT =
   'Set SIM_BRIDGE_URL or NEXT_PUBLIC_SIM_BRIDGE_URL (e.g. http://localhost:8000) to enable interactive control.'
+const MISSING_CONFIG_PREFIX = 'Simulation bridge URL not configured.'
 
 export default function SimulationControlPanel({ baseUrl }: PanelProps) {
   //1.- Resolve a direct override so tests and same-origin deployments can bypass the API proxy.
@@ -27,19 +28,25 @@ export default function SimulationControlPanel({ baseUrl }: PanelProps) {
     if (overrideBaseUrl) {
       return ''
     }
-    const candidate = process.env.NEXT_PUBLIC_SIM_BRIDGE_URL ?? ''
-    return candidate.trim()
+    const candidates = [
+      process.env.NEXT_PUBLIC_SIM_BRIDGE_URL ?? '',
+      process.env.SIM_BRIDGE_URL ?? '',
+    ]
+    for (const value of candidates) {
+      const trimmed = value.trim()
+      if (trimmed) {
+        return trimmed
+      }
+    }
+    return ''
   }, [overrideBaseUrl])
-  //3.- Compute the handshake endpoint, favouring the API proxy when only the environment variable is available.
+  //3.- Compute the handshake endpoint, routing through the API proxy whenever no explicit override exists.
   const handshakeUrl = useMemo(() => {
     if (overrideBaseUrl) {
       return `${overrideBaseUrl}/handshake`
     }
-    if (envBaseUrl) {
-      return '/api/sim-bridge/handshake'
-    }
-    return ''
-  }, [envBaseUrl, overrideBaseUrl])
+    return '/api/sim-bridge/handshake'
+  }, [overrideBaseUrl])
   //6.- Precompute the most useful handshake target so logs can surface the expected upstream endpoint.
   const resolvedHandshakeTarget = useMemo(() => {
     return [overrideBaseUrl, envBaseUrl, handshakeUrl].find(
@@ -51,23 +58,15 @@ export default function SimulationControlPanel({ baseUrl }: PanelProps) {
     if (overrideBaseUrl) {
       return `${overrideBaseUrl}/command`
     }
-    if (envBaseUrl) {
-      return '/api/sim-bridge/command'
-    }
-    return ''
-  }, [envBaseUrl, overrideBaseUrl])
+    return '/api/sim-bridge/command'
+  }, [overrideBaseUrl])
   //5.- Track status and error messages so the UI communicates connection progress.
   const [status, setStatus] = useState(DEFAULT_STATUS)
   const [error, setError] = useState('')
   const [lastCommand, setLastCommand] = useState('none')
 
   useEffect(() => {
-    //1.- Abort early when the bridge URL is not configured to avoid failing network calls.
-    if (!handshakeUrl) {
-      setStatus(DEFAULT_STATUS)
-      setError(CONFIG_HINT)
-      return
-    }
+    //1.- Manage request cancellation while the component negotiates with the simulation bridge proxy.
     let cancelled = false
     const controller = new AbortController()
     //2.- Notify the user that the handshake negotiation has started.
@@ -80,15 +79,29 @@ export default function SimulationControlPanel({ baseUrl }: PanelProps) {
     }
     fetch(handshakeUrl, { cache: 'no-store', signal: controller.signal })
       .then(async (response) => {
-        const payload = await response.json()
+        const payload = await response.json().catch(() => ({}))
+        const message = typeof payload?.message === 'string' ? payload.message : undefined
         if (!response.ok) {
-          const message = typeof payload?.message === 'string' ? payload.message : `Handshake failed with status ${response.status}`
-          throw new Error(message)
+          if (message?.startsWith(MISSING_CONFIG_PREFIX)) {
+            if (!cancelled) {
+              setStatus(DEFAULT_STATUS)
+              setError(CONFIG_HINT)
+            }
+            if (logTarget) {
+              console.info(
+                '[SimulationControlPanel] Simulation bridge handshake reported missing configuration via %s',
+                logTarget,
+              )
+            }
+            return null
+          }
+          const fallback = `Handshake failed with status ${response.status}`
+          throw new Error(message ?? fallback)
         }
-        return payload
+        return payload as { message?: string; bridgeUrl?: string }
       })
-      .then((payload: { message?: string; bridgeUrl?: string }) => {
-        if (cancelled) {
+      .then((payload) => {
+        if (cancelled || !payload) {
           return
         }
         //4.- Surface the resolved Go simulation bridge URL so operators can confirm the upstream endpoint.

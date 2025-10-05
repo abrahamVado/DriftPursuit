@@ -19,6 +19,7 @@ describe('SimulationControlPanel', () => {
     //1.- Reset fetch mocks and create a dedicated DOM container per scenario.
     vi.restoreAllMocks()
     delete process.env.NEXT_PUBLIC_SIM_BRIDGE_URL
+    delete process.env.SIM_BRIDGE_URL
     container = document.createElement('div')
     document.body.innerHTML = ''
     document.body.appendChild(container)
@@ -57,7 +58,17 @@ describe('SimulationControlPanel', () => {
   }
 
   it('instructs the user to configure the bridge URL when missing', async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce({
+        ok: false,
+        status: 503,
+        json: async () => ({ message: 'Simulation bridge URL not configured.' }),
+      })
+    global.fetch = fetchMock as unknown as typeof global.fetch
+
     await renderPanel(<SimulationControlPanel baseUrl="" />)
+    await flushMicrotasks()
     const status = container.querySelector('[data-testid="bridge-status"]')
     const error = container.querySelector('[data-testid="bridge-error"]')
     const statusText = status?.textContent ?? ''
@@ -66,6 +77,7 @@ describe('SimulationControlPanel', () => {
     expect(errorText).toContain('SIM_BRIDGE_URL')
     expect(errorText).toContain('NEXT_PUBLIC_SIM_BRIDGE_URL')
     expect(errorText).toContain('http://localhost:8000')
+    expect(fetchMock).toHaveBeenCalledWith('/api/sim-bridge/handshake', expect.any(Object))
   })
 
   it('reports a successful handshake', async () => {
@@ -147,7 +159,7 @@ describe('SimulationControlPanel', () => {
       .mockResolvedValueOnce({
         ok: false,
         status: 503,
-        json: async () => ({ message: 'Simulation bridge URL not configured.' }),
+        json: async () => ({ message: 'Simulation bridge temporarily unavailable.' }),
       })
     global.fetch = fetchMock as unknown as typeof global.fetch
 
@@ -155,7 +167,7 @@ describe('SimulationControlPanel', () => {
     await flushMicrotasks()
 
     const error = container.querySelector('[data-testid="bridge-error"]')
-    expect(error?.textContent ?? '').toContain('Simulation bridge URL not configured.')
+    expect(error?.textContent ?? '').toContain('Simulation bridge temporarily unavailable.')
   })
 
   it('routes handshake requests through the API proxy when only the environment variable is set', async () => {
@@ -168,6 +180,22 @@ describe('SimulationControlPanel', () => {
     await flushMicrotasks()
 
     expect(fetchMock).toHaveBeenCalledWith('/api/sim-bridge/handshake', expect.objectContaining({ cache: 'no-store' }))
+  })
+
+  it('prefers the API proxy when only SIM_BRIDGE_URL is configured', async () => {
+    process.env.SIM_BRIDGE_URL = 'http://localhost:8000'
+    const handshake = { message: 'Simulation bridge online via proxy' }
+    const fetchMock = vi.fn().mockResolvedValueOnce({ ok: true, json: async () => handshake })
+    global.fetch = fetchMock as unknown as typeof global.fetch
+
+    await renderPanel(<SimulationControlPanel />)
+    await flushMicrotasks()
+
+    expect(fetchMock).toHaveBeenCalledWith('/api/sim-bridge/handshake', expect.objectContaining({ cache: 'no-store' }))
+    const status = container.querySelector('[data-testid="bridge-status"]')
+    expect(status?.textContent ?? '').toContain('Simulation bridge online via proxy')
+    const error = container.querySelector('[data-testid="bridge-error"]')
+    expect(error).toBeNull()
   })
 
   it('sends commands to the bridge', async () => {
