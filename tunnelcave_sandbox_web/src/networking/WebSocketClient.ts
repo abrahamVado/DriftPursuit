@@ -47,6 +47,7 @@ interface DecodedEntitySnapshot {
   keyframe: boolean;
   position?: Vector3;
   orientation?: Orientation;
+  active?: boolean;
 }
 
 interface DecodedWorldSnapshot {
@@ -64,6 +65,11 @@ interface PendingSnapshot {
 interface ForcedCorrection {
   state: InterpolatedState;
   expiresAtMs: number;
+}
+
+export interface EntitiesEventDetail {
+  added: string[];
+  removed: string[];
 }
 
 const POSITION_CORRECTION_THRESHOLD_METERS = 2;
@@ -156,6 +162,9 @@ function decodeEntitySnapshot(reader: BinaryReader, length: number): DecodedEnti
         continue;
       case 6:
         entity.orientation = decodeOrientation(reader, reader.uint32());
+        continue;
+      case 8:
+        entity.active = reader.bool();
         continue;
       case 10:
         entity.capturedAtMs = longToNumber(reader.int64());
@@ -252,6 +261,7 @@ function normaliseWorldSnapshotJson(raw: unknown): DecodedWorldSnapshot | undefi
       keyframe: Boolean(entityPayload.keyframe ?? snapshot.keyframe),
       position: entityPayload.position as Vector3 | undefined,
       orientation: entityPayload.orientation as Orientation | undefined,
+      active: entityPayload.active === undefined ? undefined : Boolean(entityPayload.active),
     };
     if (entity.entityId !== "") {
       snapshot.entities.push(entity);
@@ -270,6 +280,7 @@ export class WebSocketClient extends EventTarget {
   private readonly pendingSnapshots: PendingSnapshot[] = [];
   private readonly latestStates = new Map<string, InterpolatedState>();
   private readonly forcedCorrections = new Map<string, ForcedCorrection>();
+  private readonly knownEntities = new Set<string>();
 
   constructor(options: WebSocketClientOptions) {
     super();
@@ -316,6 +327,7 @@ export class WebSocketClient extends EventTarget {
     this.pendingSnapshots.length = 0;
     this.latestStates.clear();
     this.forcedCorrections.clear();
+    this.knownEntities.clear();
     this.setStatus("disconnected");
   }
 
@@ -345,6 +357,16 @@ export class WebSocketClient extends EventTarget {
   getPlaybackBufferMs(): number {
     //1.- Surface the adaptive interpolation delay to aid in HUD debugging widgets.
     return this.interpolator.getBufferMs();
+  }
+
+  getKnownEntityIds(): readonly string[] {
+    //1.- Return a snapshot of identifiers observed in recent snapshots for auto-tracking helpers.
+    return Array.from(this.knownEntities);
+  }
+
+  hasKnownEntity(entityId: string): boolean {
+    //1.- Expose membership checks so higher layers can drop stale trackers predictably.
+    return this.knownEntities.has(entityId);
   }
 
   private attachSocket(socket: WebSocket): void {
@@ -403,9 +425,26 @@ export class WebSocketClient extends EventTarget {
 
   private ingestSnapshot(snapshot: DecodedWorldSnapshot, receivedAtMs: number): void {
     //1.- Enqueue each entity sample into the interpolator so downstream systems can blend states.
+    const added: string[] = [];
+    const removed: string[] = [];
     for (const entity of snapshot.entities) {
       if (!entity.entityId) {
         continue;
+      }
+      if (entity.active === false) {
+        //2.- Remove inactive entities from caches so downstream stores can drop them immediately.
+        if (this.knownEntities.delete(entity.entityId)) {
+          removed.push(entity.entityId);
+        }
+        this.latestStates.delete(entity.entityId);
+        this.forcedCorrections.delete(entity.entityId);
+        this.interpolator.forget(entity.entityId);
+        continue;
+      }
+      if (!this.knownEntities.has(entity.entityId)) {
+        //3.- Track newly discovered entities for automatic world session enrolment.
+        this.knownEntities.add(entity.entityId);
+        added.push(entity.entityId);
       }
       const sample: SnapshotSample = {
         tickId: entity.tickId || snapshot.tickId,
@@ -418,6 +457,10 @@ export class WebSocketClient extends EventTarget {
       if (sample.keyframe) {
         this.evaluateCorrection(entity.entityId, sample, receivedAtMs);
       }
+    }
+    if (added.length > 0 || removed.length > 0) {
+      //4.- Broadcast entity roster changes so session managers can refresh subscriptions instantly.
+      this.dispatchEvent(new CustomEvent<EntitiesEventDetail>("entities", { detail: { added, removed } }));
     }
   }
 

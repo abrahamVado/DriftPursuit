@@ -101,3 +101,16 @@ function makeSample(overrides: Partial<SnapshotSample>): SnapshotSample {
   assert.ok(!blended?.keyframe, "blend should not carry keyframe flag");
   assert.ok((blended?.position.x ?? 0) < 0.5, "blend should remain below keyframe position");
 }
+
+//4.- Forgetting an entity should drop cached history and yield undefined samples.
+{
+  const interpolator = new SnapshotInterpolator();
+  interpolator.enqueue(
+    "echo",
+    makeSample({ tickId: 10, capturedAtMs: 1_000 }),
+    1_020,
+  );
+  interpolator.forget("echo");
+  const state = interpolator.sample("echo", 1_100);
+  assert.strictEqual(state, undefined, "entity history should be removed after forget");
+}

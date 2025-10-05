@@ -3,7 +3,40 @@ import { describe, expect, it, vi } from "vitest";
 
 import type { Orientation, Vector3 } from "@client/generated/types";
 import type { SocketDialOptions } from "./authenticatedSocket";
-import { WebSocketClient, decodeWorldSnapshot, type CorrectionEventDetail } from "./WebSocketClient";
+import {
+  WebSocketClient,
+  decodeWorldSnapshot,
+  type CorrectionEventDetail,
+  type EntitiesEventDetail,
+} from "./WebSocketClient";
+
+function ensureCustomEvent(): void {
+  //1.- Provide a lightweight CustomEvent polyfill when the environment omits the detail accessor.
+  try {
+    if (typeof globalThis.CustomEvent === "function") {
+      const probe = new CustomEvent("probe", { detail: { ok: true } });
+      if ((probe as CustomEvent<{ ok: boolean }>).detail?.ok) {
+        return;
+      }
+    }
+  } catch {
+    //1.- Swallow errors so the fallback path runs when CustomEvent construction fails.
+  }
+  class NodeCustomEvent<T> extends Event {
+    constructor(type: string, init?: CustomEventInit<T>) {
+      super(type, init);
+      this.detail = init?.detail as T;
+    }
+
+    detail: T;
+  }
+  //2.- eslint-disable-next-line to satisfy linting when assigning globals in tests.
+  // eslint-disable-next-line @typescript-eslint/ban-ts-comment
+  // @ts-ignore
+  globalThis.CustomEvent = NodeCustomEvent;
+}
+
+ensureCustomEvent();
 
 interface FakeMessageEvent<T> {
   data: T;
@@ -70,6 +103,7 @@ function encodeEntitySnapshot(options: {
   keyframe?: boolean;
   position: Vector3;
   orientation: Orientation;
+  active?: boolean;
 }): Uint8Array {
   //1.- Build a minimal EntitySnapshot message with deterministic ordering for test assertions.
   const writer = new BinaryWriter();
@@ -80,6 +114,9 @@ function encodeEntitySnapshot(options: {
   writer.uint32(88).uint64(options.tickId);
   if (options.keyframe) {
     writer.uint32(96).bool(true);
+  }
+  if (options.active !== undefined) {
+    writer.uint32(64).bool(options.active);
   }
   return writer.finish();
 }
@@ -397,6 +434,56 @@ describe("WebSocketClient", () => {
 
     expect(comparisons).toBeGreaterThan(40);
     expect(p95).toBeLessThanOrEqual(0.07);
+  });
+
+  it("emits entity roster events for joins and despawns", async () => {
+    let now = 0;
+    const socket = new FakeWebSocket();
+    const client = buildClient({ socket, now: () => now });
+
+    await client.connect();
+
+    now = 300;
+
+    const join = encodeEntitySnapshot({
+      entityId: "alpha",
+      tickId: 1,
+      capturedAtMs: 100,
+      position: { x: 1, y: 0, z: 0 },
+      orientation: { yawDeg: 0, pitchDeg: 0, rollDeg: 0 },
+      active: true,
+    });
+    socket.simulateMessage(
+      encodeWorldSnapshot({
+        tickId: 1,
+        capturedAtMs: 100,
+        entities: [join],
+      }),
+    );
+
+    expect(client.hasKnownEntity("alpha")).toBe(true);
+    expect(client.getKnownEntityIds()).toContain("alpha");
+
+    now = 400;
+
+    const leave = encodeEntitySnapshot({
+      entityId: "alpha",
+      tickId: 2,
+      capturedAtMs: 200,
+      position: { x: 0, y: 0, z: 0 },
+      orientation: { yawDeg: 0, pitchDeg: 0, rollDeg: 0 },
+      active: false,
+    });
+    socket.simulateMessage(
+      encodeWorldSnapshot({
+        tickId: 2,
+        capturedAtMs: 200,
+        entities: [leave],
+      }),
+    );
+
+    expect(client.hasKnownEntity("alpha")).toBe(false);
+    expect(client.getKnownEntityIds()).not.toContain("alpha");
   });
 });
 
