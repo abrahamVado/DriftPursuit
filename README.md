@@ -95,10 +95,11 @@ Runtime behaviour is configuration‑driven. Environment variable defaults and o
    docker compose build
    docker compose up
    ```
-   - Web: **http://localhost:3000**
-   - Broker: **localhost:43127**
-   - Simulation bridge: **http://localhost:8000/handshake**
-   - Stop with `docker compose down`.
+- Web: **http://localhost:3000**
+- Broker: **localhost:43127**
+- Simulation bridge: **http://localhost:8000/handshake**
+- The web client container exports `SIM_BRIDGE_URL=http://bot-runner:8000`, so the proxy can reach the bundled Python bridge without additional configuration.
+- Stop with `docker compose down`.
 
 7. **(Optional) Build container images individually**
    ```bash

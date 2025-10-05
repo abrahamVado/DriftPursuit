@@ -43,6 +43,8 @@ services:
       NODE_ENV: production
       # IMPORTANT: this is read by the browser, not the container
       NEXT_PUBLIC_BROKER_URL: ws://host.docker.internal:43127/ws
+      # Web client proxy reaches the bundled Python bridge via the Compose network.
+      SIM_BRIDGE_URL: http://bot-runner:8000
     ports:
       - "3000:3000"
     networks:

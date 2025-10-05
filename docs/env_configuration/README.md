@@ -17,7 +17,7 @@ The Drift Pursuit sandbox relies on a small `.env.local` file inside `tunnelcave
 > The simulation control panel automatically falls back to `/api/sim-bridge/*` when no direct base URL override is supplied. With that proxy in place, configuring `SIM_BRIDGE_URL` on the server is enough to reach the bridge; only add `NEXT_PUBLIC_SIM_BRIDGE_URL` when the browser must talk to the bridge origin directly.
 
 > [!NOTE]
-> When the Next.js frontend runs inside Docker, `localhost` resolves to the container itself. Point `SIM_BRIDGE_URL` (and `NEXT_PUBLIC_SIM_BRIDGE_URL` when needed) at `http://host.docker.internal:8000` so the proxy can reach a bridge running on your host machine.
+> When the Next.js frontend runs inside Docker, `localhost` resolves to the container itself. Point `SIM_BRIDGE_URL` (and `NEXT_PUBLIC_SIM_BRIDGE_URL` when needed) at `http://host.docker.internal:8000` so the proxy can reach a bridge running on your host machine. The provided `docker-compose.yml` sets `SIM_BRIDGE_URL=http://bot-runner:8000` so the web client reaches the bundled Python bridge by default.
 
 ## Manual Setup Checklist
 
