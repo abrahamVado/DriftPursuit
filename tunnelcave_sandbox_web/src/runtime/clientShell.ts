@@ -2,6 +2,7 @@ import { HudController } from "../hud/controller"
 import type { EventStreamClient } from "@client/eventStream"
 import type { ConnectionStatus } from "../networking/WebSocketClient"
 import { createSandboxHudSession } from "./sandboxSession"
+import type { VehiclePresetName } from "../world/procedural/vehicles"
 
 export interface HudSession {
   //1.- Connected world session exposing telemetry getters for HUD metrics.
@@ -22,6 +23,8 @@ export interface ClientShellOptions {
   brokerUrl?: string
   //3.- Asynchronous world session factory invoked once DOM anchors are ready.
   createWorldSession?: () => Promise<HudSession>
+  //4.- Lobby provided pilot and vehicle selections used when establishing sandbox sessions.
+  playerProfile?: { pilotName?: string; vehicleId?: VehiclePresetName }
 }
 
 class PassiveHudClient extends EventTarget {
@@ -113,6 +116,8 @@ async function instantiateControllers(doc: Document, options: ClientShellOptions
       createSandboxHudSession({
         canvas: renderer.getCanvas(),
         brokerUrl: options.brokerUrl,
+        pilotName: options.playerProfile?.pilotName,
+        vehicleId: options.playerProfile?.vehicleId,
       }))
 
   if (sessionFactory) {
