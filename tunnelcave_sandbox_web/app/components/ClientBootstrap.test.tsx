@@ -129,4 +129,34 @@ describe('ClientBootstrap', () => {
 
     await teardown()
   })
+
+  it('surfaces a share link that targets the immersive play route', async () => {
+    process.env.NEXT_PUBLIC_BROKER_URL = 'ws://localhost:43127/ws'
+    const { default: ClientBootstrap } = await import('./ClientBootstrap')
+    await renderComponent(<ClientBootstrap />)
+    await act(async () => {
+      await Promise.resolve()
+    })
+
+    const nameInput = container.querySelector<HTMLInputElement>('[data-testid="pilot-name-input"]')
+    const shareInput = container.querySelector<HTMLInputElement>('[data-testid="share-url"]')
+
+    expect(shareInput?.value ?? '').toMatch(/^http:\/\/localhost(?::\d+)?\/play/)
+    expect(shareInput?.value ?? '').toContain('vehicle=arrowhead')
+
+    if (nameInput) {
+      fireEvent.change(nameInput, { target: { value: 'Nova Seeker' } })
+    }
+
+    await waitFor(() => {
+      const updatedShareInput = container.querySelector<HTMLInputElement>('[data-testid="share-url"]')
+      const shareValue = updatedShareInput?.value ?? ''
+      const shareUrl = new URL(shareValue)
+      expect(shareUrl.pathname).toBe('/play')
+      expect(shareUrl.searchParams.get('pilot')).toBe('Nova Seeker')
+      expect(shareUrl.searchParams.get('vehicle')).toBe('arrowhead')
+    })
+
+    await teardown()
+  })
 })

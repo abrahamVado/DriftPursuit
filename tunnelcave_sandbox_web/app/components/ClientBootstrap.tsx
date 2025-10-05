@@ -71,11 +71,13 @@ export default function ClientBootstrap() {
   )
 
   const shareUrl = useMemo(() => {
-    //1.- Generate the share link using the current browser location and lobby selections.
+    //1.- Generate a share link targeting the immersive play route so friends load the full-screen cave view.
     if (typeof window === 'undefined') {
       return ''
     }
     const url = new URL(window.location.href)
+    //2.- Force the share link to route visitors straight into the immersive play surface.
+    url.pathname = '/play'
     const trimmed = playerNameDraft.trim()
     if (trimmed) {
       url.searchParams.set('pilot', trimmed)
@@ -143,7 +145,7 @@ export default function ClientBootstrap() {
 
   //3.- Present the bootstrap instructions alongside DOM anchors for future systems.
   return (
-    <main>
+    <main className="bootstrap-layout">
       <section>
         <h1>Drift Pursuit Sandbox</h1>
         <p data-testid="status-message">{status}</p>
