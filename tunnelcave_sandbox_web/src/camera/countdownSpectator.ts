@@ -9,6 +9,10 @@ export interface CameraRig {
   setPosition(position: Vector3): void
   //2.- Re-aim the camera towards a target point.
   lookAt(target: Vector3): void
+  //3.- Optionally roll the camera to follow vehicle banking cues.
+  setRoll?(rollRadians: number): void
+  //4.- Optionally adjust the camera field of view for speed FX.
+  setFov?(degrees: number): void
 }
 
 export interface CountdownCameraOptions {

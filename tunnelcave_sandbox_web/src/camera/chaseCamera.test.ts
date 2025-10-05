@@ -8,9 +8,17 @@ import {
   VehicleTransform,
 } from './chaseCamera'
 
-function createRig(): { rig: CameraRig; positions: Vector3[]; lookAts: Vector3[] } {
+function createRig(): {
+  rig: CameraRig
+  positions: Vector3[]
+  lookAts: Vector3[]
+  rolls: number[]
+  fovs: number[]
+} {
   const positions: Vector3[] = []
   const lookAts: Vector3[] = []
+  const rolls: number[] = []
+  const fovs: number[] = []
   return {
     rig: {
       //1.- Capture the latest camera position for assertions.
@@ -21,9 +29,19 @@ function createRig(): { rig: CameraRig; positions: Vector3[]; lookAts: Vector3[]
       lookAt(target: Vector3) {
         lookAts.push(target)
       },
+      //3.- Track applied roll angles so banking behavior can be tested.
+      setRoll(value: number) {
+        rolls.push(value)
+      },
+      //4.- Track applied FOV values to ensure speed cues run.
+      setFov(value: number) {
+        fovs.push(value)
+      },
     },
     positions,
     lookAts,
+    rolls,
+    fovs,
   }
 }
 
@@ -65,12 +83,51 @@ describe('ChaseCamera', () => {
         visualFx: 'near_miss_glow',
         audioFx: 'near_miss_ping',
       },
+      crash: {
+        shake: { amplitude: 3, frequency: 5, duration: 1.4 },
+        visualFx: 'crash_flash',
+        audioFx: 'crash_boom',
+      },
+      touchdown: {
+        shake: { amplitude: 1.1, frequency: 3, duration: 0.7 },
+        visualFx: 'touchdown_spark',
+        audioFx: 'touchdown_rumble',
+      },
+      ceilingBump: {
+        shake: { amplitude: 1.6, frequency: 5, duration: 0.6 },
+        visualFx: 'ceiling_flash',
+        audioFx: 'ceiling_thud',
+      },
+      highG: {
+        shake: { amplitude: 1.4, frequency: 7, duration: 0.9 },
+        visualFx: 'highg_blur',
+        audioFx: 'highg_grunt',
+      },
+    },
+    lookAhead: {
+      distance: 6,
+      maxSpeed: 120,
+    },
+    roll: {
+      followStrength: 0.35,
+      damping: 14,
+    },
+    fov: {
+      idle: 65,
+      max: 80,
+      maxSpeed: 120,
+      boost: 4,
+      damping: 10,
     },
   }
 
   const transform: VehicleTransform = {
     position: { x: 10, y: 1, z: 5 },
     forward: { x: 0, y: 0, z: 1 },
+    up: { x: 0, y: 1, z: 0 },
+    velocity: { x: 0, y: 0, z: 25 },
+    speed: 25,
+    boostActive: false,
   }
 
   it('smoothly follows the vehicle with configurable damping', () => {
@@ -84,6 +141,10 @@ describe('ChaseCamera', () => {
     const movedTransform: VehicleTransform = {
       position: { x: 10, y: 1, z: 10 },
       forward: transform.forward,
+      up: transform.up,
+      velocity: { x: 0, y: 0, z: 40 },
+      speed: 40,
+      boostActive: false,
     }
     camera.update(0.016, movedTransform)
 
@@ -94,7 +155,29 @@ describe('ChaseCamera', () => {
     expect(secondPosition.z).toBeGreaterThan(firstPosition.z)
     expect(secondPosition.z).toBeLessThan(4)
     const lastLookAt = lookAts[lookAts.length - 1]
-    expect(lastLookAt.z).toBeGreaterThan(9)
+    expect(lastLookAt.z).toBeGreaterThan(11)
+  })
+
+  it('leans with the craft and widens FOV when boosting', () => {
+    const { rig, rolls, fovs } = createRig()
+    const { player } = createFxPlayer()
+    const camera = new ChaseCamera(rig, player, baseOptions)
+
+    const banked: VehicleTransform = {
+      position: transform.position,
+      forward: transform.forward,
+      up: { x: 0.3, y: 0.95, z: 0 },
+      velocity: { x: 0, y: 0, z: 140 },
+      speed: 140,
+      boostActive: true,
+    }
+
+    //1.- Run multiple frames so damping settles towards the boosted targets.
+    camera.update(0.016, banked)
+    camera.update(0.016, banked)
+
+    expect(rolls.some((value) => Math.abs(value) > 0)).toBe(true)
+    expect(fovs[fovs.length - 1]).toBeGreaterThan(baseOptions.fov.idle)
   })
 
   it('applies runtime overrides for respawn or cinematic moments', () => {
@@ -125,13 +208,13 @@ describe('ChaseCamera', () => {
     const { player, playAudioFx, playVisualFx } = createFxPlayer()
     const camera = new ChaseCamera(rig, player, baseOptions)
 
-    //1.- Fire the hit event which should start a shake and trigger both FX outputs.
-    camera.trigger('hit')
+    //1.- Fire the crash event which should start a shake and trigger both FX outputs.
+    camera.trigger('crash')
     camera.update(0.016, transform)
     camera.update(0.016, transform)
 
-    expect(playVisualFx).toHaveBeenCalledWith('impact_flash')
-    expect(playAudioFx).toHaveBeenCalledWith('impact_thud')
+    expect(playVisualFx).toHaveBeenCalledWith('crash_flash')
+    expect(playAudioFx).toHaveBeenCalledWith('crash_boom')
     //2.- Verify the shake displaced the camera from its base offset at least once.
     const shakenFrame = positions.find((position) => position.x !== positions[0].x)
     expect(shakenFrame).toBeDefined()

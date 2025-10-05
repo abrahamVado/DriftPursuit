@@ -33,6 +33,11 @@ class FlightParameters:
     boost_cooldown: float = 5.0
     nose_radius: float = 2.5
     body_radius: float = 3.5
+    stall_speed: float = 60.0
+    stall_aoa_limit: float = math.radians(18.0)
+    buffet_onset: float = 0.35
+    buffet_gain: float = 1.6
+    arcade_stall_recovery: float = 0.4
 
 
 # //3.- Collect pilot input in a consistent structure.
@@ -80,6 +85,7 @@ class VehicleState:
     altitude_agl: float
     bank_angle: float
     stall_level: float
+    buffet_intensity: float
 
     def capsule_points(self, parameters: FlightParameters) -> tuple[Vector3, Vector3]:
         orientation = self.orientation.normalized()
@@ -97,7 +103,7 @@ def _quadratic_drag(component: float, coefficient: float) -> float:
 
 
 # //7.- Evaluate aerodynamic forces for the aircraft body.
-def _aerodynamic_forces(state: VehicleState, params: FlightParameters) -> Vector3:
+def _aerodynamic_forces(state: VehicleState, params: FlightParameters) -> tuple[Vector3, float]:
     orientation = state.orientation.normalized()
     forward = orientation.forward
     up = orientation.up
@@ -116,7 +122,8 @@ def _aerodynamic_forces(state: VehicleState, params: FlightParameters) -> Vector
     lift = params.lift_coefficient * v_forward * v_forward * aoa
     lift_vector = vector.scale(up, lift)
     induced_drag = vector.scale(forward, -params.induced_drag * aoa * aoa * v_forward * v_forward)
-    return vector.add(drag, vector.add(lift_vector, induced_drag))
+    force = vector.add(drag, vector.add(lift_vector, induced_drag))
+    return force, aoa
 
 
 # //8.- Apply ground effect modifiers as the vehicle nears the ground.
@@ -130,12 +137,39 @@ def _apply_ground_effect(force: Vector3, altitude: float) -> Vector3:
     return vector.add(vector.scale(up_component, multiplier), vector.scale(tangential, drag_scale))
 
 
-# //9.- Update angular velocity given pilot input and control scheme.
+# //9.- Quantify stall severity and buffet intensity for feedback systems.
+def _stall_feedback(speed: float, aoa: float, params: FlightParameters) -> tuple[float, float]:
+    speed_component = max(0.0, 1.0 - speed / max(params.stall_speed, 1e-3))
+    aoa_limit = max(params.stall_aoa_limit, 1e-3)
+    aoa_over = max(0.0, abs(aoa) - aoa_limit)
+    aoa_component = min(1.0, aoa_over / (math.pi / 2 - aoa_limit))
+    stall_level = max(0.0, min(1.0, (speed_component * 0.7) + (aoa_component * 0.9)))
+    buffet_start = params.buffet_onset
+    buffet_level = 0.0
+    if stall_level > buffet_start:
+        excess = (stall_level - buffet_start) / max(1e-3, 1.0 - buffet_start)
+        buffet_level = max(0.0, min(1.0, excess * params.buffet_gain))
+    return stall_level, buffet_level
+
+
+# //10.- Update angular velocity given pilot input and control scheme.
 def _update_angular_velocity(state: VehicleState, inputs: FlightInput, params: FlightParameters, dt: float) -> Vector3:
     orientation = state.orientation.normalized()
     angular_velocity = vector.scale(state.angular_velocity, max(0.0, 1.0 - params.angular_damping * dt))
     if inputs.mode is ControlMode.ARCADE:
         desired = vector.normalize(inputs.aim_direction, orientation.forward)
+        speed = vector.length(state.velocity)
+        stall_ratio = max(0.0, 1.0 - speed / max(params.stall_speed, 1e-3))
+        if stall_ratio > 0.0:
+            climb = max(0.0, vector.dot(desired, orientation.up))
+            if climb > 0.0:
+                desired = vector.normalize(
+                    vector.add(
+                        desired,
+                        vector.scale(orientation.up, -climb * stall_ratio * params.arcade_stall_recovery),
+                    ),
+                    desired,
+                )
         axis = vector.cross(orientation.forward, desired)
         alignment = vector.dot(orientation.forward, desired)
         rate = (1.0 - alignment) * params.control_authority * 1.2
@@ -146,7 +180,7 @@ def _update_angular_velocity(state: VehicleState, inputs: FlightInput, params: F
         forward = orientation.forward
         up = orientation.up
         airspeed = vector.length(state.velocity)
-        authority_scale = min(1.0, airspeed / 80.0)
+        authority_scale = max(0.3, min(1.5, airspeed / 80.0))
         pitch = vector.scale(right, inputs.pitch * params.control_authority * authority_scale)
         yaw = vector.scale(up, inputs.yaw * params.control_authority * authority_scale)
         roll = vector.scale(forward, inputs.roll * params.control_authority)
@@ -154,7 +188,7 @@ def _update_angular_velocity(state: VehicleState, inputs: FlightInput, params: F
     return angular_velocity
 
 
-# //10.- Integrate orientation using angular velocity and re-orthonormalize the basis.
+# //11.- Integrate orientation using angular velocity and re-orthonormalize the basis.
 def _integrate_orientation(orientation: Orientation, angular_velocity: Vector3, dt: float) -> Orientation:
     omega = angular_velocity
     forward = orientation.forward
@@ -166,7 +200,7 @@ def _integrate_orientation(orientation: Orientation, angular_velocity: Vector3, 
     return Orientation(forward=new_forward, up=new_up).normalized()
 
 
-# //11.- Compute throttle and boost state transitions.
+# //12.- Compute throttle and boost state transitions.
 def _update_propulsion(state: VehicleState, inputs: FlightInput, params: FlightParameters, dt: float) -> tuple[float, float, float, float]:
     throttle = min(1.0, max(0.0, state.throttle + inputs.throttle_delta * dt))
     boost_timer = max(0.0, state.boost_timer - dt)
@@ -181,7 +215,7 @@ def _update_propulsion(state: VehicleState, inputs: FlightInput, params: FlightP
     return throttle, boost_timer, boost_cooldown, (params.boost_thrust if boost_active else 0.0)
 
 
-# //12.- Integrate the vehicle state applying aerodynamic forces and collisions externally.
+# //13.- Integrate the vehicle state applying aerodynamic forces and collisions externally.
 def integrate_flight(
     state: VehicleState,
     inputs: FlightInput,
@@ -194,7 +228,7 @@ def integrate_flight(
     orientation = _integrate_orientation(orientation, angular_velocity, dt)
     throttle, boost_timer, boost_cooldown, boost_force = _update_propulsion(state, inputs, params, dt)
     forward = orientation.forward
-    forces = _aerodynamic_forces(state, params)
+    forces, aoa = _aerodynamic_forces(state, params)
     altitude = terrain.sample(state.position[0], state.position[2]).ground_height
     agl = state.position[1] - altitude
     forces = _apply_ground_effect(forces, agl)
@@ -206,9 +240,9 @@ def integrate_flight(
         velocity = vector.scale(velocity, max(0.0, 1.0 - dt * 2.5))
     position = vector.add(state.position, vector.scale(velocity, dt))
     speed = vector.length(velocity)
-    stall_level = max(0.0, 1.0 - speed / 60.0)
+    stall_level, buffet_intensity = _stall_feedback(speed, aoa, params)
     bank_angle = math.atan2(vector.dot(orientation.right(), (0.0, 1.0, 0.0)), vector.dot(orientation.up, (0.0, 1.0, 0.0)))
-    damage = min(1.0, state.damage + stall_level * 0.01 * dt)
+    damage = min(1.0, state.damage + (stall_level * 0.01 + buffet_intensity * 0.02) * dt)
     return VehicleState(
         position=position,
         velocity=velocity,
@@ -221,10 +255,11 @@ def integrate_flight(
         altitude_agl=agl,
         bank_angle=bank_angle,
         stall_level=stall_level,
+        buffet_intensity=buffet_intensity,
     )
 
 
-# //13.- Initialize vehicle state with sensible defaults at spawn time.
+# //14.- Initialize vehicle state with sensible defaults at spawn time.
 def spawn_state(position: Vector3 = (0.0, 120.0, 0.0)) -> VehicleState:
     orientation = Orientation(forward=(0.0, 0.0, 1.0), up=(0.0, 1.0, 0.0))
     return VehicleState(
@@ -239,4 +274,5 @@ def spawn_state(position: Vector3 = (0.0, 120.0, 0.0)) -> VehicleState:
         altitude_agl=position[1],
         bank_angle=0.0,
         stall_level=0.0,
+        buffet_intensity=0.0,
     )
