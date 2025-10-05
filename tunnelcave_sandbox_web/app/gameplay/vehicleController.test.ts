@@ -21,6 +21,13 @@ describe('createVehicleController', () => {
     window.dispatchEvent(new KeyboardEvent('keyup', { key: 'ArrowRight' }))
     window.dispatchEvent(new KeyboardEvent('keyup', { key: 'Shift' }))
     window.dispatchEvent(new KeyboardEvent('keyup', { key: ' ' }))
+    window.dispatchEvent(new KeyboardEvent('keyup', { key: 'r' }))
+    window.dispatchEvent(new KeyboardEvent('keyup', { key: 'f' }))
+    window.dispatchEvent(new KeyboardEvent('keyup', { key: 'PageUp' }))
+    window.dispatchEvent(new KeyboardEvent('keyup', { key: 'PageDown' }))
+    window.dispatchEvent(new KeyboardEvent('keyup', { key: 'Control' }))
+    window.dispatchEvent(new KeyboardEvent('keyup', { key: 'Ctrl' }))
+    window.dispatchEvent(new KeyboardEvent('keyup', { key: 'LeftCtrl' }))
   })
 
   it('accelerates toward the forward cap when W is held', () => {
@@ -28,6 +35,7 @@ describe('createVehicleController', () => {
       baseAcceleration: 60,
       maxForwardSpeed: 100,
       dragFactor: 1,
+      bounds: 1000,
     })
     const craft = new THREE.Object3D()
     window.dispatchEvent(new KeyboardEvent('keydown', { key: 'w' }))
@@ -43,6 +51,7 @@ describe('createVehicleController', () => {
       baseAcceleration: 50,
       maxForwardSpeed: 80,
       dragFactor: 0.9,
+      bounds: 1000,
     })
     const craft = new THREE.Object3D()
     window.dispatchEvent(new KeyboardEvent('keydown', { key: 'w' }))
@@ -60,6 +69,7 @@ describe('createVehicleController', () => {
       baseAcceleration: 40,
       brakeDeceleration: 200,
       dragFactor: 1,
+      bounds: 1000,
     })
     const craft = new THREE.Object3D()
     window.dispatchEvent(new KeyboardEvent('keydown', { key: 'w' }))
@@ -76,6 +86,7 @@ describe('createVehicleController', () => {
       maxForwardSpeed: 120,
       maxReverseSpeed: 20,
       dragFactor: 1,
+      bounds: 1000,
     })
     const craft = new THREE.Object3D()
     window.dispatchEvent(new KeyboardEvent('keydown', { key: 's' }))
@@ -92,6 +103,7 @@ describe('createVehicleController', () => {
       maxForwardSpeed: 90,
       boostSpeedMultiplier: 1.5,
       dragFactor: 1,
+      bounds: 1000,
     })
     const craft = new THREE.Object3D()
     window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Shift' }))
@@ -100,6 +112,109 @@ describe('createVehicleController', () => {
       controller.step(0.1, craft)
     }
     expect(controller.getSpeed()).toBeCloseTo(135, 0)
+    controller.dispose()
+  })
+
+  it('supports vertical thrust while gravity draws the craft back down', () => {
+    const controller = createVehicleController({
+      verticalAcceleration: 40,
+      gravity: 12,
+      deltaClamp: 1,
+      dragFactor: 1,
+    })
+    const craft = new THREE.Object3D()
+    //1.- Engage upward thrust and confirm altitude increases beyond the default hover level.
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'r' }))
+    controller.step(0.6, craft)
+    window.dispatchEvent(new KeyboardEvent('keyup', { key: 'r' }))
+    expect(craft.position.y).toBeGreaterThan(0.1)
+    const peakHeight = craft.position.y
+    //2.- Release inputs and allow gravity to reel the craft toward the ground plane.
+    for (let index = 0; index < 6; index += 1) {
+      controller.step(0.4, craft)
+    }
+    expect(craft.position.y).toBeLessThan(peakHeight)
+    controller.dispose()
+  })
+
+  it('prevents tunnelling through ground and ceiling planes', () => {
+    const environment = {
+      sampleGround: () => ({ height: 0, normal: new THREE.Vector3(0, 1, 0), slopeRadians: 0 }),
+      sampleCeiling: () => 10,
+      sampleWater: () => Number.NEGATIVE_INFINITY,
+      vehicleRadius: 1.2,
+      slopeLimitRadians: Math.PI / 3,
+      bounceDamping: 0,
+      groundSnapStrength: 8,
+      boundsRadius: 120,
+      waterDrag: 0.4,
+      waterBuoyancy: 14,
+      waterMinDepth: 1.5,
+      maxWaterSpeedScale: 0.5,
+    }
+    const controller = createVehicleController({
+      verticalAcceleration: 50,
+      gravity: 20,
+      deltaClamp: 1,
+      dragFactor: 1,
+      environment,
+    })
+    const craft = new THREE.Object3D()
+    //1.- Force a steep descent and ensure the craft never dips below the buffered ground height.
+    craft.position.set(0, 4, 0)
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'f' }))
+    for (let index = 0; index < 8; index += 1) {
+      controller.step(0.2, craft)
+    }
+    window.dispatchEvent(new KeyboardEvent('keyup', { key: 'f' }))
+    expect(craft.position.y).toBeGreaterThanOrEqual(environment.vehicleRadius - 0.01)
+
+    //2.- Drive the craft into the ceiling volume and verify it clamps before penetrating.
+    craft.position.set(0, 8, 0)
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'r' }))
+    for (let index = 0; index < 8; index += 1) {
+      controller.step(0.2, craft)
+    }
+    window.dispatchEvent(new KeyboardEvent('keyup', { key: 'r' }))
+    expect(craft.position.y).toBeLessThanOrEqual(environment.sampleCeiling(0, 0) - environment.vehicleRadius + 0.01)
+    controller.dispose()
+  })
+
+  it('applies drag and buoyancy when entering water volumes', () => {
+    const environment = {
+      sampleGround: () => ({ height: 0, normal: new THREE.Vector3(0, 1, 0), slopeRadians: 0 }),
+      sampleCeiling: () => 40,
+      sampleWater: () => 2,
+      vehicleRadius: 1.2,
+      slopeLimitRadians: Math.PI / 3,
+      bounceDamping: 0,
+      groundSnapStrength: 6,
+      boundsRadius: 160,
+      waterDrag: 0.6,
+      waterBuoyancy: 18,
+      waterMinDepth: 1.4,
+      maxWaterSpeedScale: 0.5,
+    }
+    const controller = createVehicleController({
+      baseAcceleration: 40,
+      dragFactor: 1,
+      maxForwardSpeed: 60,
+      deltaClamp: 1,
+      environment,
+    })
+    const craft = new THREE.Object3D()
+    //1.- Build forward momentum above the waterline so we can observe the drag response.
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'w' }))
+    for (let index = 0; index < 10; index += 1) {
+      controller.step(0.2, craft)
+    }
+    window.dispatchEvent(new KeyboardEvent('keyup', { key: 'w' }))
+    const speedBeforeWater = controller.getSpeed()
+    craft.position.y = 2.4
+    //2.- Step the simulation with the craft partially submerged and ensure buoyancy and drag clamp its motion.
+    controller.step(0.5, craft)
+    expect(controller.getSpeed()).toBeLessThan(speedBeforeWater)
+    expect(craft.position.y).toBeGreaterThanOrEqual(environment.sampleWater(0, 0) + environment.vehicleRadius - environment.waterMinDepth - 0.01)
     controller.dispose()
   })
 })

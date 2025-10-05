@@ -96,4 +96,30 @@ describe('createChaseCamera', () => {
     const dot = baseForward.x * direction.x + baseForward.y * direction.y + baseForward.z * direction.z
     expect(dot).toBeGreaterThan(0.5)
   })
+
+  it('adjusts its height based on the craft altitude', () => {
+    const camera = new THREE.PerspectiveCamera(60, 1, 0.1, 1000)
+    const craft = new THREE.Object3D()
+    const rig = createChaseCamera({
+      smoothingStrength: 20,
+      baseHeight: 8,
+      heightGain: 4,
+      deltaClamp: 1,
+    })
+
+    //1.- Record the follow height when the craft skims close to the ground.
+    craft.position.set(0, 4, 0)
+    for (let index = 0; index < 6; index += 1) {
+      rig.update(camera, craft, 30, 0.016)
+    }
+    const lowAltitudeHeight = camera.position.y
+
+    //2.- Move the craft upward and ensure the chase camera settles higher to maintain visibility.
+    craft.position.set(0, 60, 0)
+    for (let index = 0; index < 12; index += 1) {
+      rig.update(camera, craft, 30, 0.016)
+    }
+    const highAltitudeHeight = camera.position.y
+    expect(highAltitudeHeight).toBeGreaterThan(lowAltitudeHeight + 6)
+  })
 })
