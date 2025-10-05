@@ -109,7 +109,7 @@ async function instantiateControllers(
     return true
   }
 
-  const handleFailure = () => {
+  const handleFailure = (): ClientShellMountResult => {
     //3.- Ensure partial mounts release resources when the session never materialises.
     context.sessionDispose?.()
     renderer.dispose()
