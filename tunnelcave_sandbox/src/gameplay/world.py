@@ -110,6 +110,7 @@ class GameplayWorld:
             altitude_agl=state.altitude_agl,
             bank_angle=state.bank_angle,
             stall_level=state.stall_level,
+            buffet_intensity=state.buffet_intensity,
         )
 
     def _should_crash(self, state: VehicleState, result: CollisionResult, vertical_speed: float) -> bool:
@@ -130,6 +131,8 @@ class GameplayWorld:
                 "hazard": result.hazard,
                 "position": self.flight_state.position,
                 "velocity": self.flight_state.velocity,
+                "loss": True,
+                "score": payload["distance"],
             }
         )
         self.telemetry.post_event("crash", payload)
