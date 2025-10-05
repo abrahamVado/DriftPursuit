@@ -39,6 +39,9 @@ cat > "${TARGET_FILE}" <<'ENV_TEMPLATE'
 # Websocket endpoint served by the broker (default docker-compose port 43127).
 NEXT_PUBLIC_BROKER_URL=ws://localhost:43127/ws
 
+# Server-side origin for the simulation bridge API proxy (default local bridge port 8000).
+SIM_BRIDGE_URL=http://localhost:8000
+
 # HTTP origin for the simulation bridge API (default local bridge port 8000).
 NEXT_PUBLIC_SIM_BRIDGE_URL=http://localhost:8000
 ENV_TEMPLATE

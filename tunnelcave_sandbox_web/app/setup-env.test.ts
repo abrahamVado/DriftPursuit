@@ -54,6 +54,7 @@ describe('setup-env.sh', () => {
     //1.- Verify the onboarding comments and sample values are written to disk.
     expect(scaffolded).toContain('Drift Pursuit sandbox environment configuration.')
     expect(scaffolded).toContain('NEXT_PUBLIC_BROKER_URL=ws://localhost:43127/ws')
+    expect(scaffolded).toContain('SIM_BRIDGE_URL=http://localhost:8000')
     expect(scaffolded).toContain('NEXT_PUBLIC_SIM_BRIDGE_URL=http://localhost:8000')
   })
 })

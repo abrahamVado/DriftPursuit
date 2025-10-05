@@ -63,8 +63,9 @@ section in order to ensure the three services share credentials and network bind
    ```bash
    ../scripts/setup-env.sh --force
    ```
-   The generated file defines `NEXT_PUBLIC_BROKER_URL=ws://localhost:43127/ws` and
-   `NEXT_PUBLIC_SIM_BRIDGE_URL=http://localhost:8000` so the browser can reach both services.
+   The generated file defines `NEXT_PUBLIC_BROKER_URL=ws://localhost:43127/ws`,
+   `SIM_BRIDGE_URL=http://localhost:8000`, and
+   `NEXT_PUBLIC_SIM_BRIDGE_URL=http://localhost:8000` so both the proxy and the browser can reach the bridge.
 3. Launch the development server:
    ```bash
    pnpm dev
