@@ -7,6 +7,7 @@ const buildVehicle = vi.fn(() => ({
 
 vi.mock('../world/procedural/vehicles', () => ({
   buildVehicle,
+  VEHICLE_PRESETS: { arrowhead: {}, aurora: {}, duskfall: {}, steelwing: {} },
 }))
 
 const rendererState: { renderers: any[] } = { renderers: [] }
@@ -114,6 +115,7 @@ describe('sandboxSession', () => {
     expect(session.client.getConnectionStatus()).toBe('disconnected')
     expect(buildVehicle).toHaveBeenCalledWith('arrowhead')
     expect(rendererState.renderers).toHaveLength(1)
+    expect(session.mode).toBe('passive')
 
     session.dispose?.()
 
@@ -146,21 +148,47 @@ describe('sandboxSession', () => {
     }))
 
     const session = await createSandboxHudSession(
-      { canvas, brokerUrl: 'ws://localhost:43127/ws', requestAnimationFrame, cancelAnimationFrame },
+      {
+        //1.- Provide the sandbox options with a broker URL, lobby-selected pilot handle, and vehicle preset.
+        canvas,
+        brokerUrl: 'ws://localhost:43127/ws',
+        requestAnimationFrame,
+        cancelAnimationFrame,
+        pilotName: 'Ace Pilot',
+        vehicleId: 'aurora',
+      },
       { createWorldSession },
     )
 
     expect(createWorldSession).toHaveBeenCalledTimes(1)
     const dial = createWorldSession.mock.calls[0]?.[0]?.dial
     expect(dial.url).toBe('ws://localhost:43127/ws')
-    expect(dial.auth.subject).toBe('sandbox-player')
+    expect(dial.auth.subject).toBe('ace-pilot')
     expect(connect).toHaveBeenCalledTimes(1)
     expect(session.client).toBe(client)
+    expect(session.mode).toBe('active')
 
     session.dispose?.()
 
     expect(disconnect).toHaveBeenCalledTimes(1)
     expect(dispose).toHaveBeenCalledTimes(1)
+  })
+
+  it('falls back to the default vehicle preset when an unknown selection is provided', async () => {
+    const { createSandboxHudSession } = await import('./sandboxSession')
+    const canvas = document.createElement('canvas')
+    const requestAnimationFrame = vi.fn(() => 1)
+    const cancelAnimationFrame = vi.fn()
+
+    await createSandboxHudSession({
+      //2.- Pass an invalid preset identifier to exercise the fallback path.
+      canvas,
+      requestAnimationFrame,
+      cancelAnimationFrame,
+      vehicleId: 'unknown' as any,
+    })
+
+    expect(buildVehicle).toHaveBeenCalledWith('arrowhead')
   })
 
   it('builds dial options with environment overrides', async () => {
@@ -169,8 +197,8 @@ describe('sandboxSession', () => {
     process.env.NEXT_PUBLIC_BROKER_TOKEN = ' token '
     process.env.NEXT_PUBLIC_BROKER_PROTOCOLS = 'proto1, proto2'
 
-    const dial = buildDialOptions('ws://example.test/ws')
-    expect(dial.auth.subject).toBe('pilot')
+    const dial = buildDialOptions('ws://example.test/ws', { subject: ' Skye Runner ' })
+    expect(dial.auth.subject).toBe('skye-runner')
     expect(dial.auth.token).toBe('token')
     expect(dial.protocols).toEqual(['proto1', 'proto2'])
 

@@ -85,7 +85,7 @@ describe('clientShell integration', () => {
     }))
 
     const mounted = await mountClientShell({ createWorldSession })
-    expect(mounted).toBe(true)
+    expect(mounted).toBe('active')
 
     const metrics = document.querySelectorAll('.hud-metric')
     expect(metrics).toHaveLength(3)

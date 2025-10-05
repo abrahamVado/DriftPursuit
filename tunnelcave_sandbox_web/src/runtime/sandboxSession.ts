@@ -1,8 +1,8 @@
-import type { HudSession } from './clientShell'
+import type { ClientShellMountResult, HudSession } from './clientShell'
 import type { ConnectionStatus } from '../networking/WebSocketClient'
 import type { SocketDialOptions } from '../networking/authenticatedSocket'
 import { createWorldSession, type WorldSessionHandle } from '@client/networking/worldSession'
-import { buildVehicle } from '../world/procedural/vehicles'
+import { buildVehicle, VEHICLE_PRESETS, type VehiclePresetName } from '../world/procedural/vehicles'
 import {
   AmbientLight,
   Clock,
@@ -50,6 +50,10 @@ export interface SandboxSessionOptions {
   //4.- Optional frame scheduler overrides so tests can inject fake timers.
   requestAnimationFrame?: (callback: FrameRequestCallback) => number
   cancelAnimationFrame?: (handle: number) => void
+  //5.- Optional pilot handle collected from the lobby for personalised broker subjects.
+  pilotName?: string
+  //6.- Optional vehicle preset identifier chosen from the interactive lobby.
+  vehicleId?: VehiclePresetName
 }
 
 export interface SandboxDependencies {
@@ -69,6 +73,33 @@ interface SandboxWorldHandles {
 
 const DEFAULT_BACKGROUND = 0x050714
 const DEFAULT_SUBJECT = 'sandbox-player'
+const FALLBACK_VEHICLE: VehiclePresetName = 'arrowhead'
+
+function normaliseSubject(candidate: string | undefined): string {
+  //1.- Lowercase and dash-separate the pilot name so broker subjects remain URL safe.
+  const trimmed = candidate?.trim() ?? ''
+  if (!trimmed) {
+    return DEFAULT_SUBJECT
+  }
+  const slug = trimmed
+    .toLowerCase()
+    .replace(/[^a-z0-9_-]+/g, '-')
+    .replace(/-+/g, '-')
+    .replace(/^-|-$/g, '')
+  return slug || DEFAULT_SUBJECT
+}
+
+function resolveVehicleSelection(vehicleId: string | undefined): VehiclePresetName {
+  //1.- Fall back to the default preset when the selection is missing or unknown.
+  if (!vehicleId) {
+    return FALLBACK_VEHICLE
+  }
+  const normalised = vehicleId.trim().toLowerCase() as VehiclePresetName
+  if (Object.prototype.hasOwnProperty.call(VEHICLE_PRESETS, normalised)) {
+    return normalised
+  }
+  return FALLBACK_VEHICLE
+}
 
 function resolveWindow(options: SandboxSessionOptions): Window | typeof globalThis {
   //1.- Prefer an explicit override, fall back to the owner document window, then globalThis.
@@ -82,9 +113,10 @@ function resolveWindow(options: SandboxSessionOptions): Window | typeof globalTh
   return globalThis
 }
 
-function resolveAuth(): SocketDialOptions['auth'] {
+function resolveAuth(subjectOverride?: string): SocketDialOptions['auth'] {
   //1.- Normalise optional string environment variables and apply sensible defaults for local play.
-  const subject = (process.env.NEXT_PUBLIC_BROKER_SUBJECT ?? DEFAULT_SUBJECT).trim() || DEFAULT_SUBJECT
+  const subjectCandidate = subjectOverride ?? process.env.NEXT_PUBLIC_BROKER_SUBJECT ?? DEFAULT_SUBJECT
+  const subject = normaliseSubject(subjectCandidate)
   const token = process.env.NEXT_PUBLIC_BROKER_TOKEN?.trim()
   const secret = process.env.NEXT_PUBLIC_BROKER_SECRET?.trim()
   const audience = process.env.NEXT_PUBLIC_BROKER_AUDIENCE?.trim()
@@ -130,6 +162,7 @@ function configureRenderer(
   options: SandboxSessionOptions,
   scheduler: Required<Pick<SandboxSessionOptions, 'requestAnimationFrame' | 'cancelAnimationFrame'>>,
   win: Window | typeof globalThis,
+  vehiclePreset: VehiclePresetName,
 ): SandboxWorldHandles {
   //1.- Create the renderer with anti-aliasing so the craft looks smooth even on large displays.
   const renderer = new WebGLRenderer({ canvas: options.canvas, antialias: true })
@@ -150,7 +183,7 @@ function configureRenderer(
   scene.add(ambient)
   scene.add(directional)
 
-  const vehicle = buildVehicle('arrowhead')
+  const vehicle = buildVehicle(vehiclePreset)
   vehicle.position.set(0, 0, 0)
   scene.add(vehicle)
 
@@ -216,12 +249,12 @@ function disposeWorld(
   handles.renderer.dispose()
 }
 
-export function buildDialOptions(url: string): SocketDialOptions {
+export function buildDialOptions(url: string, overrides?: { subject?: string }): SocketDialOptions {
   //1.- Combine the broker URL with auth and protocol overrides to produce the dial options.
   return {
     url,
     protocols: resolveProtocols(),
-    auth: resolveAuth(),
+    auth: resolveAuth(overrides?.subject),
   }
 }
 
@@ -274,7 +307,8 @@ export async function createSandboxHudSession(
     cancelAnimationFrame: cancelFrame,
   }
 
-  const world = configureRenderer(options, scheduler, win)
+  const vehiclePreset = resolveVehicleSelection(options.vehicleId)
+  const world = configureRenderer(options, scheduler, win, vehiclePreset)
   const passiveClient = new SandboxHudClient()
 
   let session: WorldSessionHandle | null = null
@@ -284,7 +318,9 @@ export async function createSandboxHudSession(
     const factory = dependencies.createWorldSession ?? createWorldSession
     try {
       //2.- Instantiate the world session and establish a live connection when a broker URL is configured.
-      session = factory({ dial: buildDialOptions(options.brokerUrl) })
+      session = factory({
+        dial: buildDialOptions(options.brokerUrl, { subject: options.pilotName }),
+      })
       passiveClient.setStatus('connecting')
       await session.connect()
       connectedClient = session.client
@@ -297,6 +333,7 @@ export async function createSandboxHudSession(
   }
 
   const client = connectedClient ?? passiveClient
+  const mode: ClientShellMountResult = connectedClient ? 'active' : 'passive'
 
   return {
     client,
@@ -308,5 +345,6 @@ export async function createSandboxHudSession(
         session.dispose()
       }
     },
+    mode,
   }
 }
