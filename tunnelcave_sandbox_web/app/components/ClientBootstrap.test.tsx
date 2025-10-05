@@ -1,5 +1,6 @@
 import React from 'react'
 import { act } from 'react-dom/test-utils'
+import { fireEvent, waitFor } from '@testing-library/react'
 import { createRoot, type Root } from 'react-dom/client'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
@@ -24,6 +25,11 @@ describe('ClientBootstrap', () => {
     document.body.innerHTML = ''
     document.body.appendChild(container)
     root = null
+    try {
+      window.history.replaceState(null, '', '/')
+    } catch {
+      //1.- Ignore history errors triggered by jsdom security constraints.
+    }
   })
 
   const renderComponent = async (element: React.ReactElement) => {
@@ -72,9 +78,55 @@ describe('ClientBootstrap', () => {
       await Promise.resolve()
     })
     const message = container.querySelector('[data-testid="status-message"]')
-    expect(message?.textContent ?? '').toContain('ws://localhost:43127/ws')
-    expect(mountClientShell).toHaveBeenCalledWith({ brokerUrl: 'ws://localhost:43127/ws' })
+    const statusText = message?.textContent ?? ''
+    expect(statusText).toContain('ws://localhost:43127/ws')
+    expect(statusText).toContain('Pilot: sandbox-player')
+    expect(statusText).toContain('Vehicle: arrowhead')
+    expect(mountClientShell).toHaveBeenCalledWith({
+      brokerUrl: 'ws://localhost:43127/ws',
+      playerProfile: { pilotName: '', vehicleId: 'arrowhead' },
+    })
     await teardown()
     expect(unmountClientShell).toHaveBeenCalled()
+  })
+
+  it('commits lobby selections and remounts the client shell on start', async () => {
+    process.env.NEXT_PUBLIC_BROKER_URL = 'ws://localhost:43127/ws'
+    const { default: ClientBootstrap } = await import('./ClientBootstrap')
+    await renderComponent(<ClientBootstrap />)
+    await act(async () => {
+      await Promise.resolve()
+    })
+
+    const nameInput = container.querySelector<HTMLInputElement>('[data-testid="pilot-name-input"]')
+    const vehicleSelect = container.querySelector<HTMLSelectElement>('[data-testid="vehicle-select"]')
+    const startButton = container.querySelector<HTMLButtonElement>('[data-testid="start-session-button"]')
+
+    expect(nameInput).not.toBeNull()
+    expect(vehicleSelect).not.toBeNull()
+    expect(startButton).not.toBeNull()
+
+    if (nameInput) {
+      fireEvent.change(nameInput, { target: { value: 'Nova Seeker' } })
+    }
+    if (vehicleSelect) {
+      fireEvent.change(vehicleSelect, { target: { value: 'aurora' } })
+    }
+    if (startButton) {
+      fireEvent.click(startButton)
+    }
+
+    await waitFor(() => {
+      expect(mountClientShell).toHaveBeenCalledTimes(2)
+    })
+    expect(mountClientShell).toHaveBeenLastCalledWith({
+      brokerUrl: 'ws://localhost:43127/ws',
+      playerProfile: { pilotName: 'Nova Seeker', vehicleId: 'aurora' },
+    })
+    const params = new URLSearchParams(window.location.search)
+    expect(params.get('pilot')).toBe('Nova Seeker')
+    expect(params.get('vehicle')).toBe('aurora')
+
+    await teardown()
   })
 })

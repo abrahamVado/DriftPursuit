@@ -327,9 +327,63 @@ export function buildArrowhead(): VehicleOptions {
   };
 }
 
+//4.- Expand the preset catalogue with themed variants so the lobby can offer meaningful choices.
 export const VEHICLE_PRESETS = {
   arrowhead: buildArrowhead(),
+  aurora: mergeOptions(buildArrowhead(), {
+    name: "aurora",
+    materials: {
+      hull: new MeshStandardMaterial({ color: 0x65b7ff, metalness: 0.55, roughness: 0.32 }),
+      wing: new MeshStandardMaterial({ color: 0xd4f1ff, metalness: 0.38, roughness: 0.18 }),
+      tail: new MeshStandardMaterial({ color: 0xa2d7ff, metalness: 0.4, roughness: 0.24 }),
+      fx: new MeshStandardMaterial({
+        color: 0x9fffff,
+        metalness: 0.08,
+        roughness: 0.12,
+        transparent: true,
+        opacity: 0.85,
+        emissive: 0x8fffff,
+        emissiveIntensity: 0.7,
+      }),
+    },
+  }),
+  duskfall: mergeOptions(buildArrowhead(), {
+    name: "duskfall",
+    materials: {
+      hull: new MeshStandardMaterial({ color: 0x522b81, metalness: 0.62, roughness: 0.28 }),
+      wing: new MeshStandardMaterial({ color: 0xc7b4ff, metalness: 0.36, roughness: 0.22 }),
+      tail: new MeshStandardMaterial({ color: 0x8e6bff, metalness: 0.5, roughness: 0.26 }),
+      fx: new MeshStandardMaterial({
+        color: 0xffa07a,
+        metalness: 0.12,
+        roughness: 0.14,
+        transparent: true,
+        opacity: 0.82,
+        emissive: 0xff7f50,
+        emissiveIntensity: 0.75,
+      }),
+    },
+  }),
+  steelwing: mergeOptions(buildArrowhead(), {
+    name: "steelwing",
+    materials: {
+      hull: new MeshStandardMaterial({ color: 0x5c646c, metalness: 0.72, roughness: 0.3 }),
+      wing: new MeshStandardMaterial({ color: 0xe5ecf2, metalness: 0.34, roughness: 0.2 }),
+      tail: new MeshStandardMaterial({ color: 0x9ca6af, metalness: 0.58, roughness: 0.22 }),
+      fx: new MeshStandardMaterial({
+        color: 0x9fffff,
+        metalness: 0.16,
+        roughness: 0.1,
+        transparent: true,
+        opacity: 0.78,
+        emissive: 0x9fffff,
+        emissiveIntensity: 0.6,
+      }),
+    },
+  }),
 };
+
+export type VehiclePresetName = keyof typeof VEHICLE_PRESETS;
 
 //4.- Assemble the procedural vehicle, populating userData with spin and chain metadata for animation systems.
 export type VehicleBuildTarget = keyof typeof VEHICLE_PRESETS | VehicleOptions | VehicleBuildPreset;
