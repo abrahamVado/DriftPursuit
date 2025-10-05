@@ -31,6 +31,8 @@ const nextConfig = {
     };
     return config;
   },
+  //2.- Enable the standalone build output so Docker images can copy the prebuilt server bundle directly.
+  output: "standalone",
   experimental: { externalDir: true },
 };
 
