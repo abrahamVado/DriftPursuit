@@ -45,14 +45,16 @@ export interface SandboxSessionOptions {
   canvas: HTMLCanvasElement
   //2.- Optional broker endpoint for live telemetry connections.
   brokerUrl?: string
-  //3.- Optional window override to support deterministic tests.
+  //3.- Optional broker subject override used to group pilots into a shared world.
+  brokerSubject?: string
+  //4.- Optional window override to support deterministic tests.
   window?: Window
-  //4.- Optional frame scheduler overrides so tests can inject fake timers.
+  //5.- Optional frame scheduler overrides so tests can inject fake timers.
   requestAnimationFrame?: (callback: FrameRequestCallback) => number
   cancelAnimationFrame?: (handle: number) => void
-  //5.- Optional pilot handle collected from the lobby for personalised broker subjects.
+  //6.- Optional pilot handle collected from the lobby for personalised HUD context.
   pilotName?: string
-  //6.- Optional vehicle preset identifier chosen from the interactive lobby.
+  //7.- Optional vehicle preset identifier chosen from the interactive lobby.
   vehicleId?: VehiclePresetName
 }
 
@@ -319,7 +321,11 @@ export async function createSandboxHudSession(
     try {
       //2.- Instantiate the world session and establish a live connection when a broker URL is configured.
       session = factory({
-        dial: buildDialOptions(options.brokerUrl, { subject: options.pilotName }),
+        //3.- Honour explicit broker subject overrides so pilots can intentionally branch sessions.
+        dial: buildDialOptions(
+          options.brokerUrl,
+          options.brokerSubject ? { subject: options.brokerSubject } : undefined,
+        ),
       })
       passiveClient.setStatus('connecting')
       await session.connect()

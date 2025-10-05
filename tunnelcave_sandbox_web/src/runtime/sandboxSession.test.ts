@@ -163,10 +163,58 @@ describe('sandboxSession', () => {
     expect(createWorldSession).toHaveBeenCalledTimes(1)
     const dial = createWorldSession.mock.calls[0]?.[0]?.dial
     expect(dial.url).toBe('ws://localhost:43127/ws')
-    expect(dial.auth.subject).toBe('ace-pilot')
+    expect(dial.auth.subject).toBe('sandbox-player')
     expect(connect).toHaveBeenCalledTimes(1)
     expect(session.client).toBe(client)
     expect(session.mode).toBe('active')
+
+    session.dispose?.()
+
+    expect(disconnect).toHaveBeenCalledTimes(1)
+    expect(dispose).toHaveBeenCalledTimes(1)
+  })
+
+  it('applies explicit broker subject overrides when provided', async () => {
+    const { createSandboxHudSession } = await import('./sandboxSession')
+    const canvas = document.createElement('canvas')
+    const requestAnimationFrame = vi.fn(() => 11)
+    const cancelAnimationFrame = vi.fn()
+    const connect = vi.fn(async () => undefined)
+    const disconnect = vi.fn()
+    const dispose = vi.fn()
+    const client = new (class extends EventTarget {
+      getConnectionStatus() {
+        return 'connected' as const
+      }
+      getPlaybackBufferMs() {
+        return 80
+      }
+    })()
+
+    const createWorldSession = vi.fn(() => ({
+      connect,
+      disconnect,
+      dispose,
+      client,
+    }))
+
+    const session = await createSandboxHudSession(
+      {
+        //1.- Provide a broker URL alongside a subject override so pilots converge on a shared session.
+        canvas,
+        brokerUrl: 'ws://localhost:43128/ws',
+        brokerSubject: ' Squad One ',
+        requestAnimationFrame,
+        cancelAnimationFrame,
+      },
+      { createWorldSession },
+    )
+
+    expect(createWorldSession).toHaveBeenCalledTimes(1)
+    const dial = createWorldSession.mock.calls[0]?.[0]?.dial
+    expect(dial.auth.subject).toBe('squad-one')
+    expect(connect).toHaveBeenCalledTimes(1)
+    expect(session.client).toBe(client)
 
     session.dispose?.()
 
