@@ -1,9 +1,11 @@
 # syntax=docker/dockerfile:1
 
-FROM golang:1.21-alpine AS builder
+FROM golang:1.21-bookworm AS builder
 ENV GOTOOLCHAIN=auto
 WORKDIR /src
-RUN apk add --no-cache build-base ca-certificates
+RUN apt-get update \
+    && apt-get install --no-install-recommends -y build-essential ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
 COPY go.mod go.sum ./
 RUN go mod download
 COPY . .
