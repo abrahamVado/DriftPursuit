@@ -8,6 +8,8 @@ export default defineConfig({
       three: path.resolve(__dirname, 'test/mocks/three.ts'),
       //2.- Mirror the monorepo client alias so Vitest matches Next.js module resolution.
       '@client': path.resolve(__dirname, '../typescript-client/src'),
+      //3.- Align the web alias with Next.js so runtime modules resolve shared utilities.
+      '@web': path.resolve(__dirname, 'src'),
     },
   },
   test: {

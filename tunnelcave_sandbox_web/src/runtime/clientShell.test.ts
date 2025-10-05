@@ -2,12 +2,26 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 const hudConstructor = vi.fn()
 const hudDisposer = vi.fn()
+const sandboxSession = vi.fn(async () => ({
+  client: new (class extends EventTarget {
+    getConnectionStatus() {
+      return 'disconnected' as const
+    }
+    getPlaybackBufferMs() {
+      return 0
+    }
+  })(),
+}))
 
 vi.mock('../hud/controller', () => ({
   HudController: vi.fn().mockImplementation((options) => {
     hudConstructor(options)
     return { dispose: hudDisposer }
   }),
+}))
+
+vi.mock('./sandboxSession', () => ({
+  createSandboxHudSession: sandboxSession,
 }))
 
 const originalReadyStateDescriptor = Object.getOwnPropertyDescriptor(Document.prototype, 'readyState')
@@ -18,6 +32,7 @@ describe('clientShell', () => {
     vi.resetModules()
     hudConstructor.mockClear()
     hudDisposer.mockClear()
+    sandboxSession.mockClear()
     document.body.innerHTML = ''
     if (originalReadyStateDescriptor) {
       Object.defineProperty(document, 'readyState', originalReadyStateDescriptor)
@@ -58,6 +73,7 @@ describe('clientShell', () => {
     expect(mounted).toBe(true)
     expect(module.isClientShellMounted()).toBe(true)
     expect(createWorldSession).toHaveBeenCalledTimes(1)
+    expect(sandboxSession).not.toHaveBeenCalled()
     expect(hudConstructor).toHaveBeenCalledTimes(1)
     expect(hudConstructor.mock.calls[0]?.[0]?.client).toBe(sessionClient)
     const hudRoot = document.getElementById('hud-root') as HTMLDivElement
@@ -79,5 +95,6 @@ describe('clientShell', () => {
     expect(mounted).toBe(false)
     expect(module.isClientShellMounted()).toBe(false)
     expect(hudConstructor).not.toHaveBeenCalled()
+    expect(sandboxSession).not.toHaveBeenCalled()
   })
 })

@@ -1,6 +1,7 @@
 import { HudController } from "../hud/controller"
 import type { EventStreamClient } from "@client/eventStream"
 import type { ConnectionStatus } from "../networking/WebSocketClient"
+import { createSandboxHudSession } from "./sandboxSession"
 
 export interface HudSession {
   //1.- Connected world session exposing telemetry getters for HUD metrics.
@@ -44,6 +45,11 @@ class RendererController {
     this.canvas = doc.createElement("canvas")
     this.canvas.dataset.role = "world-canvas"
     root.appendChild(this.canvas)
+  }
+
+  getCanvas(): HTMLCanvasElement {
+    //1.- Surface the created canvas so sandbox integrations can attach renderers.
+    return this.canvas
   }
 
   dispose(): void {
@@ -101,9 +107,17 @@ async function instantiateControllers(doc: Document, options: ClientShellOptions
     }
   }
 
-  if (options.createWorldSession) {
+  const sessionFactory =
+    options.createWorldSession ??
+    (() =>
+      createSandboxHudSession({
+        canvas: renderer.getCanvas(),
+        brokerUrl: options.brokerUrl,
+      }))
+
+  if (sessionFactory) {
     try {
-      const session = await options.createWorldSession()
+      const session = await sessionFactory()
       if (!attachHud(session)) {
         handleFailure()
         return false
