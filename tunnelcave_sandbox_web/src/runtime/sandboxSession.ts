@@ -231,24 +231,43 @@ export async function createSandboxHudSession(
 ): Promise<HudSession> {
   //1.- Resolve the host window and animation scheduler utilities.
   const win = resolveWindow(options)
-  const timeoutFn =
+  //1.- Normalise timer helpers so the polyfill can leverage whichever environment is available.
+  const timeoutFn: typeof globalThis.setTimeout =
     typeof (win as Window & typeof globalThis).setTimeout === 'function'
       ? (win as Window & typeof globalThis).setTimeout.bind(win)
-      : setTimeout
-  const clearTimeoutFn =
+      : globalThis.setTimeout
+  const clearTimeoutFn: typeof globalThis.clearTimeout =
     typeof (win as Window & typeof globalThis).clearTimeout === 'function'
       ? (win as Window & typeof globalThis).clearTimeout.bind(win)
-      : clearTimeout
+      : globalThis.clearTimeout
+  let frameHandleSeed = 0
+  const timeoutHandles = new Map<number, ReturnType<typeof timeoutFn>>()
   const requestFrame =
     options.requestAnimationFrame ??
     (typeof (win as Window).requestAnimationFrame === 'function'
       ? (win as Window).requestAnimationFrame.bind(win)
-      : (callback: FrameRequestCallback) => timeoutFn(() => callback(Date.now()), 16))
+      : (callback: FrameRequestCallback) => {
+          //2.- Use numeric identifiers that mirror the browser API and back them with real timeout handles.
+          const handle = ++frameHandleSeed
+          const timeoutHandle = timeoutFn(() => {
+            timeoutHandles.delete(handle)
+            callback(Date.now())
+          }, 16)
+          timeoutHandles.set(handle, timeoutHandle)
+          return handle
+        })
   const cancelFrame =
     options.cancelAnimationFrame ??
     (typeof (win as Window).cancelAnimationFrame === 'function'
       ? (win as Window).cancelAnimationFrame.bind(win)
-      : (handle: number) => clearTimeoutFn(handle))
+      : (handle: number) => {
+          //3.- Look up the underlying timeout handle and clear it to keep the polyfill leak free.
+          const timeoutHandle = timeoutHandles.get(handle)
+          if (timeoutHandle !== undefined) {
+            clearTimeoutFn(timeoutHandle)
+            timeoutHandles.delete(handle)
+          }
+        })
 
   const scheduler: Required<Pick<SandboxSessionOptions, 'requestAnimationFrame' | 'cancelAnimationFrame'>> = {
     requestAnimationFrame: requestFrame,

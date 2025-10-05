@@ -178,4 +178,52 @@ describe('sandboxSession', () => {
     delete process.env.NEXT_PUBLIC_BROKER_TOKEN
     delete process.env.NEXT_PUBLIC_BROKER_PROTOCOLS
   })
+
+  it('polyfills requestAnimationFrame with timeout backed handles when unavailable', async () => {
+    const { createSandboxHudSession } = await import('./sandboxSession')
+    const canvas = document.createElement('canvas')
+    const browserWindow = window as unknown as Record<string, any>
+    const originalRequest = browserWindow.requestAnimationFrame
+    const originalCancel = browserWindow.cancelAnimationFrame
+    browserWindow.requestAnimationFrame = undefined
+    browserWindow.cancelAnimationFrame = undefined
+
+    const handles: ReturnType<typeof globalThis.setTimeout>[] = []
+    const setTimeoutSpy = vi
+      .spyOn(globalThis, 'setTimeout')
+      .mockImplementation(((...args: Parameters<typeof globalThis.setTimeout>) => {
+        //1.- Capture scheduled callbacks to assert that the timeout based polyfill is used.
+        const [callback] = args
+        if (typeof callback === 'function') {
+          //2.- We do not invoke the callback to keep the render loop paused during the test.
+        }
+        const handle = { id: handles.length } as unknown as ReturnType<typeof globalThis.setTimeout>
+        handles.push(handle)
+        return handle
+      }) as typeof globalThis.setTimeout)
+
+    const cleared: ReturnType<typeof globalThis.setTimeout>[] = []
+    const clearTimeoutSpy = vi
+      .spyOn(globalThis, 'clearTimeout')
+      .mockImplementation(((handle: ReturnType<typeof globalThis.setTimeout>) => {
+        //3.- Track cleared handles so we can ensure the polyfill wires through to clearTimeout correctly.
+        cleared.push(handle)
+      }) as typeof globalThis.clearTimeout)
+
+    try {
+      const session = await createSandboxHudSession({ canvas })
+      expect(setTimeoutSpy).toHaveBeenCalled()
+      expect(handles).toHaveLength(1)
+
+      session.dispose?.()
+
+      expect(clearTimeoutSpy).toHaveBeenCalledWith(handles[0])
+      expect(cleared).toContain(handles[0])
+    } finally {
+      setTimeoutSpy.mockRestore()
+      clearTimeoutSpy.mockRestore()
+      browserWindow.requestAnimationFrame = originalRequest
+      browserWindow.cancelAnimationFrame = originalCancel
+    }
+  })
 })
