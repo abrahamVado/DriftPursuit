@@ -19,47 +19,87 @@ describe('createVehicleController', () => {
     window.dispatchEvent(new KeyboardEvent('keyup', { key: 'ArrowDown' }))
     window.dispatchEvent(new KeyboardEvent('keyup', { key: 'ArrowLeft' }))
     window.dispatchEvent(new KeyboardEvent('keyup', { key: 'ArrowRight' }))
+    window.dispatchEvent(new KeyboardEvent('keyup', { key: 'Shift' }))
+    window.dispatchEvent(new KeyboardEvent('keyup', { key: ' ' }))
   })
 
-  it('accelerates forward when W is pressed', () => {
-    const controller = createVehicleController({ acceleration: 20, maxSpeed: 60, damping: 1 })
+  it('accelerates toward the forward cap when W is held', () => {
+    const controller = createVehicleController({
+      baseAcceleration: 60,
+      maxForwardSpeed: 100,
+      dragFactor: 1,
+    })
     const craft = new THREE.Object3D()
-    const startZ = craft.position.z
     window.dispatchEvent(new KeyboardEvent('keydown', { key: 'w' }))
-    controller.step(1, craft)
-    expect(craft.position.z).toBeLessThan(startZ)
+    for (let index = 0; index < 60; index += 1) {
+      controller.step(0.1, craft)
+    }
+    expect(controller.getSpeed()).toBeCloseTo(100, 0)
     controller.dispose()
   })
 
-  it('applies damping to reduce speed when no input is active', () => {
-    const controller = createVehicleController({ acceleration: 30, maxSpeed: 80, damping: 0.5 })
+  it('coasts down smoothly from drag when inputs are released', () => {
+    const controller = createVehicleController({
+      baseAcceleration: 50,
+      maxForwardSpeed: 80,
+      dragFactor: 0.9,
+    })
     const craft = new THREE.Object3D()
     window.dispatchEvent(new KeyboardEvent('keydown', { key: 'w' }))
-    controller.step(0.5, craft)
+    controller.step(0.4, craft)
     window.dispatchEvent(new KeyboardEvent('keyup', { key: 'w' }))
-    const speedAfterAcceleration = Math.abs(controller.getSpeed())
-    controller.step(0.5, craft)
-    const speedAfterDamping = Math.abs(controller.getSpeed())
-    expect(speedAfterDamping).toBeLessThan(speedAfterAcceleration)
+    const speedBeforeDrag = controller.getSpeed()
+    controller.step(0.4, craft)
+    const speedAfterDrag = controller.getSpeed()
+    expect(Math.abs(speedAfterDrag)).toBeLessThan(Math.abs(speedBeforeDrag))
     controller.dispose()
   })
 
-  it('supports arrow keys for accelerating and braking control', () => {
-    const controller = createVehicleController({ acceleration: 40, maxSpeed: 120, damping: 1 })
+  it('applies strong braking toward zero when space is pressed', () => {
+    const controller = createVehicleController({
+      baseAcceleration: 40,
+      brakeDeceleration: 200,
+      dragFactor: 1,
+    })
     const craft = new THREE.Object3D()
-    //1.- Engage the throttle using the arrow key to confirm speed builds up as expected.
-    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowUp' }))
-    controller.step(0.25, craft)
-    const speedAfterAccelerating = controller.getSpeed()
-    expect(speedAfterAccelerating).toBeGreaterThan(0)
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'w' }))
+    controller.step(0.3, craft)
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: ' ' }))
+    controller.step(0.1, craft)
+    expect(controller.getSpeed()).toBeCloseTo(0, 1)
+    controller.dispose()
+  })
 
-    //2.- Apply the opposite arrow key so the vehicle can bleed speed without forcing reverse motion immediately.
-    window.dispatchEvent(new KeyboardEvent('keyup', { key: 'ArrowUp' }))
-    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowDown' }))
-    controller.step(0.25, craft)
-    const speedAfterBraking = controller.getSpeed()
-    expect(speedAfterBraking).toBeLessThan(speedAfterAccelerating)
+  it('limits reverse speed even when S is held for a long duration', () => {
+    const controller = createVehicleController({
+      baseAcceleration: 30,
+      maxForwardSpeed: 120,
+      maxReverseSpeed: 20,
+      dragFactor: 1,
+    })
+    const craft = new THREE.Object3D()
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: 's' }))
+    for (let index = 0; index < 40; index += 1) {
+      controller.step(0.1, craft)
+    }
+    expect(controller.getSpeed()).toBeGreaterThanOrEqual(-20)
+    controller.dispose()
+  })
 
+  it('raises the speed cap when boost is active', () => {
+    const controller = createVehicleController({
+      baseAcceleration: 60,
+      maxForwardSpeed: 90,
+      boostSpeedMultiplier: 1.5,
+      dragFactor: 1,
+    })
+    const craft = new THREE.Object3D()
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Shift' }))
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'w' }))
+    for (let index = 0; index < 60; index += 1) {
+      controller.step(0.1, craft)
+    }
+    expect(controller.getSpeed()).toBeCloseTo(135, 0)
     controller.dispose()
   })
 })
