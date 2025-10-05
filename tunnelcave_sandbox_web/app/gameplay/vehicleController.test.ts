@@ -30,7 +30,7 @@ describe('createVehicleController', () => {
     window.dispatchEvent(new KeyboardEvent('keyup', { key: 'LeftCtrl' }))
   })
 
-  it('accelerates toward the forward cap when W is held', () => {
+  it('accelerates toward the forward cap when the throttle key is held', () => {
     const controller = createVehicleController({
       baseAcceleration: 60,
       maxForwardSpeed: 100,
@@ -38,7 +38,7 @@ describe('createVehicleController', () => {
       bounds: 1000,
     })
     const craft = new THREE.Object3D()
-    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'w' }))
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowUp' }))
     for (let index = 0; index < 60; index += 1) {
       controller.step(0.1, craft)
     }
@@ -54,9 +54,9 @@ describe('createVehicleController', () => {
       bounds: 1000,
     })
     const craft = new THREE.Object3D()
-    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'w' }))
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowUp' }))
     controller.step(0.4, craft)
-    window.dispatchEvent(new KeyboardEvent('keyup', { key: 'w' }))
+    window.dispatchEvent(new KeyboardEvent('keyup', { key: 'ArrowUp' }))
     const speedBeforeDrag = controller.getSpeed()
     controller.step(0.4, craft)
     const speedAfterDrag = controller.getSpeed()
@@ -72,7 +72,7 @@ describe('createVehicleController', () => {
       bounds: 1000,
     })
     const craft = new THREE.Object3D()
-    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'w' }))
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowUp' }))
     controller.step(0.3, craft)
     window.dispatchEvent(new KeyboardEvent('keydown', { key: ' ' }))
     controller.step(0.1, craft)
@@ -80,7 +80,7 @@ describe('createVehicleController', () => {
     controller.dispose()
   })
 
-  it('limits reverse speed even when S is held for a long duration', () => {
+  it('limits reverse speed even when PageDown is held for a long duration', () => {
     const controller = createVehicleController({
       baseAcceleration: 30,
       maxForwardSpeed: 120,
@@ -89,7 +89,7 @@ describe('createVehicleController', () => {
       bounds: 1000,
     })
     const craft = new THREE.Object3D()
-    window.dispatchEvent(new KeyboardEvent('keydown', { key: 's' }))
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'PageDown' }))
     for (let index = 0; index < 40; index += 1) {
       controller.step(0.1, craft)
     }
@@ -107,11 +107,27 @@ describe('createVehicleController', () => {
     })
     const craft = new THREE.Object3D()
     window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Shift' }))
-    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'w' }))
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowUp' }))
     for (let index = 0; index < 60; index += 1) {
       controller.step(0.1, craft)
     }
     expect(controller.getSpeed()).toBeCloseTo(135, 0)
+    controller.dispose()
+  })
+
+  it('accepts PageUp as a throttle input for forward acceleration', () => {
+    const controller = createVehicleController({
+      baseAcceleration: 40,
+      maxForwardSpeed: 90,
+      dragFactor: 1,
+      bounds: 1000,
+    })
+    const craft = new THREE.Object3D()
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'PageUp' }))
+    for (let index = 0; index < 60; index += 1) {
+      controller.step(0.1, craft)
+    }
+    expect(controller.getSpeed()).toBeCloseTo(90, 0)
     controller.dispose()
   })
 
@@ -124,9 +140,9 @@ describe('createVehicleController', () => {
     })
     const craft = new THREE.Object3D()
     //1.- Engage upward thrust and confirm altitude increases beyond the default hover level.
-    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'r' }))
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'w' }))
     controller.step(0.6, craft)
-    window.dispatchEvent(new KeyboardEvent('keyup', { key: 'r' }))
+    window.dispatchEvent(new KeyboardEvent('keyup', { key: 'w' }))
     expect(craft.position.y).toBeGreaterThan(0.1)
     const peakHeight = craft.position.y
     //2.- Release inputs and allow gravity to reel the craft toward the ground plane.
@@ -204,11 +220,11 @@ describe('createVehicleController', () => {
     })
     const craft = new THREE.Object3D()
     //1.- Build forward momentum above the waterline so we can observe the drag response.
-    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'w' }))
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowUp' }))
     for (let index = 0; index < 10; index += 1) {
       controller.step(0.2, craft)
     }
-    window.dispatchEvent(new KeyboardEvent('keyup', { key: 'w' }))
+    window.dispatchEvent(new KeyboardEvent('keyup', { key: 'ArrowUp' }))
     const speedBeforeWater = controller.getSpeed()
     craft.position.y = 2.4
     //2.- Step the simulation with the craft partially submerged and ensure buoyancy and drag clamp its motion.
