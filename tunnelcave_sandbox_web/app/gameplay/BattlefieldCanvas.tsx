@@ -4,6 +4,7 @@ import { useEffect, useMemo, useRef } from 'react'
 import * as THREE from 'three'
 
 import type { BattlefieldConfig } from './generateBattlefield'
+import { createChaseCamera } from './chaseCamera'
 import { createVehicleController } from './vehicleController'
 
 interface BattlefieldCanvasProps {
@@ -90,11 +91,32 @@ export default function BattlefieldCanvas({ config, playerName, vehicleId, sessi
     vehicleBody.position.copy(config.spawnPoint)
     scene.add(vehicleBody)
 
-    const controller = createVehicleController({ bounds: config.fieldSize / 2 - 4, groundY: config.groundY, ceilingY: config.ceilingY })
+    //6.- Configure the vehicle controller with tunable thrust, braking, and bounds tailored to the battlefield layout.
+    const controller = createVehicleController({
+      bounds: config.fieldSize / 2 - 4,
+      groundY: config.groundY,
+      ceilingY: config.ceilingY,
+      baseAcceleration: 48,
+      brakeDeceleration: 220,
+      dragFactor: 0.92,
+      maxForwardSpeed: 150,
+      maxReverseSpeed: 28,
+      boostSpeedMultiplier: 1.4,
+      boostAccelerationMultiplier: 1.2,
+    })
 
-    const cameraTarget = new THREE.Vector3().copy(vehicleBody.position)
-    //6.- Maintain a reusable vector for camera chasing behaviour to avoid per-frame allocations.
-    const desiredCamera = new THREE.Vector3(camera.position.x, camera.position.y, camera.position.z)
+    //7.- Compose the chase camera rig so the framing adapts with vehicle speed and maintains an unobstructed overview.
+    const chaseRig = createChaseCamera({
+      baseDistance: 24,
+      distanceGain: 16,
+      baseHeight: 11,
+      heightGain: 6,
+      lookAheadDistance: 9,
+      smoothingStrength: 7,
+      referenceSpeed: 150,
+      baseFov: 60,
+      maxFov: 74,
+    })
 
     let animationFrame = 0
     let previousTime = performance.now()
@@ -105,10 +127,7 @@ export default function BattlefieldCanvas({ config, playerName, vehicleId, sessi
       const delta = Math.min(0.1, (now - previousTime) / 1000)
       previousTime = now
       controller.step(delta, vehicleBody)
-      cameraTarget.copy(vehicleBody.position)
-      desiredCamera.set(cameraTarget.x, cameraTarget.y + 14, cameraTarget.z + 26)
-      camera.position.lerp(desiredCamera, 0.08)
-      camera.lookAt(vehicleBody.position)
+      chaseRig.update(camera, vehicleBody, controller.getSpeed(), delta)
       renderer.render(scene, camera)
     }
 
