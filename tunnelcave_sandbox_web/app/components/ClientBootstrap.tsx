@@ -1,16 +1,90 @@
 'use client'
 
-import React, { useEffect, useMemo, useState } from 'react'
+import React, { useCallback, useEffect, useMemo, useState } from 'react'
 
 import SimulationControlPanel from './SimulationControlPanel'
+import SessionLaunchPanel from './SessionLaunchPanel'
+import type { VehiclePresetName } from '../../src/world/procedural/vehicles'
 
 const DEFAULT_STATUS = 'Loading web client shell…'
+const AVAILABLE_VEHICLES: VehiclePresetName[] = ['arrowhead', 'aurora', 'duskfall', 'steelwing']
 
 export default function ClientBootstrap() {
   //1.- Capture the broker URL once so hydration and client renders stay consistent.
   const brokerUrl = useMemo(() => process.env.NEXT_PUBLIC_BROKER_URL?.trim() ?? '', [])
   //2.- Track the status message that guides visitors through the setup flow.
   const [status, setStatus] = useState(DEFAULT_STATUS)
+  //3.- Track the committed pilot handle so the runtime can negotiate a personalised broker subject.
+  const [playerName, setPlayerName] = useState('')
+  //4.- Track the committed vehicle preset to showcase the correct craft in the idle renderer.
+  const [vehicleId, setVehicleId] = useState<VehiclePresetName>('arrowhead')
+  //5.- Maintain draft lobby state so visitors can stage selections before reconfiguring the runtime.
+  const [playerNameDraft, setPlayerNameDraft] = useState('')
+  const [vehicleIdDraft, setVehicleIdDraft] = useState<VehiclePresetName>('arrowhead')
+
+  const hydrateFromLocation = useCallback(() => {
+    //1.- Derive lobby configuration from the query string so shared URLs restore the state.
+    if (typeof window === 'undefined') {
+      return
+    }
+    const url = new URL(window.location.href)
+    const pilotParam = url.searchParams.get('pilot')?.trim() ?? ''
+    const vehicleParam = (url.searchParams.get('vehicle') ?? '').trim().toLowerCase() as VehiclePresetName
+    const resolvedVehicle = vehicleParam && AVAILABLE_VEHICLES.includes(vehicleParam) ? vehicleParam : undefined
+    if (pilotParam) {
+      setPlayerName(pilotParam)
+      setPlayerNameDraft(pilotParam)
+    }
+    if (resolvedVehicle) {
+      setVehicleId(resolvedVehicle)
+      setVehicleIdDraft(resolvedVehicle)
+    }
+  }, [])
+
+  useEffect(() => {
+    //1.- Populate lobby state from the current URL when the component hydrates on the client.
+    hydrateFromLocation()
+  }, [hydrateFromLocation])
+
+  const updateUrlWithLobby = useCallback(
+    (name: string, vehicle: VehiclePresetName) => {
+      //1.- Synchronise the query string with the current lobby selections for sharing purposes.
+      if (typeof window === 'undefined') {
+        return
+      }
+      const url = new URL(window.location.href)
+      const trimmed = name.trim()
+    if (trimmed) {
+      url.searchParams.set('pilot', trimmed)
+    } else {
+      url.searchParams.delete('pilot')
+    }
+    url.searchParams.set('vehicle', vehicle)
+    try {
+      window.history.replaceState(null, '', url.toString())
+    } catch (error) {
+      //2.- Surface a warning during development instead of aborting when history APIs reject the update.
+      console.warn('Failed to update share URL', error)
+    }
+    },
+    [],
+  )
+
+  const shareUrl = useMemo(() => {
+    //1.- Generate the share link using the current browser location and lobby selections.
+    if (typeof window === 'undefined') {
+      return ''
+    }
+    const url = new URL(window.location.href)
+    const trimmed = playerNameDraft.trim()
+    if (trimmed) {
+      url.searchParams.set('pilot', trimmed)
+    } else {
+      url.searchParams.delete('pilot')
+    }
+    url.searchParams.set('vehicle', vehicleIdDraft)
+    return url.toString()
+  }, [playerNameDraft, vehicleIdDraft])
 
   useEffect(() => {
     //1.- Explain how to configure the broker when the environment variable is absent.
@@ -23,7 +97,8 @@ export default function ClientBootstrap() {
       }
     }
     //2.- Confirm to the player that the client is ready to negotiate a session.
-    setStatus(`Client ready. Broker endpoint: ${brokerUrl}`)
+    const subject = playerName.trim() || 'sandbox-player'
+    setStatus(`Client ready. Broker endpoint: ${brokerUrl}. Pilot: ${subject}. Vehicle: ${vehicleId}`)
 
     let cancelled = false
     let runtimeModule: typeof import('../../src/runtime/clientShell') | null = null
@@ -35,7 +110,10 @@ export default function ClientBootstrap() {
         if (cancelled) {
           return
         }
-        await runtimeModule.mountClientShell({ brokerUrl })
+        await runtimeModule.mountClientShell({
+          brokerUrl,
+          playerProfile: { pilotName: playerName, vehicleId },
+        })
       } catch (error) {
         console.error('Failed to start client shell', error)
         if (!cancelled) {
@@ -54,7 +132,14 @@ export default function ClientBootstrap() {
         runtimeModule.unmountClientShell()
       }
     }
-  }, [brokerUrl])
+  }, [brokerUrl, playerName, vehicleId])
+
+  const handleStart = useCallback(() => {
+    //1.- Commit the draft selections to the runtime and persist them to the URL for sharing.
+    setPlayerName(playerNameDraft)
+    setVehicleId(vehicleIdDraft)
+    updateUrlWithLobby(playerNameDraft, vehicleIdDraft)
+  }, [playerNameDraft, updateUrlWithLobby, vehicleIdDraft])
 
   //3.- Present the bootstrap instructions alongside DOM anchors for future systems.
   return (
@@ -74,6 +159,14 @@ export default function ClientBootstrap() {
           <li>Restart this page so the HUD connects using the configured broker URL.</li>
         </ol>
       </section>
+      <SessionLaunchPanel
+        playerName={playerNameDraft}
+        vehicleId={vehicleIdDraft}
+        onPlayerNameChange={setPlayerNameDraft}
+        onVehicleIdChange={(value) => setVehicleIdDraft(value)}
+        onStart={handleStart}
+        shareUrl={shareUrl}
+      />
       <section>
         <div id="canvas-root" aria-label="3D world mount" />
         <div id="hud-root" aria-label="HUD overlay mount" />
