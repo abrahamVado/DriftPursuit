@@ -45,10 +45,17 @@ export function createVehicleController(options: VehicleControllerOptions = {}):
     window.addEventListener('keyup', handleKeyUp)
   }
 
+  const forwardKeys = ['w', 'arrowup']
+  const backwardKeys = ['s', 'arrowdown']
+  const leftKeys = ['a', 'arrowleft']
+  const rightKeys = ['d', 'arrowright']
+
   const step = (delta: number, object: THREE.Object3D) => {
-    //1.- Resolve input intent by comparing opposite key states for forward and rotational controls.
-    const forwardIntent = (activeKeys.has('w') ? 1 : 0) - (activeKeys.has('s') ? 1 : 0)
-    const turnIntent = (activeKeys.has('a') ? 1 : 0) - (activeKeys.has('d') ? 1 : 0)
+    //1.- Resolve the forward and turning intents, mirroring both WASD and arrow-key input for accessibility.
+    const forwardIntent = (forwardKeys.some((key) => activeKeys.has(key)) ? 1 : 0) -
+      (backwardKeys.some((key) => activeKeys.has(key)) ? 1 : 0)
+    const turnIntent = (leftKeys.some((key) => activeKeys.has(key)) ? 1 : 0) -
+      (rightKeys.some((key) => activeKeys.has(key)) ? 1 : 0)
 
     //2.- Adjust the craft speed, clamp the magnitude, and apply exponential damping for smoother motion.
     speed += forwardIntent * acceleration * delta

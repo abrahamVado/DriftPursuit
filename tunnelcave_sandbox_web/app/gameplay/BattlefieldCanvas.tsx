@@ -146,7 +146,7 @@ export default function BattlefieldCanvas({ config, playerName, vehicleId, sessi
       <div className="hud-overlay" data-testid="battlefield-hud">
         <p className="hud-session">Session: {sessionId}</p>
         <p className="hud-welcome">{welcomeMessage}</p>
-        <p className="hud-tip">Use W/A/S/D to steer your vehicle.</p>
+        <p className="hud-tip">Use W/A/S/D or the arrow keys to steer and manage throttle.</p>
       </div>
     </div>
   )
