@@ -96,6 +96,7 @@ function encodeEntitySnapshot(params: {
   keyframe: boolean;
   position: Vector3;
   orientation: Orientation;
+  active?: boolean;
 }): Uint8Array {
   const writer = new BinaryWriter();
   writer.uint32((2 << 3) | 2).string(params.entityId);
@@ -104,6 +105,9 @@ function encodeEntitySnapshot(params: {
   writer.uint32((10 << 3) | 0).int64(BigInt(params.capturedAtMs));
   writer.uint32((11 << 3) | 0).uint64(BigInt(params.tickId));
   writer.uint32((12 << 3) | 0).bool(params.keyframe);
+  if (params.active !== undefined) {
+    writer.uint32((8 << 3) | 0).bool(params.active);
+  }
   return writer.finish();
 }
 
@@ -243,5 +247,81 @@ describe("worldSession", () => {
     expect(vi.getTimerCount()).toBe(0);
 
     release();
+  });
+
+  it("auto tracks broker entities so every player shares the same world", async () => {
+    //1.- Arrange the mocked socket transport so the session can observe broker snapshots without networking.
+    const socket = createMockSocket();
+    vi.mocked(openAuthenticatedSocket).mockResolvedValue(socket as unknown as WebSocket);
+
+    let nowMs = 2_000;
+    const session = createWorldSession({
+      dial: {
+        url: "ws://example.test/ws",
+        auth: { subject: "pilot", secret: "bridge" },
+      },
+      updateIntervalMs: 25,
+      now: () => nowMs,
+    });
+
+    const { frames, unsubscribe } = collect(session.store.subscribe.bind(session.store));
+
+    //2.- Establish the websocket connection to trigger roster events on the client wrapper.
+    await session.connect();
+    socket.triggerOpen();
+
+    nowMs = 2_050;
+    socket.triggerMessage(
+      encodeWorldSnapshot({
+        tickId: 42,
+        capturedAtMs: 1_900,
+        keyframe: true,
+        entities: [
+          encodeEntitySnapshot({
+            entityId: "bravo",
+            tickId: 42,
+            capturedAtMs: 1_900,
+            keyframe: true,
+            position: { x: 5, y: 0, z: 0 },
+            orientation: { yawDeg: 0, pitchDeg: 0, rollDeg: 0 },
+          }),
+        ],
+      }),
+    );
+
+    nowMs = 2_150;
+    vi.advanceTimersByTime(50);
+
+    const latest = frames[frames.length - 1];
+    expect(latest?.has("bravo")).toBe(true);
+
+    //3.- Publish a despawn snapshot so the auto tracker prunes the entity for everyone.
+    socket.triggerMessage(
+      encodeWorldSnapshot({
+        tickId: 43,
+        capturedAtMs: 2_000,
+        keyframe: true,
+        entities: [
+          encodeEntitySnapshot({
+            entityId: "bravo",
+            tickId: 43,
+            capturedAtMs: 2_000,
+            keyframe: true,
+            position: { x: 0, y: 0, z: 0 },
+            orientation: { yawDeg: 0, pitchDeg: 0, rollDeg: 0 },
+            active: false,
+          }),
+        ],
+      }),
+    );
+
+    nowMs = 2_250;
+    vi.advanceTimersByTime(50);
+
+    const final = frames[frames.length - 1];
+    expect(final?.has("bravo")).toBe(false);
+
+    unsubscribe();
+    session.dispose();
   });
 });

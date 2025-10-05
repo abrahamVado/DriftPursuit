@@ -1,4 +1,8 @@
-import { WebSocketClient, type WebSocketClientOptions } from "@web/networking/WebSocketClient";
+import {
+  WebSocketClient,
+  type EntitiesEventDetail,
+  type WebSocketClientOptions,
+} from "@web/networking/WebSocketClient";
 import type { SocketDialOptions } from "@web/networking/authenticatedSocket";
 import type { Orientation, Vector3 } from "../generated/types";
 import type { InterpolatedState } from "./interpolator";
@@ -157,6 +161,8 @@ export function createWorldSession(options: WorldSessionOptions): WorldSessionHa
   const client = new WebSocketClient(clientOptions);
   const store = new EntityStore();
   const trackedEntities = new Set<string>();
+  const manualTracked = new Set<string>();
+  const autoTracked = new Set<string>();
   const updateInterval = options.updateIntervalMs ?? DEFAULT_UPDATE_INTERVAL_MS;
   let disposed = false;
   let timer: ReturnType<typeof setInterval> | undefined;
@@ -170,25 +176,48 @@ export function createWorldSession(options: WorldSessionOptions): WorldSessionHa
   };
   client.addEventListener("status", statusListener as EventListener);
 
+  const rosterListener = (event: Event): void => {
+    //1.- Maintain automatic entity tracking so every observed craft appears inside the shared world store.
+    const detail = (event as CustomEvent<EntitiesEventDetail>).detail;
+    for (const entityId of detail.added ?? []) {
+      autoTrack(entityId);
+    }
+    for (const entityId of detail.removed ?? []) {
+      autoUntrack(entityId);
+    }
+  };
+  client.addEventListener("entities", rosterListener as EventListener);
+
   function tick(): void {
     //1.- Sample the interpolated state for every tracked entity using the shared clock.
-    if (disposed || trackedEntities.size === 0) {
+    if (disposed) {
       return;
     }
     const nowMs = sharedNow();
+    const removals: string[] = [];
     for (const entityId of trackedEntities) {
       const state = client.getEntityState(entityId, nowMs);
       if (state) {
         store.upsert(entityId, state);
       } else {
         store.remove(entityId);
+        if (!manualTracked.has(entityId) && !client.hasKnownEntity(entityId)) {
+          removals.push(entityId);
+        }
       }
+    }
+    if (removals.length > 0) {
+      for (const entityId of removals) {
+        trackedEntities.delete(entityId);
+        autoTracked.delete(entityId);
+      }
+      stopTimer();
     }
   }
 
   function ensureTimer(): void {
     //1.- Lazily initialise the polling loop so idle sessions do not schedule unnecessary work.
-    if (!timer) {
+    if (!timer && trackedEntities.size > 0) {
       timer = setInterval(tick, updateInterval);
     }
   }
@@ -209,7 +238,11 @@ export function createWorldSession(options: WorldSessionOptions): WorldSessionHa
   function disconnect(): void {
     //1.- Allow consumers to forcefully close the transport without disposing of the session instance.
     client.disconnect();
+    trackedEntities.clear();
+    manualTracked.clear();
+    autoTracked.clear();
     store.clear();
+    stopTimer();
   }
 
   function dispose(): void {
@@ -219,7 +252,10 @@ export function createWorldSession(options: WorldSessionOptions): WorldSessionHa
     }
     disposed = true;
     client.removeEventListener("status", statusListener as EventListener);
+    client.removeEventListener("entities", rosterListener as EventListener);
     trackedEntities.clear();
+    manualTracked.clear();
+    autoTracked.clear();
     if (timer) {
       clearInterval(timer);
       timer = undefined;
@@ -233,15 +269,42 @@ export function createWorldSession(options: WorldSessionOptions): WorldSessionHa
     if (!entityId) {
       return () => undefined;
     }
+    manualTracked.add(entityId);
     trackedEntities.add(entityId);
+    autoTracked.delete(entityId);
     ensureTimer();
     tick();
     return () => {
       //2.- Stop sampling the entity once the consumer unsubscribes to avoid leaking memory.
-      trackedEntities.delete(entityId);
-      store.remove(entityId);
+      manualTracked.delete(entityId);
+      if (!autoTracked.has(entityId)) {
+        trackedEntities.delete(entityId);
+        store.remove(entityId);
+      }
       stopTimer();
     };
+  }
+
+  function autoTrack(entityId: string): void {
+    //1.- Track broker-supplied entities so every pilot shares the same world snapshot automatically.
+    if (!entityId || trackedEntities.has(entityId)) {
+      return;
+    }
+    trackedEntities.add(entityId);
+    autoTracked.add(entityId);
+    ensureTimer();
+    tick();
+  }
+
+  function autoUntrack(entityId: string): void {
+    //1.- Drop automatically tracked entities that the broker flagged as inactive.
+    if (!entityId || manualTracked.has(entityId) || !trackedEntities.has(entityId)) {
+      return;
+    }
+    trackedEntities.delete(entityId);
+    autoTracked.delete(entityId);
+    store.remove(entityId);
+    stopTimer();
   }
 
   return {

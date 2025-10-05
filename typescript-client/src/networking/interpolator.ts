@@ -144,4 +144,12 @@ export class SnapshotInterpolator {
   getBufferMs(): number {
     return this.bufferMs;
   }
+
+  forget(entityId: string): void {
+    //1.- Remove cached samples and delay history so despawned entities stop influencing playback buffers.
+    if (!entityId) {
+      return;
+    }
+    this.histories.delete(entityId);
+  }
 }
