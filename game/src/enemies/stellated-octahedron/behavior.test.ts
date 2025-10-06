@@ -3,19 +3,15 @@ import * as THREE from 'three'
 import { createEnemy, updateEnemies } from './behavior'
 
 describe('stellated octahedron enemy', () => {
-  it('builds a grouped enemy mesh and registers it with the scene', () => {
+  it('builds a merged enemy mesh and registers it with the scene', () => {
     //1.- Prepare a fresh scene and create the enemy at a known position.
     const scene = new THREE.Scene()
     const enemy = createEnemy(scene, new THREE.Vector3(1, 2, 3))
 
-    //2.- Assert the mesh is composed of two tetrahedron meshes grouped together.
-    expect(enemy.mesh).toBeInstanceOf(THREE.Group)
-    expect(enemy.mesh.children).toHaveLength(2)
-    for (const child of enemy.mesh.children){
-      expect(child).toBeInstanceOf(THREE.Mesh)
-      const geometry = (child as THREE.Mesh).geometry
-      expect(geometry).toBeInstanceOf(THREE.TetrahedronGeometry)
-    }
+    //2.- Assert the geometry merges both tetrahedra into one buffer mesh.
+    expect(enemy.mesh).toBeInstanceOf(THREE.Mesh)
+    const geometry = (enemy.mesh as THREE.Mesh).geometry as THREE.BufferGeometry
+    expect(geometry.getAttribute('position').count).toBe(24)
 
     //3.- Verify the scene registry keeps track of the created enemy and its transform.
     const tracked = (scene as any).__enemies
