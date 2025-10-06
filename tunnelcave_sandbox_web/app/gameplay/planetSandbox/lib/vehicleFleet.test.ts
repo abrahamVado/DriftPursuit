@@ -72,4 +72,28 @@ describe('VehicleFleet', () => {
     expect(snapshot.position.altitude).toBeGreaterThanOrEqual(defaultPlanetaryShell.surfaceRadius + clearance)
     expect(snapshot.touchingSurface).toBe(true)
   })
+
+  it('iterates zero-clearance spawns until the fleet places craft above the surface', () => {
+    const fleet = new VehicleFleet(
+      defaultPlanetaryShell,
+      [
+        {
+          id: 'epsilon',
+          start: {
+            latitudeDeg: 0,
+            longitudeDeg: 0,
+            altitude: defaultPlanetaryShell.surfaceRadius,
+          },
+          command: { headingDeg: 0, distance: 0, climb: 0 },
+        },
+      ],
+      { surfacePadding: 0 },
+    )
+
+    const [snapshot] = fleet.advance()
+
+    //1.- The sanitiser keeps lifting the spawn altitude until it clears the surface even when padding is disabled.
+    expect(snapshot.position.altitude).toBeGreaterThan(defaultPlanetaryShell.surfaceRadius)
+    expect(snapshot.touchingSurface).toBe(false)
+  })
 })

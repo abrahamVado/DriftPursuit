@@ -82,6 +82,28 @@ describe('VehicleFleet', () => {
     expect(snapshot.touchingSurface).toBe(true);
   });
 
+  it('iteratively raises zero-clearance spawns until they sit outside the planet', () => {
+    const fleet = createFleet([
+      {
+        id: 'riser',
+        start: {
+          latitudeDeg: 0,
+          longitudeDeg: 0,
+          altitude: defaultPlanetaryShell.surfaceRadius
+        },
+        command: { headingDeg: 0, distance: 0, climb: 0 }
+      }
+    ], {
+      surfacePadding: 0
+    });
+
+    const [snapshot] = fleet.advance();
+
+    //1.- The spawn logic now iterates until the craft clears the planetary surface even with zero padding configured.
+    expect(snapshot.position.altitude).toBeGreaterThan(defaultPlanetaryShell.surfaceRadius);
+    expect(snapshot.touchingSurface).toBe(false);
+  });
+
   it('raises snapshot altitudes to respect the same clearance heuristic', () => {
     const clearance = 60_000;
     const blueprint = {
