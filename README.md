@@ -6,7 +6,6 @@ The repository contains:
 
 - **go-broker/** — authoritative Go simulation server with WebSocket and gRPC interfaces.
 - **game/** — Next.js web client that renders the orbital sandbox and connects to the live services.
-- **python-sim/** — reference bots and SDK utilities for automated playtesting.
 
 Runtime behaviour is configuration‑driven. Environment variable defaults and override guidance live in
 [docs/configuration.md](docs/configuration.md).
@@ -17,7 +16,6 @@ Runtime behaviour is configuration‑driven. Environment variable defaults and o
 
 - **Go 1.20+** (for the broker)
 - **Node.js 18+** with **npm** (for the web client) — you may use **pnpm** if preferred
-- **Python 3.11** with **Poetry** (for the bot runner)
 - **Docker 24+** with the Compose plugin (optional, for container workflows)
 
 > If you use pnpm for the web client, ensure `corepack enable` is run once on your machine.
@@ -45,13 +43,6 @@ Runtime behaviour is configuration‑driven. Environment variable defaults and o
     npm install            # or: pnpm install
     cd ..
     ```
-   - **Bots / SDK (Python)**
-     ```bash
-     cd python-sim
-     sudo apt install python3-poetry
-     poetry install
-     cd ..
-     ```
 
 3. **Start the broker (terminal A)**
    ```bash
@@ -80,41 +71,26 @@ Runtime behaviour is configuration‑driven. Environment variable defaults and o
     NEXT_PUBLIC_BROKER_HTTP_URL=http://localhost:43127
     ```
 
-5. **(Optional) Run a reference bot (terminal C)**
-   ```bash
-   cd python-sim
-   poetry run python scripts/run_bot.py
-   ```
-   - If needed, set:
-     ```bash
-     BROKER_WS_URL=ws://localhost:43127/ws
-     BROKER_GRPC_ADDR=localhost:43127
-     ```
-
-6. **(Optional) One‑command stack with Docker Compose**
+5. **One‑command stack with Docker Compose**
    ```bash
    docker compose build
    docker compose up
    ```
 - Web: **http://localhost:3000**
 - Broker: **localhost:43127**
-- Simulation bridge: **http://localhost:8000/handshake**
 - The web client container builds the production Next.js bundle with `NEXT_PUBLIC_BROKER_WS_URL=ws://broker:43127/ws` and `NEXT_PUBLIC_BROKER_HTTP_URL=http://broker:43127` so in-cluster requests resolve correctly. You may override these values at runtime if required.
 - Stop with `docker compose down`.
 
-7. **(Optional) Build container images individually**
+6. **(Optional) Build container images individually**
    ```bash
    # Go broker
    docker build -t driftpursuit/broker:local go-broker
-
-   # Python bot runner
-   docker build -t driftpursuit/bot-runner:local python-sim
 
    # Web client
    docker build -t driftpursuit/game:local -f game/Dockerfile .
    ```
 
-8. **(Optional) Production build for the web client**
+7. **(Optional) Production build for the web client**
   ```bash
   cd game
   npm run build
@@ -137,15 +113,8 @@ cd ../game
 npm install      # or pnpm install
 npm run dev
 
-# Optional: launch reference bots
-cd ../python-sim
-poetry install
-poetry run python scripts/run_bot.py
-```
-
 - The broker listens on **:43127** and serves **WebSocket** plus **gRPC** endpoints.
 - The web client defaults to **http://localhost:3000** and expects **NEXT_PUBLIC_BROKER_WS_URL** to reference the broker address.
-- Bots use gRPC/WebSocket endpoints; ensure **BROKER_WS_URL** and **BROKER_GRPC_ADDR** match your local broker settings.
 
 Key broker endpoints while iterating:
 
@@ -157,7 +126,7 @@ Structured JSON logs (default `broker.log`) include `trace_id` values so you can
 
 ### Option B — Docker Compose
 
-The Compose workflow starts all three services with matching configuration:
+The Compose workflow starts the broker and web client with matching configuration:
 
 ```bash
 docker compose build
@@ -167,7 +136,6 @@ docker compose up
 Service summary:
 
 - **broker** — exposed on `localhost:43127`; override environment variables via `.env` or inline Compose edits.
-- **bot-runner** — connects using `BROKER_WS_URL=ws://broker:43127/ws` and propagates the configured `TRACE_HEADER`.
 - **game** — served on `http://localhost:3000` with `NEXT_PUBLIC_BROKER_*` values embedded during the build.
 
 Shut everything down with `docker compose down` and inspect logs using `docker compose logs -f <service>`.
@@ -177,9 +145,6 @@ Shut everything down with `docker compose down` and inspect logs using `docker c
 ```bash
 # Go broker
 docker build -t driftpursuit/broker:local go-broker
-
-# Python bot runner
-docker build -t driftpursuit/bot-runner:local python-sim
 
 # Web client
 docker build -t driftpursuit/game:local -f game/Dockerfile .
