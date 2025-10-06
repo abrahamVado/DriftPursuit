@@ -78,14 +78,17 @@ export function generateRockyPlanetTexture(options: RockyTextureOptions = {}): R
       const base = fractalBrownianMotion(u * 8, v * 8, seed, 4)
       const craters = fractalBrownianMotion(u * 24 + 17.3, v * 24 + 9.1, seed + 91.7, 3)
       const ridge = fractalBrownianMotion(u * 16 - 5.4, v * 16 + 12.6, seed + 13.5, 2)
+      const frost = fractalBrownianMotion(u * 48 + 3.2, v * 48 - 11.7, seed + 211.4, 2)
       //9.- Sculpt a crater mask by emphasising deviations from the midpoint and blending in ridge detail.
       const craterMask = Math.pow(Math.abs(craters - 0.5) * 2, 1.6)
       const ridgeMask = ridge * 0.45 + 0.35
-      //10.- Assemble the final intensity and bias the palette toward moonlit basalt tones.
-      const intensity = clamp(base * 0.55 + craterMask * 0.35 + ridgeMask * 0.25, 0, 1)
-      const r = 48 + intensity * 92
-      const g = 58 + intensity * 84
-      const b = 72 + intensity * 68
+      const frostMask = clamp(Math.pow(frost, 1.8) * 0.6, 0, 0.6)
+      //10.- Assemble the final intensity and bias the palette toward moonlit basalt tones with bright frosted rims.
+      const height = clamp(base * 0.5 + craterMask * 0.45 + ridgeMask * 0.2, 0, 1)
+      const highlight = clamp(0.2 + height * 0.6 + frostMask, 0, 1)
+      const r = clamp(92 + highlight * 128 - craterMask * 36, 0, 255)
+      const g = clamp(100 + highlight * 120 - craterMask * 28, 0, 255)
+      const b = clamp(108 + highlight * 116 - craterMask * 18, 0, 255)
       data[offset] = r
       data[offset + 1] = g
       data[offset + 2] = b

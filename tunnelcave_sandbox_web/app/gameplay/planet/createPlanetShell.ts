@@ -24,6 +24,10 @@ export function createPlanetShell(options: PlanetShellOptions): PlanetShell {
   colorMap.colorSpace = THREE.SRGBColorSpace
   colorMap.format = THREE.RGBAFormat
   colorMap.anisotropy = 4
+  colorMap.generateMipmaps = true
+  colorMap.minFilter = THREE.LinearMipMapLinearFilter
+  colorMap.magFilter = THREE.LinearFilter
+  colorMap.repeat.set(3, 1.5)
   colorMap.needsUpdate = true
   //2.- Tint the shell with a subtle emissive glow, wrap a rocky albedo texture, and render only the inner faces to avoid occluding the scene.
   const material = new THREE.MeshStandardMaterial({

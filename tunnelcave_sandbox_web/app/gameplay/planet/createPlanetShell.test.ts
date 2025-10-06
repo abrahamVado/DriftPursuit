@@ -30,12 +30,17 @@ describe('createPlanetShell', () => {
       constructor(public value: unknown) {}
     }
     const textureDispose = vi.fn()
+    const repeatSet = vi.fn()
     class StubDataTexture {
       wrapS: unknown
       wrapT: unknown
       colorSpace: unknown
       format: unknown
       anisotropy = 0
+      repeat = { set: repeatSet }
+      generateMipmaps = false
+      minFilter: unknown
+      magFilter: unknown
       needsUpdate = false
       constructor(public data: Uint8Array, public width: number, public height: number, format: unknown) {
         this.format = format
@@ -52,6 +57,8 @@ describe('createPlanetShell', () => {
       RepeatWrapping: 'repeat-wrap',
       RGBAFormat: 'rgba-format',
       SRGBColorSpace: 'srgb-space',
+      LinearFilter: 'linear-filter',
+      LinearMipMapLinearFilter: 'linear-mipmap-linear',
     }
     vi.doMock('three', () => stub)
     vi.doMock('./rockyPlanetTexture', () => ({
@@ -74,6 +81,12 @@ describe('createPlanetShell', () => {
     expect(map.wrapS).toBe('repeat-wrap')
     expect(map.wrapT).toBe('repeat-wrap')
     expect(map.colorSpace).toBe('srgb-space')
+    //3.- Ensure the rocky albedo uses mipmapped linear filtering and repeats around the sphere for detail clarity.
+    expect(map.generateMipmaps).toBe(true)
+    expect(map.minFilter).toBe('linear-mipmap-linear')
+    expect(map.magFilter).toBe('linear-filter')
+    expect(repeatSet).toHaveBeenCalledWith(3, 1.5)
+    //4.- Confirm the factory provides a disposal hook that clears underlying WebGL resources.
     dispose()
     expect(geometryDispose).toHaveBeenCalled()
     expect(materialDispose).toHaveBeenCalled()
