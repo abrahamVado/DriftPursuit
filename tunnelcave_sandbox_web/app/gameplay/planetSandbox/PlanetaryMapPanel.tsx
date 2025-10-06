@@ -68,6 +68,19 @@ const hasWebGlSupport = (): boolean => {
   return typeof glConstructor === 'function'
 }
 
+//1.- Release GPU resources tied to a vehicle mesh, handling single or multi-material setups.
+export const disposeVehicleMesh = (
+  mesh: THREE.Mesh<THREE.BufferGeometry, THREE.Material | THREE.Material[]>,
+) => {
+  mesh.geometry.dispose()
+  const { material } = mesh
+  if (Array.isArray(material)) {
+    material.forEach((entry) => entry.dispose())
+    return
+  }
+  material.dispose()
+}
+
 const PlanetaryMapPanel = () => {
   const containerRef = useRef<HTMLDivElement | null>(null)
   const [telemetry, setTelemetry] = useState<TelemetrySnapshot>(() => ({
@@ -134,7 +147,10 @@ const PlanetaryMapPanel = () => {
     //5.- Prepare helpers to convert spherical telemetry into cartesian coordinates.
     const traveler = new PlanetTraveler(defaultPlanetaryShell, initialPosition)
     const fleet = new VehicleFleet(defaultPlanetaryShell, vehicleBlueprints)
-    const vehicleMeshes = new Map<string, THREE.Object3D>()
+    const vehicleMeshes = new Map<
+      string,
+      THREE.Mesh<THREE.BufferGeometry, THREE.Material | THREE.Material[]>
+    >()
 
     const toCartesian = (position: SphericalPosition) => {
       const latRad = THREE.MathUtils.degToRad(position.latitudeDeg)
@@ -235,10 +251,7 @@ const PlanetaryMapPanel = () => {
       atmosphereMaterial.dispose()
       vehicleMeshes.forEach((mesh) => {
         scene.remove(mesh)
-        const geometry = mesh.geometry as THREE.BufferGeometry
-        const material = mesh.material as THREE.Material
-        geometry.dispose()
-        material.dispose()
+        disposeVehicleMesh(mesh)
       })
     }
   }, [])
