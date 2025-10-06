@@ -1,0 +1,84 @@
+:root {
+  color-scheme: dark;
+  font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+  background: radial-gradient(circle at top, #0b1d3b, #020409 60%);
+  color: #f0f5ff;
+}
+
+body {
+  margin: 0;
+  min-height: 100vh;
+}
+
+.app-container {
+  display: flex;
+  flex-direction: column;
+  gap: 1.5rem;
+  align-items: center;
+  padding: 2rem;
+}
+
+header {
+  text-align: center;
+}
+
+canvas {
+  border-radius: 12px;
+  box-shadow: 0 1rem 2rem rgba(0, 0, 0, 0.55);
+}
+
+.info-panel {
+  background: rgba(14, 24, 52, 0.8);
+  border-radius: 12px;
+  padding: 1rem 1.5rem;
+  display: grid;
+  gap: 0.5rem;
+  width: min(480px, 90vw);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.info-panel span {
+  display: flex;
+  justify-content: space-between;
+  font-variant-numeric: tabular-nums;
+}
+
+.vehicle-status {
+  margin-top: 0.5rem;
+  display: grid;
+  gap: 0.25rem;
+}
+
+.vehicle-status ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 0.25rem;
+}
+
+.vehicle-status li {
+  display: flex;
+  justify-content: space-between;
+  font-size: 0.9rem;
+  background: rgba(18, 38, 74, 0.6);
+  padding: 0.35rem 0.5rem;
+  border-radius: 8px;
+}
+
+.vehicle-status strong {
+  font-size: 1rem;
+}
+
+.sandbox-wrapper {
+  display: grid;
+  gap: 1.5rem;
+  place-items: center;
+}
+
+.sandbox-wrapper > div {
+  background: radial-gradient(circle, rgba(80, 180, 255, 0.2), rgba(6, 18, 40, 0.9));
+  border: 1px solid rgba(78, 198, 255, 0.35);
+  border-radius: 20px;
+  overflow: hidden;
+}
