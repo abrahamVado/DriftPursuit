@@ -1,7 +1,8 @@
 import * as THREE from 'three'
 
 import { assetRegistry } from './assets/assetCatalog'
-import { createTerrainSampler, TerrainSampler } from './terrain/terrainSampler'
+import { createTerrainSampler } from './terrain/terrainSampler'
+import type { TerrainSampler } from './terrain/terrainSampler'
 
 export interface RockInstance {
   position: THREE.Vector3
