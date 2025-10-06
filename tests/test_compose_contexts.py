@@ -28,6 +28,16 @@ class ComposeContextTest(unittest.TestCase):
         # //5.- Fail the test when any context path is absent so Compose builds cannot break silently.
         self.assertFalse(missing_paths, f"Missing build contexts: {missing_paths}")
 
+    def test_game_service_host_port_is_configurable(self) -> None:
+        """The game service must expose a configurable host port to avoid collisions."""
+        # //1.- Load the docker-compose file so we can inspect the port mapping definition.
+        contents = self.COMPOSE_PATH.read_text(encoding="utf-8")
+        # //2.- Look for the exact Compose syntax that expands the GAME_HOST_PORT variable with a default.
+        pattern = r'ports:\s*\n\s+- "\$\{GAME_HOST_PORT:-3000\}:3000"'
+        match = re.search(pattern, contents)
+        # //3.- Ensure the pattern is present; otherwise developers cannot override the host port cleanly.
+        self.assertIsNotNone(match, "Expected game service ports to use ${GAME_HOST_PORT:-3000}:3000 mapping")
+
 
 if __name__ == "__main__":
     unittest.main()

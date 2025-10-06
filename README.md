@@ -78,6 +78,11 @@ Runtime behaviour is configuration‑driven. Environment variable defaults and o
    ```
 - Web: **http://localhost:3000**
 - Broker: **localhost:43127**
+- To avoid host port conflicts set a different port before running Compose:
+  ```bash
+  export GAME_HOST_PORT=3001
+  docker compose up
+  ```
 - The web client container builds the production Next.js bundle with `NEXT_PUBLIC_BROKER_WS_URL=ws://broker:43127/ws` and `NEXT_PUBLIC_BROKER_HTTP_URL=http://broker:43127` so in-cluster requests resolve correctly. You may override these values at runtime if required.
 - Stop with `docker compose down`.
 
