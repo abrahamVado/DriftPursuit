@@ -230,8 +230,7 @@ body {
 }
 
 .hud-minimap__background {
-  /* 1.- Apply subtle styling so the battlefield outline remains legible. */
-  fill: rgba(30, 41, 59, 0.85);
+  /* 1.- Outline the spherical minimap while allowing the SVG gradient to supply the fill. */
   stroke: rgba(148, 163, 184, 0.4);
   stroke-width: 1.5;
 }
