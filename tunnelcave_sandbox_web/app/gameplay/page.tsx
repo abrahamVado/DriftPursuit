@@ -4,6 +4,7 @@ import React from 'react'
 import { useMemo, useState } from 'react'
 
 import BattlefieldCanvas from './BattlefieldCanvas'
+import PlanetaryMapPanel from './planetSandbox/PlanetaryMapPanel'
 import { generateBattlefield } from './generateBattlefield'
 import { createPlayerSessionId } from './playerSession'
 import { VEHICLE_IDS, type VehicleId } from './vehicles'
@@ -95,10 +96,14 @@ export default function GameplayPage() {
       )}
       {stage === 'battle' && (
         <section className="battle-stage" data-testid="battle-stage">
-          <BattlefieldCanvas config={battlefield} playerName={playerName} sessionId={sessionId} vehicleId={vehicleId} />
+          <div className="battle-stage-content">
+            <div className="battle-stage-canvas" data-testid="battle-stage-canvas">
+              <BattlefieldCanvas config={battlefield} playerName={playerName} sessionId={sessionId} vehicleId={vehicleId} />
+            </div>
+            <PlanetaryMapPanel />
+          </div>
         </section>
       )}
     </main>
   )
 }
-
