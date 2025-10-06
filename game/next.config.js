@@ -1,9 +1,6 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
-  reactStrictMode: true,
-  experimental: {
-    instrumentationHook: false
-  }
+  reactStrictMode: true
 };
 
 module.exports = nextConfig;
