@@ -15,14 +15,30 @@ export interface VehicleSnapshot {
   readonly hittingCeiling: boolean
 }
 
+export interface VehicleFleetOptions {
+  surfacePadding?: number
+}
+
+const sanitizeAltitude = (shell: PlanetaryShell, altitude: number, surfacePadding: number): number => {
+  //1.- Clamp the orbital radius between the surface clearance and the exosphere ceiling for safe rendering.
+  const minimum = shell.surfaceRadius + surfacePadding
+  const maximum = shell.exosphereRadius
+  return Math.min(Math.max(altitude, minimum), maximum)
+}
+
 export class VehicleFleet {
   private readonly travelers: Map<string, PlanetTraveler> = new Map()
   private readonly commands: Map<string, MovementCommand> = new Map()
 
-  constructor(shell: PlanetaryShell, blueprints: VehicleBlueprint[]) {
+  constructor(shell: PlanetaryShell, blueprints: VehicleBlueprint[], options: VehicleFleetOptions = {}) {
+    const surfacePadding = options.surfacePadding ?? 0.5
     //1.- Spin up a traveler per blueprint so formations can animate independently.
     for (const blueprint of blueprints) {
-      const traveler = new PlanetTraveler(shell, blueprint.start)
+      const sanitizedStart: SphericalPosition = {
+        ...blueprint.start,
+        altitude: sanitizeAltitude(shell, blueprint.start.altitude, surfacePadding),
+      }
+      const traveler = new PlanetTraveler(shell, sanitizedStart, { surfacePadding })
       this.travelers.set(blueprint.id, traveler)
       this.commands.set(blueprint.id, blueprint.command)
     }
@@ -49,13 +65,33 @@ export class VehicleFleet {
   }
 }
 
-export const blueprintToSnapshot = (blueprint: VehicleBlueprint): VehicleSnapshot => {
+export const blueprintToSnapshot = (
+  blueprint: VehicleBlueprint,
+  shell?: PlanetaryShell,
+  options: VehicleFleetOptions = {},
+): VehicleSnapshot => {
+  const surfacePadding = options.surfacePadding ?? 0.5
+  const altitude = shell
+    ? sanitizeAltitude(shell, blueprint.start.altitude, surfacePadding)
+    : blueprint.start.altitude
   //1.- Convert starting blueprints into telemetry entries so UI renders without waiting for the first tick.
   return {
     id: blueprint.id,
-    position: { ...blueprint.start },
+    position: { ...blueprint.start, altitude },
     laps: 0,
     touchingSurface: false,
     hittingCeiling: false,
+  }
+}
+
+export const enforceSurfaceClearance = (
+  shell: PlanetaryShell,
+  position: SphericalPosition,
+  surfacePadding: number,
+): SphericalPosition => {
+  //1.- Share the altitude sanitiser so scene setup and fleet logic remain consistent.
+  return {
+    ...position,
+    altitude: sanitizeAltitude(shell, position.altitude, surfacePadding),
   }
 }

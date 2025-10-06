@@ -3,7 +3,20 @@ import * as THREE from 'three';
 import { describeAtmosphere } from '../lib/atmosphere';
 import { defaultPlanetaryShell, MovementCommand, SphericalPosition } from '../lib/planetConfig';
 import { PlanetTraveler } from '../lib/sphericalNavigator';
-import { VehicleBlueprint, VehicleFleet, VehicleSnapshot, blueprintToSnapshot } from '../lib/vehicleFleet';
+import {
+  VehicleBlueprint,
+  VehicleFleet,
+  VehicleSnapshot,
+  blueprintToSnapshot,
+  enforceSurfaceClearance
+} from '../lib/vehicleFleet';
+
+const orbitalClearance = 80_000;
+
+const withClearance = (position: SphericalPosition): SphericalPosition => {
+  //1.- Apply a generous orbital clearance so meshes always orbit outside the rendered planet body.
+  return enforceSurfaceClearance(defaultPlanetaryShell, position, orbitalClearance);
+};
 
 interface TelemetrySnapshot {
   position: SphericalPosition;
@@ -13,11 +26,11 @@ interface TelemetrySnapshot {
   vehicles: VehicleSnapshot[];
 }
 
-const initialPosition: SphericalPosition = {
+const initialPosition: SphericalPosition = withClearance({
   latitudeDeg: 5,
   longitudeDeg: 45,
-  altitude: defaultPlanetaryShell.surfaceRadius + 150
-};
+  altitude: defaultPlanetaryShell.surfaceRadius + orbitalClearance
+});
 
 const travelCommand: MovementCommand = {
   headingDeg: 92,
@@ -28,24 +41,36 @@ const travelCommand: MovementCommand = {
 const vehicleBlueprints: VehicleBlueprint[] = [
   {
     id: 'scout',
-    start: { latitudeDeg: 15, longitudeDeg: 120, altitude: defaultPlanetaryShell.surfaceRadius + 300 },
+    start: withClearance({
+      latitudeDeg: 15,
+      longitudeDeg: 120,
+      altitude: defaultPlanetaryShell.surfaceRadius + orbitalClearance + 40_000
+    }),
     command: { headingDeg: 80, distance: 3_000, climb: 3 }
   },
   {
     id: 'freighter',
-    start: { latitudeDeg: -10, longitudeDeg: -40, altitude: defaultPlanetaryShell.surfaceRadius + 120 },
+    start: withClearance({
+      latitudeDeg: -10,
+      longitudeDeg: -40,
+      altitude: defaultPlanetaryShell.surfaceRadius + orbitalClearance + 15_000
+    }),
     command: { headingDeg: 115, distance: 2_500, climb: -1 }
   },
   {
     id: 'racer',
-    start: { latitudeDeg: 25, longitudeDeg: -150, altitude: defaultPlanetaryShell.surfaceRadius + 600 },
+    start: withClearance({
+      latitudeDeg: 25,
+      longitudeDeg: -150,
+      altitude: defaultPlanetaryShell.surfaceRadius + orbitalClearance + 60_000
+    }),
     command: { headingDeg: 65, distance: 4_500, climb: 4 }
   }
 ];
 
 const initialVehicleTelemetry = vehicleBlueprints.map((blueprint) => {
   //1.- Seed the telemetry list so companion traffic renders before animations tick.
-  return blueprintToSnapshot(blueprint);
+  return blueprintToSnapshot(blueprint, defaultPlanetaryShell, { surfacePadding: orbitalClearance });
 });
 
 const PlanetSandbox = () => {
@@ -114,8 +139,8 @@ const PlanetSandbox = () => {
     scene.add(atmosphereMesh);
 
     //6.- Store the traveler controller so physics updates keep accumulating.
-    const traveler = new PlanetTraveler(defaultPlanetaryShell, initialPosition);
-    const fleet = new VehicleFleet(defaultPlanetaryShell, vehicleBlueprints);
+    const traveler = new PlanetTraveler(defaultPlanetaryShell, initialPosition, { surfacePadding: orbitalClearance });
+    const fleet = new VehicleFleet(defaultPlanetaryShell, vehicleBlueprints, { surfacePadding: orbitalClearance });
     const vehicleMeshes = new Map<string, THREE.Object3D>();
     const toCartesian = (position: SphericalPosition) => {
       const latRad = THREE.MathUtils.degToRad(position.latitudeDeg);

@@ -194,9 +194,10 @@ export function createVehicleController(options: VehicleControllerOptions = {}):
     forwardVector.z = -1
     applyQuaternionToVector(forwardVector, object.quaternion)
 
-    //3.- Integrate throttle, brake, and drag influences into the velocity so the craft responds smoothly.
+    //3.- Integrate throttle, brake, and drag influences into the velocity so the craft responds smoothly while PageUp overdrive doubles thrust.
+    const throttleBoost = latchedThrottle > 0 ? 2 : 1
     if (forwardIntent > 0) {
-      const accel = baseAcceleration * (boosting ? boostAccelerationMultiplier : 1)
+      const accel = baseAcceleration * throttleBoost * (boosting ? boostAccelerationMultiplier : 1)
       addScaled(velocity, forwardVector, accel * dt)
     } else if (forwardIntent < 0) {
       const reverseAccel = baseAcceleration * reverseAccelerationMultiplier
@@ -216,7 +217,7 @@ export function createVehicleController(options: VehicleControllerOptions = {}):
     velocity.z *= dragExponent
 
     const forwardComponent = dot(velocity, forwardVector)
-    const forwardCap = maxForwardSpeed * (boosting ? boostSpeedMultiplier : 1)
+    const forwardCap = maxForwardSpeed * throttleBoost * (boosting ? boostSpeedMultiplier : 1)
     if (forwardComponent > forwardCap) {
       addScaled(velocity, forwardVector, forwardCap - forwardComponent)
     } else if (forwardComponent < -maxReverseSpeed) {
