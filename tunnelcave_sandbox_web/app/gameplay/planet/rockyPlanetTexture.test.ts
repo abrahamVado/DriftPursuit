@@ -25,4 +25,13 @@ describe('generateRockyPlanetTexture', () => {
     //3.- Verify the average luminance lifts above deep blues so the rocky shell contrasts the surrounding atmosphere.
     expect(sum / count).toBeGreaterThan(110)
   })
+
+  it('returns texture data backed by a transferable ArrayBuffer', () => {
+    const bundle = generateRockyPlanetTexture({ size: 16, seed: 19 })
+    //1.- Confirm the buffer advertises ArrayBuffer so strict DOM typings accept the data as a WebGL upload source.
+    expect(bundle.data.buffer).toBeInstanceOf(ArrayBuffer)
+    //2.- Ensure the view references the full allocated buffer so no byte offsets are introduced unexpectedly.
+    expect(bundle.data.byteOffset).toBe(0)
+    expect(bundle.data.byteLength).toBe(bundle.size * bundle.size * 4)
+  })
 })

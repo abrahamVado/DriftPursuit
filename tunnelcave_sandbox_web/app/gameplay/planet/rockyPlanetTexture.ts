@@ -3,12 +3,20 @@ export interface RockyTextureOptions {
   seed?: number
 }
 
+export type RockyTextureData = Uint8Array & { buffer: ArrayBuffer }
+
 export interface RockyTextureBundle {
   size: number
-  data: Uint8Array
+  data: RockyTextureData
 }
 
 const DEFAULT_SIZE = 256
+
+function createArrayBackedUint8Array(length: number): RockyTextureData {
+  //1.- Allocate an ArrayBuffer explicitly so the resulting view advertises the ArrayBuffer type to strict DOM lib typings.
+  const buffer = new ArrayBuffer(length)
+  return new Uint8Array(buffer) as RockyTextureData
+}
 
 function smoothStep(value: number): number {
   //1.- Ease interpolation edges so the layered noise transitions softly between grid samples.
@@ -67,7 +75,7 @@ export function generateRockyPlanetTexture(options: RockyTextureOptions = {}): R
   //7.- Resolve configuration values with safe defaults so the generator can run without explicit input.
   const size = Math.max(16, options.size ?? DEFAULT_SIZE)
   const seed = options.seed ?? 42
-  const data = new Uint8Array(size * size * 4)
+  const data = createArrayBackedUint8Array(size * size * 4)
   let offset = 0
 
   for (let y = 0; y < size; y += 1) {
