@@ -1,4 +1,9 @@
-import { MovementCommand, MovementResult, PlanetaryShell, SphericalPosition } from './planetConfig';
+import type {
+  MovementCommand,
+  MovementResult,
+  PlanetaryShell,
+  SphericalPosition
+} from './planetConfig';
 
 const DEG_TO_RAD = Math.PI / 180;
 const RAD_TO_DEG = 180 / Math.PI;

@@ -1,4 +1,4 @@
-import { MovementCommand, PlanetaryShell, SphericalPosition } from './planetConfig';
+import type { MovementCommand, PlanetaryShell, SphericalPosition } from './planetConfig';
 import { PlanetTraveler } from './sphericalNavigator';
 
 export interface VehicleBlueprint {
