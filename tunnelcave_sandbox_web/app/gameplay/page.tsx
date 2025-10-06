@@ -5,12 +5,11 @@ import { useMemo, useState } from 'react'
 
 import BattlefieldCanvas from './BattlefieldCanvas'
 import { generateBattlefield } from './generateBattlefield'
-import { SHARED_WORLD_SEED } from './worldLobby'
 import { createPlayerSessionId } from './playerSession'
+import { VEHICLE_IDS, type VehicleId } from './vehicles'
+import { SHARED_WORLD_SEED } from './worldLobby'
 
-const VEHICLES = ['arrowhead', 'aurora', 'duskfall', 'steelwing'] as const
-
-export type VehicleOption = (typeof VEHICLES)[number]
+export type VehicleOption = VehicleId
 
 export default function GameplayPage() {
   //1.- Track the progression through the join flow so the interface reveals the correct controls.
@@ -77,7 +76,7 @@ export default function GameplayPage() {
             </p>
           )}
           <div className="vehicle-grid" data-testid="vehicle-grid">
-            {VEHICLES.map((vehicle) => (
+            {VEHICLE_IDS.map((vehicle) => (
               <button
                 className={vehicle === vehicleId ? 'vehicle selected' : 'vehicle'}
                 data-testid={`vehicle-${vehicle}`}
