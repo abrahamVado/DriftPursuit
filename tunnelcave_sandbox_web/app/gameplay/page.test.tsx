@@ -22,6 +22,11 @@ vi.mock('./BattlefieldCanvas', () => ({
   ),
 }))
 
+vi.mock('./planetSandbox/PlanetaryMapPanel', () => ({
+  __esModule: true,
+  default: () => <div data-testid="mock-planet-panel">planet-panel</div>,
+}))
+
 describe('GameplayPage', () => {
   beforeEach(() => {
     //1.- Reset the DOM between scenarios to avoid leaking rendered components or validation states.
@@ -53,7 +58,7 @@ describe('GameplayPage', () => {
     expect(screen.queryByTestId('battle-stage')).toBeNull()
   })
 
-  it('mounts the battlefield when launch conditions are satisfied', async () => {
+  it('mounts the battlefield and planet panel when launch conditions are satisfied', async () => {
     const { default: GameplayPage } = await import('./page')
     render(<GameplayPage />)
     fireEvent.click(screen.getByTestId('join-button'))
@@ -63,6 +68,8 @@ describe('GameplayPage', () => {
     fireEvent.click(screen.getByTestId('launch-button'))
     expect(screen.queryByTestId('battle-stage')).not.toBeNull()
     expect(screen.getByTestId('mock-canvas').textContent).toContain('Nova-aurora-pilot')
+    //2.- The sandbox panel should render alongside the battlefield layout.
+    expect(screen.queryByTestId('mock-planet-panel')).not.toBeNull()
   })
 
   it('generates the shared battlefield using the global world seed', async () => {
@@ -72,4 +79,3 @@ describe('GameplayPage', () => {
     expect(generateBattlefieldMock).toHaveBeenCalledWith(SHARED_WORLD_SEED)
   })
 })
-
