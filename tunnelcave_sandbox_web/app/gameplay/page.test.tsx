@@ -24,7 +24,9 @@ vi.mock('./BattlefieldCanvas', () => ({
 
 vi.mock('./planetSandbox/PlanetaryMapPanel', () => ({
   __esModule: true,
-  default: () => <div data-testid="mock-planet-panel">planet-panel</div>,
+  default: ({ battlefield }: { battlefield: unknown }) => (
+    <div data-testid="mock-planet-panel">planet-panel-{Boolean(battlefield)}</div>
+  ),
 }))
 
 describe('GameplayPage', () => {

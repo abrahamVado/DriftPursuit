@@ -100,7 +100,7 @@ export default function GameplayPage() {
             <div className="battle-stage-canvas" data-testid="battle-stage-canvas">
               <BattlefieldCanvas config={battlefield} playerName={playerName} sessionId={sessionId} vehicleId={vehicleId} />
             </div>
-            <PlanetaryMapPanel />
+            <PlanetaryMapPanel battlefield={battlefield} />
           </div>
         </section>
       )}

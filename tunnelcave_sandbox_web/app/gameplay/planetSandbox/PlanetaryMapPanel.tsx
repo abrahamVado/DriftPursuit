@@ -15,6 +15,8 @@ import {
   type VehicleBlueprint,
   type VehicleSnapshot,
 } from './lib'
+import type { BattlefieldConfig } from '../generateBattlefield'
+import { createBattlefieldTerrainPreview } from './createBattlefieldTerrain'
 
 interface TelemetrySnapshot {
   position: SphericalPosition
@@ -81,7 +83,7 @@ export const disposeVehicleMesh = (
   material.dispose()
 }
 
-const PlanetaryMapPanel = () => {
+const PlanetaryMapPanel = ({ battlefield }: { battlefield: BattlefieldConfig }) => {
   const containerRef = useRef<HTMLDivElement | null>(null)
   const [telemetry, setTelemetry] = useState<TelemetrySnapshot>(() => ({
     position: initialPosition,
@@ -144,7 +146,15 @@ const PlanetaryMapPanel = () => {
     const atmosphereMesh = new THREE.Mesh(atmosphereGeometry, atmosphereMaterial)
     scene.add(atmosphereMesh)
 
-    //5.- Prepare helpers to convert spherical telemetry into cartesian coordinates.
+    //5.- Assemble the battlefield miniature so pilots can compare the cavern terrain with the orbital vista.
+    const terrainPreview = createBattlefieldTerrainPreview(battlefield)
+    const terrainScale = shellScale * 0.32
+    terrainPreview.group.scale.setScalar(terrainScale)
+    terrainPreview.group.position.set(0, planetRadius + 120, 0)
+    terrainPreview.group.rotation.x = -Math.PI / 2
+    scene.add(terrainPreview.group)
+
+    //6.- Prepare helpers to convert spherical telemetry into cartesian coordinates.
     const traveler = new PlanetTraveler(defaultPlanetaryShell, initialPosition)
     const fleet = new VehicleFleet(defaultPlanetaryShell, vehicleBlueprints)
     const vehicleMeshes = new Map<
@@ -164,7 +174,7 @@ const PlanetaryMapPanel = () => {
       )
     }
 
-    //6.- Spawn simple vehicle meshes that trail the player around the shell.
+    //7.- Spawn simple vehicle meshes that trail the player around the shell.
     const vehicleColors: Record<string, string> = {
       scout: '#ffd166',
       freighter: '#00f5d4',
@@ -195,7 +205,7 @@ const PlanetaryMapPanel = () => {
         return
       }
 
-      //7.- Step the traveler and companion fleet before rendering the latest frame.
+      //8.- Step the traveler and companion fleet before rendering the latest frame.
       const result = traveler.move(travelCommand)
       const atmosphere = describeAtmosphere(defaultPlanetaryShell, result.position)
       const vehicleSnapshots = fleet.advance()
@@ -215,7 +225,7 @@ const PlanetaryMapPanel = () => {
         vehicles: vehicleSnapshots,
       })
 
-      //8.- Rotate the planet and atmosphere for a gentle sense of drift.
+      //9.- Rotate the planet and atmosphere for a gentle sense of drift.
       planetMesh.rotation.y += 0.001
       atmosphereMesh.rotation.y += 0.001
 
@@ -223,7 +233,7 @@ const PlanetaryMapPanel = () => {
       animationFrame = requestAnimationFrame(animate)
     }
 
-    //9.- React to viewport changes so the camera aspect and renderer stay in sync.
+    //10.- React to viewport changes so the camera aspect and renderer stay in sync.
     const handleResize = () => {
       if (!containerRef.current) {
         return
@@ -238,10 +248,12 @@ const PlanetaryMapPanel = () => {
     animate()
 
     return () => {
-      //10.- Dispose resources and detach DOM nodes once the panel unmounts.
+      //11.- Dispose resources and detach DOM nodes once the panel unmounts.
       disposed = true
       cancelAnimationFrame(animationFrame)
       window.removeEventListener('resize', handleResize)
+      scene.remove(terrainPreview.group)
+      terrainPreview.dispose()
       renderer.dispose()
       mount.removeChild(renderer.domElement)
       scene.clear()
@@ -254,7 +266,7 @@ const PlanetaryMapPanel = () => {
         disposeVehicleMesh(mesh)
       })
     }
-  }, [])
+  }, [battlefield])
 
   const atmosphere = describeAtmosphere(defaultPlanetaryShell, telemetry.position)
 

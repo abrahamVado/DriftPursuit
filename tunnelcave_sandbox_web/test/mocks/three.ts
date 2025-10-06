@@ -130,6 +130,17 @@ export class Quaternion {
     const length = Math.hypot(this.x, this.y, this.z, this.w) || 1
     return this.set(this.x / length, this.y / length, this.z / length, this.w / length)
   }
+
+  clone(): Quaternion {
+    return new Quaternion().copy(this)
+  }
+
+  setFromAxisAngle(axis: Vector3, angle: number): this {
+    const normalized = axis.clone().normalize()
+    const halfAngle = angle / 2
+    const s = Math.sin(halfAngle)
+    return this.set(normalized.x * s, normalized.y * s, normalized.z * s, Math.cos(halfAngle))
+  }
 }
 
 export class FogExp2 {
@@ -173,6 +184,19 @@ export class Object3D {
       this.parent.remove(this)
     }
     return this
+  }
+
+  getObjectByName(name: string): Object3D | undefined {
+    if (this.name === name) {
+      return this
+    }
+    for (const child of this.children) {
+      const match = child.getObjectByName(name)
+      if (match) {
+        return match
+      }
+    }
+    return undefined
   }
 
   updateMatrix(): void {
@@ -316,6 +340,13 @@ export class BufferAttribute {
     this.array[index * this.itemSize + 2] = value
     return this
   }
+
+  setXYZ(index: number, x: number, y: number, z: number): this {
+    this.setX(index, x)
+    this.setY(index, y)
+    this.setZ(index, z)
+    return this
+  }
 }
 
 export class Float32BufferAttribute extends BufferAttribute {}
@@ -350,6 +381,27 @@ export class BufferGeometry {
   center(): this {
     return this
   }
+
+  toNonIndexed(): this {
+    this.index = null
+    return this
+  }
+
+  clone(): BufferGeometry {
+    const copy = new BufferGeometry()
+    copy.index = this.index ? [...this.index] : null
+    for (const [name, attribute] of Object.entries(this.attributes)) {
+      const value = attribute as unknown
+      if (value instanceof BufferAttribute) {
+        copy.attributes[name] = new BufferAttribute(value.array.slice(0), value.itemSize)
+      } else {
+        copy.attributes[name] = value
+      }
+    }
+    return copy
+  }
+
+  dispose(): void {}
 }
 
 export class Shape {
@@ -399,6 +451,9 @@ export class BoxGeometry extends BufferGeometry {
   //1.- Record box dimensions so previews can inspect fuselage proportions.
   constructor(public width: number, public height: number, public depth: number) {
     super()
+    const vertexCount = 8
+    const array = new Float32Array(vertexCount * 3)
+    this.setAttribute('position', new BufferAttribute(array, 3))
   }
 }
 
@@ -406,6 +461,40 @@ export class CylinderGeometry extends BufferGeometry {
   //1.- Track top/bottom radii for glider fuselage approximations.
   constructor(public radiusTop: number, public radiusBottom: number, public height: number, public radialSegments: number) {
     super()
+    const vertexCount = Math.max(1, radialSegments) * 2
+    const array = new Float32Array(vertexCount * 3)
+    this.setAttribute('position', new BufferAttribute(array, 3))
+  }
+}
+
+export class PlaneGeometry extends BufferGeometry {
+  //1.- Mimic plane tessellation so terrain displacement logic has mutable vertices.
+  constructor(
+    public width: number,
+    public height: number,
+    public widthSegments: number,
+    public heightSegments: number,
+  ) {
+    super()
+    const columns = Math.max(1, widthSegments + 1)
+    const rows = Math.max(1, heightSegments + 1)
+    const vertexCount = columns * rows
+    const array = new Float32Array(vertexCount * 3)
+    this.setAttribute('position', new BufferAttribute(array, 3))
+  }
+
+  rotateX(): this {
+    return this
+  }
+}
+
+export class IcosahedronGeometry extends BufferGeometry {
+  //1.- Provide a simple vertex cloud representing the polyhedron surface.
+  constructor(public radius: number, public detail: number) {
+    super()
+    const vertexCount = Math.max(12, detail * 24)
+    const array = new Float32Array(vertexCount * 3)
+    this.setAttribute('position', new BufferAttribute(array, 3))
   }
 }
 
@@ -456,3 +545,61 @@ export class TubeGeometry extends BufferGeometry {
     this.setAttribute('position', new BufferAttribute(array, 3))
   }
 }
+
+export class Matrix4 {
+  //1.- Store composed transforms for instanced mesh updates.
+  position = new Vector3()
+  quaternion = new Quaternion()
+  scale = new Vector3(1, 1, 1)
+
+  compose(position: Vector3, quaternion: Quaternion, scale: Vector3): this {
+    this.position = position.clone()
+    this.quaternion = quaternion.clone()
+    this.scale = scale.clone()
+    return this
+  }
+
+  copy(matrix: Matrix4): this {
+    this.position = matrix.position.clone()
+    this.quaternion = matrix.quaternion.clone()
+    this.scale = matrix.scale.clone()
+    return this
+  }
+
+  clone(): Matrix4 {
+    return new Matrix4().copy(this)
+  }
+}
+
+class InstancedMatrix {
+  usage: number | null = null
+  needsUpdate = false
+  matrices: Matrix4[]
+
+  constructor(count: number) {
+    this.matrices = Array.from({ length: count }, () => new Matrix4())
+  }
+
+  setUsage(usage: number): void {
+    this.usage = usage
+  }
+}
+
+export class InstancedMesh extends Mesh {
+  instanceMatrix: InstancedMatrix
+
+  constructor(geometry: unknown, material: unknown, public count: number) {
+    super(geometry, material)
+    this.instanceMatrix = new InstancedMatrix(count)
+  }
+
+  setMatrixAt(index: number, matrix: Matrix4): void {
+    this.instanceMatrix.matrices[index] = matrix.clone()
+  }
+
+  dispose(): void {}
+}
+
+export const DynamicDrawUsage = 0x88e8
+
+export const BackSide = 1
