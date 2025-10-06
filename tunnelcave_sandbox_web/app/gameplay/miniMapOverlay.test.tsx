@@ -24,4 +24,17 @@ describe('MiniMapOverlay', () => {
     expect(legend.textContent).toContain('Wing One')
     expect(legend.textContent).toContain('Wing Two')
   })
+
+  it('renders a spherical backdrop with a gradient clip mask', () => {
+    const { container } = render(<MiniMapOverlay fieldSize={200} peers={[]} player={{ x: 0, z: 0 }} />)
+    const background = container.querySelector('circle.hud-minimap__background')
+    expect(background).not.toBeNull()
+    expect(background?.getAttribute('fill')).toBe('url(#hud-minimap-planet-gradient)')
+    const gradient = container.querySelector('radialGradient#hud-minimap-planet-gradient')
+    expect(gradient).not.toBeNull()
+    const clipPath = container.querySelector('clipPath#hud-minimap-planet-clip')
+    expect(clipPath).not.toBeNull()
+    const entityGroup = container.querySelector('g[data-testid="minimap-entities"]')
+    expect(entityGroup?.getAttribute('clip-path')).toBe('url(#hud-minimap-planet-clip)')
+  })
 })
