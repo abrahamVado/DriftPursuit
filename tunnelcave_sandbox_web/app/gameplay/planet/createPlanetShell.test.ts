@@ -15,8 +15,10 @@ describe('createPlanetShell', () => {
     }
     class StubMeshStandardMaterial {
       side: unknown
-      constructor(options: { side: unknown }) {
+      map?: unknown
+      constructor(options: { side: unknown; map?: unknown }) {
         this.side = options.side
+        this.map = options.map
       }
       dispose = materialDispose
     }
@@ -27,14 +29,41 @@ describe('createPlanetShell', () => {
     class StubColor {
       constructor(public value: unknown) {}
     }
+    const textureDispose = vi.fn()
+    const repeatSet = vi.fn()
+    class StubDataTexture {
+      wrapS: unknown
+      wrapT: unknown
+      colorSpace: unknown
+      format: unknown
+      anisotropy = 0
+      repeat = { set: repeatSet }
+      generateMipmaps = false
+      minFilter: unknown
+      magFilter: unknown
+      needsUpdate = false
+      constructor(public data: Uint8Array, public width: number, public height: number, format: unknown) {
+        this.format = format
+      }
+      dispose = textureDispose
+    }
     const stub = {
       SphereGeometry: StubSphereGeometry,
       MeshStandardMaterial: StubMeshStandardMaterial,
       Mesh: StubMesh,
       Color: StubColor,
       BackSide: 'back-face',
+      DataTexture: StubDataTexture,
+      RepeatWrapping: 'repeat-wrap',
+      RGBAFormat: 'rgba-format',
+      SRGBColorSpace: 'srgb-space',
+      LinearFilter: 'linear-filter',
+      LinearMipMapLinearFilter: 'linear-mipmap-linear',
     }
     vi.doMock('three', () => stub)
+    vi.doMock('./rockyPlanetTexture', () => ({
+      generateRockyPlanetTexture: () => ({ size: 2, data: new Uint8Array(16) }),
+    }))
     const { createPlanetShell } = await import('./createPlanetShell')
     const { mesh, dispose } = createPlanetShell({
       radius: 180,
@@ -45,10 +74,23 @@ describe('createPlanetShell', () => {
     //1.- Ensure the geometry uses the spherical primitive requested for the planetary enclosure.
     expect((mesh.geometry as StubSphereGeometry).parameters.radius).toBe(180)
     //2.- Confirm the material renders the interior faces to keep the shell from hiding gameplay elements.
-    expect((mesh.material as StubMeshStandardMaterial).side).toBe('back-face')
+    const material = mesh.material as StubMeshStandardMaterial
+    expect(material.side).toBe('back-face')
+    const map = material.map as StubDataTexture
+    expect(map).toBeInstanceOf(StubDataTexture)
+    expect(map.wrapS).toBe('repeat-wrap')
+    expect(map.wrapT).toBe('repeat-wrap')
+    expect(map.colorSpace).toBe('srgb-space')
+    //3.- Ensure the rocky albedo uses mipmapped linear filtering and repeats around the sphere for detail clarity.
+    expect(map.generateMipmaps).toBe(true)
+    expect(map.minFilter).toBe('linear-mipmap-linear')
+    expect(map.magFilter).toBe('linear-filter')
+    expect(repeatSet).toHaveBeenCalledWith(3, 1.5)
+    //4.- Confirm the factory provides a disposal hook that clears underlying WebGL resources.
     dispose()
     expect(geometryDispose).toHaveBeenCalled()
     expect(materialDispose).toHaveBeenCalled()
+    expect(textureDispose).toHaveBeenCalled()
   })
 })
 
