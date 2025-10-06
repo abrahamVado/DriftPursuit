@@ -16,6 +16,7 @@ export interface VehicleCollisionEnvironment {
   waterMinDepth: number
   maxWaterSpeedScale: number
   wrapSize?: number
+  allowTerrainPenetration?: boolean
 }
 
 export interface VehicleControllerOptions {
@@ -36,6 +37,7 @@ export interface VehicleControllerOptions {
   verticalDrag?: number
   gravity?: number
   maxVerticalSpeed?: number
+  ascendBoostMultiplier?: number
   environment?: Partial<VehicleCollisionEnvironment>
 }
 
@@ -94,6 +96,7 @@ export function createVehicleController(options: VehicleControllerOptions = {}):
   const verticalDrag = options.verticalDrag ?? 2.2
   const gravity = options.gravity ?? 18
   const maxVerticalSpeed = options.maxVerticalSpeed ?? 42
+  const ascendBoostMultiplier = options.ascendBoostMultiplier ?? 1
 
   const defaultEnvironment: VehicleCollisionEnvironment = {
     sampleGround: () => ({ height: groundY, normal: new THREE.Vector3(0, 1, 0), slopeRadians: 0 }),
@@ -109,6 +112,7 @@ export function createVehicleController(options: VehicleControllerOptions = {}):
     waterMinDepth: 1.2,
     maxWaterSpeedScale: 0.6,
     wrapSize: undefined,
+    allowTerrainPenetration: false,
   }
 
   const environment: VehicleCollisionEnvironment = {
@@ -225,7 +229,7 @@ export function createVehicleController(options: VehicleControllerOptions = {}):
 
     //4.- Integrate vertical thrust, drag, and gravity while smoothing the vertical cap to prevent snapping.
     if (ascending) {
-      velocity.y += verticalAcceleration * dt
+      velocity.y += verticalAcceleration * ascendBoostMultiplier * dt
     }
     if (descending) {
       velocity.y -= verticalAcceleration * dt
@@ -266,26 +270,28 @@ export function createVehicleController(options: VehicleControllerOptions = {}):
     }
 
     //6.- Resolve ground contact by pushing along the surface normal and eliminating inward velocity.
-    const groundSample = environment.sampleGround(nextPosition.x, nextPosition.z)
-    const groundHeight = groundSample.height + environment.vehicleRadius
-    if (nextPosition.y < groundHeight) {
-      const penetration = groundHeight - nextPosition.y
-      setScaled(penetrationVector, groundSample.normal, penetration)
-      addScaled(nextPosition, penetrationVector, 1)
-      const intoNormal = dot(velocity, groundSample.normal)
-      if (intoNormal < 0) {
-        addScaled(velocity, groundSample.normal, -intoNormal * (1 + environment.bounceDamping))
-      }
-      if (groundSample.slopeRadians > environment.slopeLimitRadians) {
-        velocity.x *= 0.35
-        velocity.z *= 0.35
-      }
-    } else {
-      const snapHeight = groundHeight + environment.groundSnapStrength * dt
-      if (nextPosition.y < snapHeight) {
-        const snapPenetration = snapHeight - nextPosition.y
-        setScaled(penetrationVector, groundSample.normal, snapPenetration * 0.2)
+    if (!environment.allowTerrainPenetration) {
+      const groundSample = environment.sampleGround(nextPosition.x, nextPosition.z)
+      const groundHeight = groundSample.height + environment.vehicleRadius
+      if (nextPosition.y < groundHeight) {
+        const penetration = groundHeight - nextPosition.y
+        setScaled(penetrationVector, groundSample.normal, penetration)
         addScaled(nextPosition, penetrationVector, 1)
+        const intoNormal = dot(velocity, groundSample.normal)
+        if (intoNormal < 0) {
+          addScaled(velocity, groundSample.normal, -intoNormal * (1 + environment.bounceDamping))
+        }
+        if (groundSample.slopeRadians > environment.slopeLimitRadians) {
+          velocity.x *= 0.35
+          velocity.z *= 0.35
+        }
+      } else {
+        const snapHeight = groundHeight + environment.groundSnapStrength * dt
+        if (nextPosition.y < snapHeight) {
+          const snapPenetration = snapHeight - nextPosition.y
+          setScaled(penetrationVector, groundSample.normal, snapPenetration * 0.2)
+          addScaled(nextPosition, penetrationVector, 1)
+        }
       }
     }
 

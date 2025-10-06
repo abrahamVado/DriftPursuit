@@ -179,6 +179,33 @@ describe('createVehicleController', () => {
     controller.dispose()
   })
 
+  it('applies the ascend boost multiplier to vertical acceleration', () => {
+    const baseline = createVehicleController({
+      verticalAcceleration: 30,
+      gravity: 0,
+      dragFactor: 1,
+      deltaClamp: 1,
+    })
+    const boosted = createVehicleController({
+      verticalAcceleration: 30,
+      gravity: 0,
+      dragFactor: 1,
+      deltaClamp: 1,
+      ascendBoostMultiplier: 1.6,
+    })
+    const craftA = new THREE.Object3D()
+    const craftB = new THREE.Object3D()
+    //1.- Apply identical ascend inputs to both controllers for a fixed duration.
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'w' }))
+    baseline.step(0.5, craftA)
+    boosted.step(0.5, craftB)
+    window.dispatchEvent(new KeyboardEvent('keyup', { key: 'w' }))
+    //2.- Confirm the boosted controller reaches a higher altitude due to the multiplier.
+    expect(craftB.position.y).toBeGreaterThan(craftA.position.y)
+    baseline.dispose()
+    boosted.dispose()
+  })
+
   it('prevents tunnelling through ground and ceiling planes', () => {
     const environment = {
       sampleGround: () => ({ height: 0, normal: new THREE.Vector3(0, 1, 0), slopeRadians: 0 }),
@@ -219,6 +246,41 @@ describe('createVehicleController', () => {
     }
     window.dispatchEvent(new KeyboardEvent('keyup', { key: 'r' }))
     expect(craft.position.y).toBeLessThanOrEqual(environment.sampleCeiling(0, 0) - environment.vehicleRadius + 0.01)
+    controller.dispose()
+  })
+
+  it('allows controlled descent into terrain when penetration is enabled', () => {
+    const environment = {
+      sampleGround: () => ({ height: 0, normal: new THREE.Vector3(0, 1, 0), slopeRadians: 0 }),
+      sampleCeiling: () => 40,
+      sampleWater: () => Number.NEGATIVE_INFINITY,
+      vehicleRadius: 1,
+      slopeLimitRadians: Math.PI / 2,
+      bounceDamping: 0,
+      groundSnapStrength: 0,
+      boundsRadius: 200,
+      waterDrag: 0,
+      waterBuoyancy: 0,
+      waterMinDepth: 0,
+      maxWaterSpeedScale: 1,
+      allowTerrainPenetration: true,
+    }
+    const controller = createVehicleController({
+      verticalAcceleration: 20,
+      gravity: 0,
+      dragFactor: 1,
+      deltaClamp: 1,
+      verticalDrag: 0,
+      maxVerticalSpeed: 120,
+      environment,
+    })
+    const craft = new THREE.Object3D()
+    craft.position.set(0, 3, 0)
+    //1.- Dive directly toward the ground while penetration is enabled and confirm we can cross the surface.
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'f' }))
+    controller.step(0.6, craft)
+    window.dispatchEvent(new KeyboardEvent('keyup', { key: 'f' }))
+    expect(craft.position.y).toBeLessThan(0)
     controller.dispose()
   })
 

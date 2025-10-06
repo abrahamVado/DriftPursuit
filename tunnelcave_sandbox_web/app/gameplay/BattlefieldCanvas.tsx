@@ -10,6 +10,9 @@ import { MiniMapOverlay, type MiniMapEntitySnapshot } from './miniMapOverlay'
 import { createNameplateSprite, type NameplateSprite } from './nameplate'
 import { wrapToInterval, wrappedDelta } from './worldWrapping'
 import { createWorldLobby, SHARED_WORLD_ID, type WorldPeerSnapshot } from './worldLobby'
+import { createPlanetShell } from './planet/createPlanetShell'
+import { createOrbField, generateOrbSpecifications } from './planet/lightOrbs'
+import { createRockGeometry } from './rocks/createRockGeometry'
 
 interface TreeRenderState {
   position: THREE.Vector3
@@ -48,37 +51,6 @@ function mulberry32(seed: number) {
     r ^= r + Math.imul(r ^ (r >>> 7), r | 61)
     return ((r ^ (r >>> 14)) >>> 0) / 4294967296
   }
-}
-
-function createRockGeometry(archetypeIndex: number, seed: number, assets: BattlefieldConfig['assets']): THREE.BufferGeometry {
-  //2.- Build base primitives and displace vertices with noise to generate believable rock silhouettes.
-  const archetype = assets.rocks[archetypeIndex]
-  let geometry: THREE.BufferGeometry
-  if (archetype.geometry === 'box') {
-    geometry = new THREE.BoxGeometry(1, 1, 1, 2, 2, 2)
-  } else if (archetype.geometry === 'cylinder') {
-    geometry = new THREE.CylinderGeometry(1, 1, 1, 8, 4)
-  } else {
-    geometry = new THREE.IcosahedronGeometry(1, 1)
-  }
-  geometry = geometry.toNonIndexed()
-  const random = mulberry32(seed)
-  const positions = geometry.getAttribute('position') as THREE.BufferAttribute
-  for (let index = 0; index < positions.count; index += 1) {
-    const nx = random() * 2 - 1
-    const ny = random() * 2 - 1
-    const nz = random() * 2 - 1
-    const displacement = (random() * 0.5 + 0.5) * archetype.noiseAmplitude
-    positions.setXYZ(
-      index,
-      positions.getX(index) + nx * displacement,
-      positions.getY(index) + ny * displacement,
-      positions.getZ(index) + nz * displacement,
-    )
-  }
-  positions.needsUpdate = true
-  geometry.computeVertexNormals()
-  return geometry
 }
 
 function createTreeState(
@@ -213,11 +185,31 @@ export default function BattlefieldCanvas({ config, playerName, vehicleId, sessi
 
     const assets = config.assets
 
-    const ambientLight = new THREE.AmbientLight(0xb0c4de, 0.55)
-    const sunLight = new THREE.DirectionalLight(0xfff2cc, 0.9)
+    const ambientLight = new THREE.AmbientLight(0xb0c4de, 0.65)
+    const sunLight = new THREE.DirectionalLight(0xfff2cc, 1)
     sunLight.position.set(160, 220, 110)
     scene.add(ambientLight)
     scene.add(sunLight)
+
+    const planetShell = createPlanetShell({
+      radius: config.environment.boundsRadius * 1.22,
+      color: 0x0b1d3b,
+      emissive: 0x112b58,
+      opacity: 0.88,
+    })
+    //1.- Mount the glowing interior planet so the battlefield reads as a cohesive planetary cavern.
+    scene.add(planetShell.mesh)
+
+    const orbSpecs = generateOrbSpecifications({
+      seed: config.seed,
+      fieldSize: config.fieldSize,
+      altitudeRange: { min: 8, max: 28 },
+      radiusRange: { min: 1.4, max: 3.6 },
+      count: 10,
+    })
+    const orbField = createOrbField(orbSpecs)
+    //2.- Scatter supportive light orbs to improve visibility across the terrain expanse.
+    scene.add(orbField.group)
 
     const camera = new THREE.PerspectiveCamera(60, (mount.clientWidth || window.innerWidth) / (mount.clientHeight || window.innerHeight), 0.1, 1200)
     camera.position.set(config.spawnPoint.x, config.spawnPoint.y + 22, config.spawnPoint.z + 34)
@@ -396,14 +388,15 @@ export default function BattlefieldCanvas({ config, playerName, vehicleId, sessi
       baseAcceleration: 48,
       brakeDeceleration: 220,
       dragFactor: 0.92,
-      maxForwardSpeed: 150,
+      maxForwardSpeed: 160,
       maxReverseSpeed: 28,
-      boostSpeedMultiplier: 1.4,
-      boostAccelerationMultiplier: 1.2,
-      verticalAcceleration: 22,
-      gravity: 19,
-      verticalDrag: 2.6,
-      maxVerticalSpeed: 36,
+      boostSpeedMultiplier: 1.65,
+      boostAccelerationMultiplier: 1.45,
+      verticalAcceleration: 24,
+      gravity: 18,
+      verticalDrag: 2.4,
+      maxVerticalSpeed: 42,
+      ascendBoostMultiplier: 1.45,
       environment: {
         sampleGround: (x, z) => terrainSampler.sampleGround(x, z),
         sampleCeiling: (x, z) => terrainSampler.sampleCeiling(x, z),
@@ -411,13 +404,14 @@ export default function BattlefieldCanvas({ config, playerName, vehicleId, sessi
         vehicleRadius: config.environment.vehicleRadius,
         slopeLimitRadians: config.environment.slopeLimitRadians,
         bounceDamping: config.environment.bounceDamping,
-        groundSnapStrength: config.environment.groundSnapStrength,
+        groundSnapStrength: 0,
         boundsRadius: config.environment.boundsRadius,
         waterDrag: config.environment.waterDrag,
         waterBuoyancy: config.environment.waterBuoyancy,
         waterMinDepth: config.environment.waterMinDepth,
         maxWaterSpeedScale: config.environment.maxWaterSpeedScale,
         wrapSize,
+        allowTerrainPenetration: true,
       },
     })
 
@@ -640,6 +634,10 @@ export default function BattlefieldCanvas({ config, playerName, vehicleId, sessi
       controller.dispose()
       window.removeEventListener('resize', handleResize)
       renderer.dispose()
+      scene.remove(planetShell.mesh)
+      planetShell.dispose()
+      scene.remove(orbField.group)
+      orbField.dispose()
       groundGeometry.dispose()
       groundMaterial.dispose()
       ceilingGeometry.dispose()
