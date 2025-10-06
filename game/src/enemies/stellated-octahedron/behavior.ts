@@ -2,31 +2,44 @@ import * as THREE from 'three'
 
 function disposeMeshLike(object: THREE.Object3D){
   //1.- Traverse any composed mesh tree and release GPU buffers and materials.
+  const disposedMaterials = new Set<THREE.Material>()
   object.traverse((child) => {
     if (!(child instanceof THREE.Mesh)) return
     child.geometry.dispose()
     const material = child.material
     if (Array.isArray(material)) {
-      for (const mat of material) mat.dispose?.()
-    } else {
+      for (const mat of material){
+        if (!disposedMaterials.has(mat)){
+          mat.dispose?.()
+          disposedMaterials.add(mat)
+        }
+      }
+    } else if (!disposedMaterials.has(material)) {
       material.dispose?.()
+      disposedMaterials.add(material)
     }
   })
 }
 
 function buildStellatedOctahedron(size=6){
-  //1.- Build a pair of tetrahedra whose rotations mirror the stella octangula shape.
-  const geometryPrimary = new THREE.TetrahedronGeometry(size, 0)
-  const geometrySecondary = geometryPrimary.clone()
-  geometrySecondary.rotateX(Math.PI)
-  geometrySecondary.rotateZ(Math.PI/2)
+  //1.- Construct standalone tetrahedra so modern BufferGeometry APIs never rely on the removed Geometry.merge helper.
+  const orientations: Array<(geometry: THREE.TetrahedronGeometry) => void> = [
+    //2.- Keep the first tetrahedron untouched and spin the second to mirror the stellated octahedron silhouette.
+    (_geometry) => {},
+    (geometry) => {
+      geometry.rotateX(Math.PI)
+      geometry.rotateZ(Math.PI / 2)
+    }
+  ]
 
-  //2.- Wrap both geometries into meshes and group them for compound motion without BufferGeometryUtils.
+  //3.- Wrap the oriented geometries in meshes and collect them in a group for shared transforms.
   const material = new THREE.MeshStandardMaterial({ color: 0xff5533, metalness: 0.2, roughness: 0.6, emissive: 0x220000 })
-  const meshPrimary = new THREE.Mesh(geometryPrimary, material)
-  const meshSecondary = new THREE.Mesh(geometrySecondary, material)
   const group = new THREE.Group()
-  group.add(meshPrimary, meshSecondary)
+  for (const orient of orientations){
+    const geometry = new THREE.TetrahedronGeometry(size, 0)
+    orient(geometry)
+    group.add(new THREE.Mesh(geometry, material))
+  }
   return group
 }
 
