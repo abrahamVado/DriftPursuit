@@ -97,4 +97,36 @@ describe("broker client", () => {
     unsubscribe();
     client.close();
   });
+
+  it("queues intents until the socket opens", () => {
+    const client = createBrokerClient({ clientId: "queued-pilot", reconnectDelayMs: 0 });
+    const socket = MockWebSocket.instances[0];
+    if (!socket) {
+      throw new Error("expected websocket to be constructed");
+    }
+
+    //4.- Capture the intent payload produced prior to the websocket transitioning to OPEN.
+    client.sendIntent({
+      throttle: 1,
+      brake: 0,
+      steer: 0.2,
+      handbrake: false,
+      gear: 3,
+      boost: false,
+    });
+    expect(socket.sent).toHaveLength(0);
+
+    socket.simulateOpen();
+    expect(socket.sent.length).toBeGreaterThan(0);
+    const payload = JSON.parse(socket.sent.at(-1) ?? "{}");
+    expect(payload).toMatchObject({
+      type: "intent",
+      controller_id: "queued-pilot",
+      sequence_id: 1,
+      throttle: 1,
+      steer: 0.2,
+    });
+
+    client.close();
+  });
 });
