@@ -2,7 +2,12 @@ import { describe, expect, it } from 'vitest'
 import { generateCubedSphereMesh } from './cubedSphereMesh'
 import type { RadialDisplacementField } from './noiseDisplacement'
 import type { PlanetConfiguration } from './planetSpecLoader'
-import { clampVehicleAltitude, sampleGroundDistance } from './radialSdfCollision'
+import {
+  advanceSurfaceVehicle,
+  clampVehicleAltitude,
+  sampleGroundDistance,
+  type SurfaceVehicleState,
+} from './radialSdfCollision'
 import { classifySurfaceBySeaLevel } from './seaLevelMask'
 
 function createCollisionFixture(): {
@@ -10,6 +15,7 @@ function createCollisionFixture(): {
   field: RadialDisplacementField
   configuration: PlanetConfiguration
   classificationReturn: ReturnType<typeof classifySurfaceBySeaLevel>
+  baseRadius: number
 } {
   //1.- Start from a unit cube sphere and inflate vertices to a uniform planetary radius.
   const mesh = generateCubedSphereMesh(2)
@@ -44,7 +50,48 @@ function createCollisionFixture(): {
     atmosphereHeight: 40,
   }
   const classificationReturn = classifySurfaceBySeaLevel(field, configuration)
-  return { mesh, field, configuration, classificationReturn }
+  return { mesh, field, configuration, classificationReturn, baseRadius }
+}
+
+function vectorLength3(vector: { readonly x: number; readonly y: number; readonly z: number }): number {
+  //1.- Provide a compact norm helper so the tests stay focused on behavioural assertions.
+  return Math.hypot(vector.x, vector.y, vector.z)
+}
+
+function normalise(vector: { readonly x: number; readonly y: number; readonly z: number }) {
+  //1.- Normalise direction vectors for initial state setup and final assertions.
+  const length = vectorLength3(vector)
+  if (length === 0) {
+    return { x: 0, y: 0, z: 0 }
+  }
+  return { x: vector.x / length, y: vector.y / length, z: vector.z / length }
+}
+
+function scaleVector(vector: { readonly x: number; readonly y: number; readonly z: number }, scale: number) {
+  //1.- Multiply a vector by a scalar so waypoint construction stays declarative.
+  return { x: vector.x * scale, y: vector.y * scale, z: vector.z * scale }
+}
+
+function cross(a: { readonly x: number; readonly y: number; readonly z: number }, b: {
+  readonly x: number
+  readonly y: number
+  readonly z: number
+}) {
+  //1.- Cross product helper used to derive tangent directions for the traversal loop.
+  return {
+    x: a.y * b.z - a.z * b.y,
+    y: a.z * b.x - a.x * b.z,
+    z: a.x * b.y - a.y * b.x,
+  }
+}
+
+function dot(a: { readonly x: number; readonly y: number; readonly z: number }, b: {
+  readonly x: number
+  readonly y: number
+  readonly z: number
+}): number {
+  //1.- Compute vector agreement to ensure tangential velocity remains orthogonal to the surface normal.
+  return a.x * b.x + a.y * b.y + a.z * b.z
 }
 
 describe('sampleGroundDistance', () => {
@@ -84,6 +131,72 @@ describe('clampVehicleAltitude', () => {
     expect(result.distance).toBeCloseTo(40, 6)
     expect(result.gradient.x).toBeCloseTo(0, 6)
     expect(result.gradient.z).toBeGreaterThan(0)
+  })
+})
+
+describe('advanceSurfaceVehicle', () => {
+  it('projects motion along great-circle tangents while preserving clearance', () => {
+    //1.- Set up a surface vehicle with tangential velocity on the equatorial band.
+    const { mesh, field, classificationReturn, configuration, baseRadius } = createCollisionFixture()
+    const startDirection = normalise({ x: 0.85, y: 0.2, z: 0.1 })
+    const startRadius = baseRadius + configuration.surfaceClearance
+    const spinAxis = normalise({ x: 0.0, y: 1.0, z: 0.25 })
+    let tangent = cross(spinAxis, startDirection)
+    if (vectorLength3(tangent) === 0) {
+      tangent = cross({ x: 0.3, y: 0.0, z: 1.0 }, startDirection)
+    }
+    const tangentDirection = normalise(tangent)
+    let state: SurfaceVehicleState = {
+      position: scaleVector(startDirection, startRadius),
+      velocity: scaleVector(tangentDirection, 90),
+    }
+    const steps = 180
+    const dt = 0.05
+    for (let index = 0; index < steps; index += 1) {
+      const result = advanceSurfaceVehicle(state, {
+        dt,
+        mesh,
+        field,
+        classification: classificationReturn,
+        configuration,
+        radius: 0,
+      })
+      //2.- Verify the vehicle remains glued to the spherical shell and travels along tangents.
+      const radiusDelta = Math.abs(vectorLength3(result.state.position) - startRadius)
+      expect(radiusDelta).toBeLessThan(0.35)
+      expect(Math.abs(dot(result.state.velocity, result.normal))).toBeLessThan(1e-3)
+      const clearanceDelta = Math.abs(result.clearance - configuration.surfaceClearance)
+      expect(clearanceDelta).toBeLessThan(0.35)
+      state = result.state
+    }
+    //3.- Confirm the traversal wraps around the sphere instead of remaining in a flat plane.
+    const finalDirection = normalise(state.position)
+    expect(Math.abs(finalDirection.z)).toBeGreaterThan(0.05)
+  })
+
+  it('honours requested clearance overrides beyond the baseline configuration', () => {
+    //1.- Increase the clearance requirement and ensure the clamp respects the larger hull footprint.
+    const { mesh, field, classificationReturn, configuration, baseRadius } = createCollisionFixture()
+    const direction = normalise({ x: -0.4, y: 0.5, z: 0.75 })
+    const radius = 2
+    const extraClearance = 4
+    const requested = Math.max(configuration.surfaceClearance, radius + extraClearance)
+    let state: SurfaceVehicleState = {
+      position: scaleVector(direction, baseRadius + requested),
+      velocity: { x: 0, y: 0, z: 0 },
+    }
+    const result = advanceSurfaceVehicle(state, {
+      dt: 0.016,
+      mesh,
+      field,
+      classification: classificationReturn,
+      configuration,
+      radius,
+      clearance: extraClearance,
+    })
+    //2.- Validate the centre radius reflects the override and reports the residual hull clearance.
+    expect(vectorLength3(result.state.position)).toBeCloseTo(baseRadius + requested, 6)
+    expect(result.clearance).toBeCloseTo(requested - radius, 6)
   })
 })
 
