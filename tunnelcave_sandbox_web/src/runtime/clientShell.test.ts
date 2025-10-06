@@ -97,4 +97,22 @@ describe('clientShell', () => {
     expect(hudConstructor).not.toHaveBeenCalled()
     expect(sandboxSession).not.toHaveBeenCalled()
   })
+
+  it('forwards broker subject overrides to the sandbox session', async () => {
+    document.body.innerHTML = [
+      '<div id="canvas-root"></div>',
+      '<div id="hud-root"></div>',
+    ].join('')
+    Object.defineProperty(document, 'readyState', { configurable: true, value: 'complete' })
+    const module = await import('./clientShell')
+    const mounted = await module.mountClientShell({
+      brokerUrl: 'ws://localhost:43127/ws',
+      brokerSubject: 'squad-delta',
+    })
+    expect(mounted).toBe('active')
+    expect(sandboxSession).toHaveBeenCalledTimes(1)
+    const options = sandboxSession.mock.calls[0]?.[0]
+    expect(options?.brokerSubject).toBe('squad-delta')
+    module.unmountClientShell()
+  })
 })

@@ -25,6 +25,8 @@ export interface ClientShellOptions {
   document?: Document
   //2.- Broker endpoint enables future networking setup without hardcoding environment globals.
   brokerUrl?: string
+  //3.- Optional broker subject override so callers can target a specific shared world.
+  brokerSubject?: string
   //3.- Asynchronous world session factory invoked once DOM anchors are ready.
   createWorldSession?: () => Promise<HudSession>
   //4.- Lobby provided pilot and vehicle selections used when establishing sandbox sessions.
@@ -126,6 +128,7 @@ async function instantiateControllers(
       createSandboxHudSession({
         canvas: renderer.getCanvas(),
         brokerUrl: options.brokerUrl,
+        brokerSubject: options.brokerSubject,
         pilotName: options.playerProfile?.pilotName,
         vehicleId: options.playerProfile?.vehicleId,
       }))

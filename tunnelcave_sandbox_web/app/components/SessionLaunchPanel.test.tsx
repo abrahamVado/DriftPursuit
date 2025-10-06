@@ -25,29 +25,35 @@ describe('SessionLaunchPanel', () => {
 
   it('propagates pilot and vehicle changes then triggers the start callback', () => {
     const onPlayerNameChange = vi.fn()
+    const onSessionCodeChange = vi.fn()
     const onVehicleIdChange = vi.fn()
     const onStart = vi.fn()
 
     render(
       <SessionLaunchPanel
         playerName=""
+        sessionCode="shared"
         vehicleId="arrowhead"
         onPlayerNameChange={onPlayerNameChange}
+        onSessionCodeChange={onSessionCodeChange}
         onVehicleIdChange={onVehicleIdChange}
         onStart={onStart}
         shareUrl="http://localhost:3000/?vehicle=arrowhead"
-      />,
+      />, 
     )
 
     const nameInput = screen.getByTestId('pilot-name-input') as HTMLInputElement
+    const sessionInput = screen.getByTestId('session-code-input') as HTMLInputElement
     const vehicleSelect = screen.getByTestId('vehicle-select') as HTMLSelectElement
     const startButton = screen.getByTestId('start-session-button') as HTMLButtonElement
 
     fireEvent.change(nameInput, { target: { value: 'Nova Seeker' } })
+    fireEvent.change(sessionInput, { target: { value: 'squad-alpha' } })
     fireEvent.change(vehicleSelect, { target: { value: 'aurora' } })
     fireEvent.click(startButton)
 
     expect(onPlayerNameChange).toHaveBeenCalledWith('Nova Seeker')
+    expect(onSessionCodeChange).toHaveBeenCalledWith('squad-alpha')
     expect(onVehicleIdChange).toHaveBeenCalledWith('aurora')
     expect(onStart).toHaveBeenCalledTimes(1)
   })
@@ -59,12 +65,14 @@ describe('SessionLaunchPanel', () => {
     render(
       <SessionLaunchPanel
         playerName="Nova"
+        sessionCode="squad"
         vehicleId="aurora"
         onPlayerNameChange={() => {}}
+        onSessionCodeChange={() => {}}
         onVehicleIdChange={() => {}}
         onStart={() => {}}
         shareUrl="http://localhost:3000/?pilot=Nova&vehicle=aurora"
-      />,
+      />, 
     )
 
     const copyButton = screen.getByTestId('copy-share-url') as HTMLButtonElement
@@ -82,11 +90,13 @@ describe('SessionLaunchPanel', () => {
     render(
       <SessionLaunchPanel
         playerName=""
+        sessionCode="shared"
         vehicleId="arrowhead"
         onPlayerNameChange={() => {}}
+        onSessionCodeChange={() => {}}
         onVehicleIdChange={() => {}}
         onStart={() => {}}
-      />,
+      />, 
     )
 
     const copyButton = screen.getByTestId('copy-share-url') as HTMLButtonElement

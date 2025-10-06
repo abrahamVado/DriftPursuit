@@ -7,6 +7,7 @@ import SessionLaunchPanel from './SessionLaunchPanel'
 import type { VehiclePresetName } from '../../src/world/procedural/vehicles'
 
 const DEFAULT_STATUS = 'Loading web client shell…'
+const DEFAULT_SESSION_CODE = 'shared-sandbox'
 const AVAILABLE_VEHICLES: VehiclePresetName[] = ['arrowhead', 'aurora', 'duskfall', 'steelwing']
 
 export default function ClientBootstrap() {
@@ -16,10 +17,13 @@ export default function ClientBootstrap() {
   const [status, setStatus] = useState(DEFAULT_STATUS)
   //3.- Track the committed pilot handle so the runtime can negotiate a personalised broker subject.
   const [playerName, setPlayerName] = useState('')
+  //4.- Track the shared session code so friends can intentionally join the same world.
+  const [sessionCode, setSessionCode] = useState(DEFAULT_SESSION_CODE)
   //4.- Track the committed vehicle preset to showcase the correct craft in the idle renderer.
   const [vehicleId, setVehicleId] = useState<VehiclePresetName>('arrowhead')
   //5.- Maintain draft lobby state so visitors can stage selections before reconfiguring the runtime.
   const [playerNameDraft, setPlayerNameDraft] = useState('')
+  const [sessionCodeDraft, setSessionCodeDraft] = useState(DEFAULT_SESSION_CODE)
   const [vehicleIdDraft, setVehicleIdDraft] = useState<VehiclePresetName>('arrowhead')
 
   const hydrateFromLocation = useCallback(() => {
@@ -29,11 +33,16 @@ export default function ClientBootstrap() {
     }
     const url = new URL(window.location.href)
     const pilotParam = url.searchParams.get('pilot')?.trim() ?? ''
+    const sessionParam = url.searchParams.get('session')?.trim() ?? ''
     const vehicleParam = (url.searchParams.get('vehicle') ?? '').trim().toLowerCase() as VehiclePresetName
     const resolvedVehicle = vehicleParam && AVAILABLE_VEHICLES.includes(vehicleParam) ? vehicleParam : undefined
     if (pilotParam) {
       setPlayerName(pilotParam)
       setPlayerNameDraft(pilotParam)
+    }
+    if (sessionParam) {
+      setSessionCode(sessionParam)
+      setSessionCodeDraft(sessionParam)
     }
     if (resolvedVehicle) {
       setVehicleId(resolvedVehicle)
@@ -47,7 +56,7 @@ export default function ClientBootstrap() {
   }, [hydrateFromLocation])
 
   const updateUrlWithLobby = useCallback(
-    (name: string, vehicle: VehiclePresetName) => {
+    (name: string, vehicle: VehiclePresetName, session: string) => {
       //1.- Synchronise the query string with the current lobby selections for sharing purposes.
       if (typeof window === 'undefined') {
         return
@@ -58,6 +67,12 @@ export default function ClientBootstrap() {
       url.searchParams.set('pilot', trimmed)
     } else {
       url.searchParams.delete('pilot')
+    }
+    const sessionTrimmed = session.trim()
+    if (sessionTrimmed) {
+      url.searchParams.set('session', sessionTrimmed)
+    } else {
+      url.searchParams.delete('session')
     }
     url.searchParams.set('vehicle', vehicle)
     try {
@@ -84,9 +99,15 @@ export default function ClientBootstrap() {
     } else {
       url.searchParams.delete('pilot')
     }
+    const sessionTrimmed = sessionCodeDraft.trim()
+    if (sessionTrimmed) {
+      url.searchParams.set('session', sessionTrimmed)
+    } else {
+      url.searchParams.delete('session')
+    }
     url.searchParams.set('vehicle', vehicleIdDraft)
     return url.toString()
-  }, [playerNameDraft, vehicleIdDraft])
+  }, [playerNameDraft, sessionCodeDraft, vehicleIdDraft])
 
   useEffect(() => {
     //1.- Explain how to configure the broker when the environment variable is absent.
@@ -100,7 +121,8 @@ export default function ClientBootstrap() {
     }
     //2.- Confirm to the player that the client is ready to negotiate a session.
     const subject = playerName.trim() || 'sandbox-player'
-    setStatus(`Client ready. Broker endpoint: ${brokerUrl}. Pilot: ${subject}. Vehicle: ${vehicleId}`)
+    const session = sessionCode.trim() || DEFAULT_SESSION_CODE
+    setStatus(`Client ready. Broker endpoint: ${brokerUrl}. Pilot: ${subject}. Session: ${session}. Vehicle: ${vehicleId}`)
 
     let cancelled = false
     let runtimeModule: typeof import('../../src/runtime/clientShell') | null = null
@@ -114,6 +136,7 @@ export default function ClientBootstrap() {
         }
         const result = await runtimeModule.mountClientShell({
           brokerUrl,
+          brokerSubject: sessionCode,
           playerProfile: { pilotName: playerName, vehicleId },
         })
         if (!cancelled && result === 'passive') {
@@ -143,9 +166,10 @@ export default function ClientBootstrap() {
   const handleStart = useCallback(() => {
     //1.- Commit the draft selections to the runtime and persist them to the URL for sharing.
     setPlayerName(playerNameDraft)
+    setSessionCode(sessionCodeDraft)
     setVehicleId(vehicleIdDraft)
-    updateUrlWithLobby(playerNameDraft, vehicleIdDraft)
-  }, [playerNameDraft, updateUrlWithLobby, vehicleIdDraft])
+    updateUrlWithLobby(playerNameDraft, vehicleIdDraft, sessionCodeDraft)
+  }, [playerNameDraft, sessionCodeDraft, updateUrlWithLobby, vehicleIdDraft])
 
   //3.- Present the bootstrap instructions alongside DOM anchors for future systems.
   return (
@@ -167,8 +191,10 @@ export default function ClientBootstrap() {
       </section>
       <SessionLaunchPanel
         playerName={playerNameDraft}
+        sessionCode={sessionCodeDraft}
         vehicleId={vehicleIdDraft}
         onPlayerNameChange={setPlayerNameDraft}
+        onSessionCodeChange={setSessionCodeDraft}
         onVehicleIdChange={(value) => setVehicleIdDraft(value)}
         onStart={handleStart}
         shareUrl={shareUrl}

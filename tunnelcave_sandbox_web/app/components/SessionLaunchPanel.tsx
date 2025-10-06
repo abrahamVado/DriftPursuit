@@ -7,10 +7,14 @@ import type { VehiclePresetName } from '../../src/world/procedural/vehicles'
 interface SessionLaunchPanelProps {
   //1.- Current pilot handle supplied by the hosting bootstrap component.
   playerName: string
+  //2.- Identifier for the shared broker subject that groups pilots into the same world.
+  sessionCode: string
   //2.- Currently selected vehicle preset identifier.
   vehicleId: VehiclePresetName
   //3.- Callback invoked when the pilot updates their chosen handle.
   onPlayerNameChange: (name: string) => void
+  //4.- Callback invoked when the squad/session code changes.
+  onSessionCodeChange: (code: string) => void
   //4.- Callback invoked when the pilot selects a different vehicle preset.
   onVehicleIdChange: (vehicle: VehiclePresetName) => void
   //5.- Callback fired when the pilot confirms they are ready to enter the session.
@@ -29,8 +33,10 @@ const VEHICLE_LABELS: Record<VehiclePresetName, string> = {
 
 export default function SessionLaunchPanel({
   playerName,
+  sessionCode,
   vehicleId,
   onPlayerNameChange,
+  onSessionCodeChange,
   onVehicleIdChange,
   onStart,
   shareUrl,
@@ -101,6 +107,18 @@ export default function SessionLaunchPanel({
             onChange={(event) => onPlayerNameChange(event.target.value)}
             placeholder="e.g. Aurora Rider"
             data-testid="pilot-name-input"
+          />
+        </div>
+        <div>
+          <label htmlFor="session-code">Session Code</label>
+          <input
+            id="session-code"
+            name="session"
+            type="text"
+            value={sessionCode}
+            onChange={(event) => onSessionCodeChange(event.target.value)}
+            placeholder="e.g. squad-alpha"
+            data-testid="session-code-input"
           />
         </div>
         <div>
