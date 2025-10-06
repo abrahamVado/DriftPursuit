@@ -4,7 +4,7 @@ set -euo pipefail
 # //1.- Discover the repository root so the script works from any invocation directory.
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
-TARGET_FILE="${REPO_ROOT}/tunnelcave_sandbox_web/.env.local"
+TARGET_FILE="${REPO_ROOT}/planet_sandbox_web/.env.local"
 BACKUP_FILE="${TARGET_FILE}.bak"
 
 # //2.- Detect if the caller requested an overwrite via the --force flag.
@@ -14,8 +14,8 @@ if [[ "${1:-}" == "--force" ]]; then
 fi
 
 # //3.- Ensure the Next.js workspace exists before attempting to scaffold.
-if [[ ! -d "${REPO_ROOT}/tunnelcave_sandbox_web" ]]; then
-  echo "error: tunnelcave_sandbox_web workspace not found" >&2
+if [[ ! -d "${REPO_ROOT}/planet_sandbox_web" ]]; then
+  echo "error: planet_sandbox_web workspace not found" >&2
   exit 1
 fi
 
@@ -37,13 +37,10 @@ cat > "${TARGET_FILE}" <<'ENV_TEMPLATE'
 # Update these values to point at your own services when not running locally.
 
 # Websocket endpoint served by the broker (default docker-compose port 43127).
-NEXT_PUBLIC_BROKER_URL=ws://localhost:43127/ws
+VITE_BROKER_URL=ws://localhost:43127/ws
 
-# Server-side origin for the simulation bridge API proxy (default local bridge port 8000).
-SIM_BRIDGE_URL=http://localhost:8000
-
-# HTTP origin for the simulation bridge API (default local bridge port 8000).
-NEXT_PUBLIC_SIM_BRIDGE_URL=http://localhost:8000
+# Direct HTTP origin for the simulation bridge API (default local bridge port 8000).
+VITE_SIM_BRIDGE_URL=http://localhost:8000
 ENV_TEMPLATE
 
 chmod 600 "${TARGET_FILE}"

@@ -1,14 +1,14 @@
 import { BinaryWriter } from "@bufbuild/protobuf/wire";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-vi.mock("../../../tunnelcave_sandbox_web/src/networking/authenticatedSocket", () => {
+vi.mock("../../../planet_sandbox_web/src/networking/authenticatedSocket", () => {
   //1.- Replace the dial helper so tests can intercept outbound websocket connections.
   return {
     openAuthenticatedSocket: vi.fn(),
   };
 });
 
-import { openAuthenticatedSocket } from "../../../tunnelcave_sandbox_web/src/networking/authenticatedSocket";
+import { openAuthenticatedSocket } from "../../../planet_sandbox_web/src/networking/authenticatedSocket";
 import type { Orientation, Vector3 } from "../generated/types";
 import { createWorldSession, type EntityTransform } from "./worldSession";
 

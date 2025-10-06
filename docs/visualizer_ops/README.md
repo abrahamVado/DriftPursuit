@@ -52,44 +52,30 @@ section in order to ensure the three services share credentials and network bind
    Expect a JSON payload similar to `{ "status": "ok", "message": "Simulation bridge online" }` as defined in
    `python-sim/web_bridge/server.py`.
 
-## 3. Configure and run the Next.js visualizer client
-1. Install dependencies with pnpm:
+## 3. Configure and run the Vite visualizer client
+1. Install dependencies:
    ```bash
-   cd tunnelcave_sandbox_web
-   corepack enable pnpm
-   pnpm install
+   cd planet_sandbox_web
+   npm install
    ```
 2. Scaffold `.env.local` with broker endpoints:
    ```bash
    ../scripts/setup-env.sh --force
    ```
-   The generated file defines `NEXT_PUBLIC_BROKER_URL=ws://localhost:43127/ws`,
-   `SIM_BRIDGE_URL=http://localhost:8000`, and
-   `NEXT_PUBLIC_SIM_BRIDGE_URL=http://localhost:8000` so both the proxy and the browser can reach the bridge.
+   The generated file defines `VITE_BROKER_URL=ws://localhost:43127/ws` and
+   `VITE_SIM_BRIDGE_URL=http://localhost:8000` so the browser can reach both services.
 3. Launch the development server:
    ```bash
-   pnpm dev
+   npm run dev
    ```
-4. Open `http://localhost:3000` in a browser. The client bootstrap (`app/components/ClientBootstrap.tsx`) will surface an
-   inline warning if either environment variable is missing.
+4. Open `http://localhost:3000` in a browser. The bridge panel surfaces handshake status and highlights missing configuration.
 
-## 4. Optional smoke-test screenshot
-Once the UI is reachable, the Playwright script at `tunnelcave_sandbox_web/test/smoke/visual-smoke.spec.ts` can capture a
-baseline screenshot for visual regression tracking:
-```bash
-cd tunnelcave_sandbox_web
-npx playwright install --with-deps
-pnpm exec playwright test test/smoke/visual-smoke.spec.ts
-```
-Set `VISUALIZER_BASE_URL` and `VISUALIZER_SMOKE_OUTPUT` to override the navigation target or screenshot path if needed.
-
-## 5. Test expectations before merge
+## 4. Test expectations before merge
 All automated suites must be green prior to merging changes:
 - Run the Go unit suite: `cd go-broker && go test ./...`.
 - Execute the Python bridge tests: `cd python-sim && pytest`.
-- From `tunnelcave_sandbox_web`, ensure `pnpm test` passes so the networking mocks, procedural geometry, and UI interaction
+- From `planet_sandbox_web`, ensure `npm test` passes so the networking mocks, procedural geometry, and UI interaction
   Vitest suites stay healthy.
-- If the Playwright smoke test is updated, run `pnpm exec playwright test` as part of the review checklist.
 
 Document successful runs (timestamps and commit hash) in your pull request description when promoting changes to the main
 branch.

@@ -6,7 +6,7 @@ export default defineConfig({
   resolve: {
     alias: {
       //1.- Mirror the sandbox alias so networking tests can import the browser client without bundler context.
-      "@web": path.resolve(__dirname, "../tunnelcave_sandbox_web/src"),
+      "@web": path.resolve(__dirname, "../planet_sandbox_web/src"),
       //2.- Point the shared client alias back at this package for cross-package imports.
       "@client": path.resolve(__dirname, "src"),
     },

@@ -11,8 +11,13 @@
     "strict": true,
     "forceConsistentCasingInFileNames": true,
     "jsx": "react-jsx",
-    "types": ["vitest", "@testing-library/jest-dom"]
+    "types": ["vitest", "@testing-library/jest-dom"],
+    "baseUrl": ".",
+    "paths": {
+      "@client/*": ["../typescript-client/src/*"],
+      "@web/*": ["src/*"]
+    }
   },
-  "include": ["src", "vite.config.ts"],
+  "include": ["src", "test", "vite.config.ts"],
   "exclude": ["node_modules", "dist"]
 }
