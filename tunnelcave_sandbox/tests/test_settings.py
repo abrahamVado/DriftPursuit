@@ -15,3 +15,5 @@ def test_load_generator_settings_uses_defaults():
     assert settings.clearance.max_radius_m >= settings.clearance.min_radius_m
     assert settings.clearance.sampling_step > 0
     assert settings.clearance.lateral_sample_offsets
+    assert settings.world.geometry in {"flat", "sphere"}
+    assert settings.world.radius_m > 0

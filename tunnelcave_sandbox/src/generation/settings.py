@@ -21,7 +21,14 @@ class RoomSettings:
     room_probability: float
 
 
-# //3.- Encapsulate clearance and radius bounds for generated tubes.
+# //3.- Describe world geometry so downstream systems can project paths.
+@dataclass(frozen=True)
+class WorldSettings:
+    geometry: str
+    radius_m: float
+
+
+# //4.- Encapsulate clearance and radius bounds for generated tubes.
 @dataclass(frozen=True)
 class ClearanceSettings:
     min_clearance_m: float
@@ -32,27 +39,28 @@ class ClearanceSettings:
     lateral_sample_offsets: Sequence[Sequence[float]]
 
 
-# //4.- Aggregate complete generator settings for downstream modules.
+# //5.- Aggregate complete generator settings for downstream modules.
 @dataclass(frozen=True)
 class GeneratorSettings:
     loop: LoopSettings
     rooms: RoomSettings
     clearance: ClearanceSettings
+    world: WorldSettings
 
 
-# //5.- Resolve repository default configuration directory lazily.
+# //6.- Resolve repository default configuration directory lazily.
 def _default_config_directory() -> str:
     base_dir = os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
     return os.path.join(base_dir, "config")
 
 
-# //6.- Load a single JSON configuration file and coerce to dictionary.
+# //7.- Load a single JSON configuration file and coerce to dictionary.
 def _read_json_config(path: str) -> dict:
     with open(path, "r", encoding="utf-8") as handle:
         return json.load(handle)
 
 
-# //7.- Construct loop settings from on-disk JSON configuration.
+# //8.- Construct loop settings from on-disk JSON configuration.
 def _load_loop_settings(config_dir: str) -> LoopSettings:
     payload = _read_json_config(os.path.join(config_dir, "loop.json"))
     return LoopSettings(
@@ -61,7 +69,7 @@ def _load_loop_settings(config_dir: str) -> LoopSettings:
     )
 
 
-# //8.- Build room settings while normalizing diameter to radius units.
+# //9.- Build room settings while normalizing diameter to radius units.
 def _load_room_settings(config_dir: str) -> RoomSettings:
     payload = _read_json_config(os.path.join(config_dir, "rooms.json"))
     diameter = float(payload.get("room_diameter_m", 0.0))
@@ -72,7 +80,7 @@ def _load_room_settings(config_dir: str) -> RoomSettings:
     )
 
 
-# //9.- Interpret clearance configuration including sampling metadata.
+# //10.- Interpret clearance configuration including sampling metadata.
 def _load_clearance_settings(config_dir: str) -> ClearanceSettings:
     payload = _read_json_config(os.path.join(config_dir, "clearance.json"))
     offsets: List[List[float]] = []
@@ -88,10 +96,21 @@ def _load_clearance_settings(config_dir: str) -> ClearanceSettings:
     )
 
 
-# //10.- Public helper assembling full generator settings bundle.
+# //11.- Parse world configuration describing geometry projection mode.
+def _load_world_settings(config_dir: str) -> WorldSettings:
+    payload = _read_json_config(os.path.join(config_dir, "world.json"))
+    geometry = str(payload.get("geometry", "flat")).strip().lower()
+    radius = float(payload.get("radius_m", 1.0))
+    if radius <= 0:
+        raise ValueError("World radius must be positive")
+    return WorldSettings(geometry=geometry, radius_m=radius)
+
+
+# //12.- Public helper assembling full generator settings bundle.
 def load_generator_settings(config_dir: str | None = None) -> GeneratorSettings:
     directory = config_dir or _default_config_directory()
     loop = _load_loop_settings(directory)
     rooms = _load_room_settings(directory)
     clearance = _load_clearance_settings(directory)
-    return GeneratorSettings(loop=loop, rooms=rooms, clearance=clearance)
+    world = _load_world_settings(directory)
+    return GeneratorSettings(loop=loop, rooms=rooms, clearance=clearance, world=world)
