@@ -1,4 +1,5 @@
 import * as THREE from 'three'
+import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js'
 
 function disposeMeshLike(object: THREE.Object3D){
   //1.- Traverse any composed mesh tree and release GPU buffers and materials.
@@ -22,25 +23,20 @@ function disposeMeshLike(object: THREE.Object3D){
 }
 
 function buildStellatedOctahedron(size=6){
-  //1.- Construct standalone tetrahedra so modern BufferGeometry APIs never rely on the removed Geometry.merge helper.
-  const orientations: Array<(geometry: THREE.TetrahedronGeometry) => void> = [
-    //2.- Keep the first tetrahedron untouched and spin the second to mirror the stellated octahedron silhouette.
-    (_geometry) => {},
-    (geometry) => {
-      geometry.rotateX(Math.PI)
-      geometry.rotateZ(Math.PI / 2)
-    }
-  ]
+  //1.- Generate two tetrahedron geometries and mirror one to reproduce the stellated octahedron shell.
+  const primary = new THREE.TetrahedronGeometry(size, 0)
+  const mirrored = primary.clone()
+  mirrored.rotateX(Math.PI)
+  mirrored.rotateZ(Math.PI / 2)
 
-  //3.- Wrap the oriented geometries in meshes and collect them in a group for shared transforms.
-  const material = new THREE.MeshStandardMaterial({ color: 0xff5533, metalness: 0.2, roughness: 0.6, emissive: 0x220000 })
-  const group = new THREE.Group()
-  for (const orient of orientations){
-    const geometry = new THREE.TetrahedronGeometry(size, 0)
-    orient(geometry)
-    group.add(new THREE.Mesh(geometry, material))
-  }
-  return group
+  //2.- Merge both buffer geometries using the supported helper to avoid the removed Geometry.merge API.
+  const merged = mergeGeometries([primary, mirrored], false)
+  if (!merged) throw new Error('Failed to merge stellated octahedron geometry')
+
+  //3.- Dispose the temporary parts and craft the final mesh that callers expect.
+  primary.dispose()
+  mirrored.dispose()
+  return new THREE.Mesh(merged, new THREE.MeshStandardMaterial({ color: 0xff5533, metalness: 0.2, roughness: 0.6, emissive: 0x220000 }))
 }
 
 export function createEnemy(scene: THREE.Scene, position: THREE.Vector3){
