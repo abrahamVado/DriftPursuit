@@ -79,33 +79,67 @@ def _estimate_normal(height_func, x: float, z: float, epsilon: float = 0.5) -> V
 
 # //6.- Terrain sampler orchestrating height, slope, and biome calculations.
 class TerrainSampler:
-    def __init__(self, seed: int) -> None:
+    def __init__(self, seed: int, planet_radius: float = 6000.0) -> None:
+        # //1.- Persist the deterministic seed so every subsystem samples the same planetary surface.
         self._seed = int(seed)
+        # //2.- Remember the spherical planet parameters so callers can reason about curvature.
+        self._planet_radius = float(planet_radius)
+        self._planet_center: Vector3 = (0.0, -self._planet_radius, 0.0)
+        self._planet_radius_sq = self._planet_radius * self._planet_radius
+        # //3.- Prepare layered noise sources that sculpt mountain ranges atop the spherical shell.
         self._height_layers = (
             _GradientNoise(seed * 5 + 1, 0.003, 40.0),
             _GradientNoise(seed * 7 + 2, 0.01, 12.0),
             _GradientNoise(seed * 11 + 3, 0.05, 2.0),
         )
+        # //4.- Additional noise fields control cavern ceilings, inland seas, and biome tags.
         self._ceiling_noise = _GradientNoise(seed * 13 + 4, 0.004, 20.0)
         self._water_noise = _GradientNoise(seed * 17 + 5, 0.002, 6.0)
         self._biome_noise = _GradientNoise(seed * 19 + 6, 0.001, 1.0)
+        # //5.- Cache integer cell samples because flight queries routinely revisit nearby tiles.
         self._cache: Dict[Tuple[int, int], TerrainSample] = {}
 
-    def _base_height(self, x: float, z: float) -> float:
+    @property
+    def planet_radius(self) -> float:
+        # //6.- Expose the configured radius so gameplay systems can anchor orbital maths in tests.
+        return self._planet_radius
+
+    @property
+    def planet_center(self) -> Vector3:
+        # //7.- Publish the planet center allowing callers to build radial vectors for navigation.
+        return self._planet_center
+
+    def _planet_shell_height(self, x: float, z: float) -> float:
+        # //8.- Solve the sphere equation so the base terrain hugs the interior of the planet shell.
+        dx = x - self._planet_center[0]
+        dz = z - self._planet_center[2]
+        distance_sq = dx * dx + dz * dz
+        interior = max(self._planet_radius_sq - min(distance_sq, self._planet_radius_sq), 0.0)
+        return self._planet_center[1] + math.sqrt(interior)
+
+    def _terrain_offset(self, x: float, z: float) -> float:
+        # //9.- Layer fractal noise so the spherical ground receives varied elevations and valleys.
         return _fractal_height(self._height_layers, x, z)
 
+    def _ground_height(self, x: float, z: float) -> float:
+        # //10.- Combine the spherical shell with displacement noise to form the actual surface height.
+        return self._planet_shell_height(x, z) + self._terrain_offset(x, z)
+
     def _water_height(self, x: float, z: float) -> float:
-        return self._water_noise.sample(x, z) - 5.0
+        # //11.- Keep lakes conforming to curvature by offsetting from the shell before adding ripples.
+        return self._planet_shell_height(x, z) + self._water_noise.sample(x, z) - 8.0
 
     def _ceiling_height(self, ground: float, x: float, z: float) -> float:
+        # //12.- Stretch caverns above the ground height so the underground sky respects the surface.
         caverns = max(self._ceiling_noise.sample(x, z) + 30.0, 15.0)
         return ground + caverns
 
     def _sample_uncached(self, x: float, z: float) -> TerrainSample:
-        ground = self._base_height(x, z)
+        # //13.- Produce the authoritative sample with normals aligned to the spherical curvature.
+        ground = self._ground_height(x, z)
         water = self._water_height(x, z)
         ceiling = self._ceiling_height(ground, x, z)
-        normal = _estimate_normal(self._base_height, x, z)
+        normal = _estimate_normal(self._ground_height, x, z)
         slope = math.acos(max(min(vector.dot(normal, (0.0, 1.0, 0.0)), 1.0), -1.0))
         biome = _biome_tag(self._biome_noise, x, z)
         is_water = ground <= water
@@ -120,6 +154,7 @@ class TerrainSampler:
         )
 
     def sample(self, x: float, z: float) -> TerrainSample:
+        # //14.- Cache lookups by integer tile so repeated sampling over the planet remains fast.
         key = (int(math.floor(x)), int(math.floor(z)))
         if key not in self._cache:
             self._cache[key] = self._sample_uncached(x, z)
