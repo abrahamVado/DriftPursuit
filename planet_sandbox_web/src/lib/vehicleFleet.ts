@@ -27,7 +27,21 @@ const sanitizeAltitude = (
   //1.- Clamp the provided altitude into a safe orbital band outside the surface but below the exosphere.
   const minimum = shell.surfaceRadius + surfacePadding;
   const maximum = shell.exosphereRadius;
-  return Math.min(Math.max(altitude, minimum), maximum);
+  let sanitized = Math.min(Math.max(altitude, minimum), maximum);
+  //2.- Guard against callers requesting zero padding by iteratively nudging the craft above the surface radius.
+  if (sanitized <= shell.surfaceRadius) {
+    const iterationStep = Math.max(surfacePadding, 1);
+    let attempts = 0;
+    while (sanitized <= shell.surfaceRadius && attempts < 6) {
+      sanitized = Math.min(sanitized + iterationStep, maximum);
+      attempts += 1;
+    }
+    //3.- Provide a final fallback so numerical precision never leaves the craft embedded in the planet.
+    if (sanitized <= shell.surfaceRadius) {
+      sanitized = Math.min(maximum, shell.surfaceRadius + iterationStep);
+    }
+  }
+  return sanitized;
 };
 
 export class VehicleFleet {

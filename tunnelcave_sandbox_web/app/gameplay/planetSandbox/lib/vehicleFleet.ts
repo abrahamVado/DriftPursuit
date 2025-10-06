@@ -23,7 +23,21 @@ const sanitizeAltitude = (shell: PlanetaryShell, altitude: number, surfacePaddin
   //1.- Clamp the orbital radius between the surface clearance and the exosphere ceiling for safe rendering.
   const minimum = shell.surfaceRadius + surfacePadding
   const maximum = shell.exosphereRadius
-  return Math.min(Math.max(altitude, minimum), maximum)
+  let sanitized = Math.min(Math.max(altitude, minimum), maximum)
+  //2.- Protect zero-clearance callers by iteratively lifting the craft until it sits outside the surface radius.
+  if (sanitized <= shell.surfaceRadius) {
+    const iterationStep = Math.max(surfacePadding, 1)
+    let attempts = 0
+    while (sanitized <= shell.surfaceRadius && attempts < 6) {
+      sanitized = Math.min(sanitized + iterationStep, maximum)
+      attempts += 1
+    }
+    //3.- Provide a deterministic fallback so floating point noise never leaves the ship embedded underground.
+    if (sanitized <= shell.surfaceRadius) {
+      sanitized = Math.min(maximum, shell.surfaceRadius + iterationStep)
+    }
+  }
+  return sanitized
 }
 
 export class VehicleFleet {
