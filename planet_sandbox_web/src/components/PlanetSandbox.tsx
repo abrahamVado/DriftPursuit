@@ -10,6 +10,10 @@ import {
   blueprintToSnapshot,
   enforceSurfaceClearance
 } from '../lib/vehicleFleet';
+import { useWorldEntities } from '../hooks/useWorldEntities';
+import { useSimulationBridgeState } from '../hooks/useSimulationBridgeState';
+import type { EntityTransform } from '@client/networking/worldSession';
+import SimulationBridgePanel from './SimulationBridgePanel';
 
 const orbitalClearance = 80_000;
 
@@ -73,8 +77,24 @@ const initialVehicleTelemetry = vehicleBlueprints.map((blueprint) => {
   return blueprintToSnapshot(blueprint, defaultPlanetaryShell, { surfacePadding: orbitalClearance });
 });
 
+const remoteScale = 0.05;
+
 const PlanetSandbox = () => {
   const containerRef = useRef<HTMLDivElement | null>(null);
+  const remoteEntities = useWorldEntities();
+  const remoteSnapshotRef = useRef<Map<string, EntityTransform>>(new Map());
+  const bridgeState = useSimulationBridgeState();
+  //1.- Track the latest HTTP bridge snapshot so the info panel surfaces Python telemetry.
+  const bridgeVehicles = bridgeState.snapshot?.vehicles ?? [];
+  //2.- Derive the sample age to highlight when the bridge data becomes stale.
+  const bridgeSampleAgeSeconds = bridgeState.snapshot
+    ? Math.max(0, Math.round((Date.now() - bridgeState.snapshot.receivedAtMs) / 1000))
+    : null;
+  //3.- Distinguish between configuration hints and runtime errors for readability.
+  const bridgeHint = bridgeState.status === 'disabled' ? bridgeState.error : undefined;
+  const bridgeError = bridgeState.status === 'error' ? bridgeState.error : undefined;
+  //4.- Humanise the status string so the panel reads naturally.
+  const bridgeStatusLabel = `${bridgeState.status.charAt(0).toUpperCase()}${bridgeState.status.slice(1)}`;
   const [telemetry, setTelemetry] = useState<TelemetrySnapshot>(() => ({
     position: initialPosition,
     laps: 0,
@@ -86,6 +106,11 @@ const PlanetSandbox = () => {
       position: { ...snapshot.position }
     }))
   }));
+
+  useEffect(() => {
+    //1.- Mirror the latest remote snapshot so the renderer can consume it without re-subscribing per frame.
+    remoteSnapshotRef.current = remoteEntities.entities;
+  }, [remoteEntities.entities]);
 
   useEffect(() => {
     if (!containerRef.current) {
@@ -177,10 +202,20 @@ const PlanetSandbox = () => {
       vehicleMeshes.set(blueprint.id, mesh);
     }
 
+    const remoteMeshes = new Map<string, THREE.Mesh>();
+    //8.- Prepare reusable geometry and materials so remote crafts render consistently across frames.
+    const remoteGeometry = new THREE.SphereGeometry(32, 24, 24);
+    const remoteMaterial = new THREE.MeshStandardMaterial({
+      color: '#ffb703',
+      emissive: '#4a2500',
+      metalness: 0.2,
+      roughness: 0.4
+    });
+
     let animationFrame = 0;
 
     const animate = () => {
-      //8.- Progress the traveler forward and update the telemetry panel.
+      //9.- Progress the traveler forward and update the telemetry panel.
       const result = traveler.move(travelCommand);
       const atmosphere = describeAtmosphere(defaultPlanetaryShell, result.position);
       const vehicleSnapshots = fleet.advance();
@@ -192,6 +227,28 @@ const PlanetSandbox = () => {
         const cartesian = toCartesian(snapshot.position);
         mesh.position.copy(cartesian);
       }
+      const remoteState = remoteSnapshotRef.current;
+      for (const [entityId, transform] of remoteState) {
+        //10.- Spawn or reuse a mesh per remote entity so live telemetry appears within the orbit view.
+        let mesh = remoteMeshes.get(entityId);
+        if (!mesh) {
+          mesh = new THREE.Mesh(remoteGeometry, remoteMaterial.clone());
+          scene.add(mesh);
+          remoteMeshes.set(entityId, mesh);
+        }
+        mesh.position.set(
+          transform.position.x * remoteScale,
+          transform.position.y * remoteScale,
+          transform.position.z * remoteScale
+        );
+      }
+      for (const [entityId, mesh] of remoteMeshes) {
+        //11.- Remove stale meshes when entities disappear so the scene does not leak nodes across updates.
+        if (!remoteState.has(entityId)) {
+          scene.remove(mesh);
+          remoteMeshes.delete(entityId);
+        }
+      }
       setTelemetry({
         position: result.position,
         laps: result.laps,
@@ -200,7 +257,7 @@ const PlanetSandbox = () => {
         vehicles: vehicleSnapshots
       });
 
-      //9.- Spin the planet for a sense of motion while keeping the shell aligned.
+      //12.- Spin the planet for a sense of motion while keeping the shell aligned.
       planetMesh.rotation.y += 0.001;
       atmosphereMesh.rotation.y += 0.001;
 
@@ -208,7 +265,7 @@ const PlanetSandbox = () => {
       animationFrame = requestAnimationFrame(animate);
     };
 
-    //10.- Ensure the viewport reacts to window resizing for consistent aspect ratios.
+    //13.- Ensure the viewport reacts to window resizing for consistent aspect ratios.
     const handleResize = () => {
       if (!containerRef.current) {
         return;
@@ -226,6 +283,10 @@ const PlanetSandbox = () => {
       cancelAnimationFrame(animationFrame);
       window.removeEventListener('resize', handleResize);
       renderer.dispose();
+      for (const mesh of remoteMeshes.values()) {
+        //14.- Clean up dynamically created remote meshes before tearing down the scene.
+        scene.remove(mesh);
+      }
       containerRef.current?.removeChild(renderer.domElement);
       scene.clear();
     };
@@ -289,6 +350,26 @@ const PlanetSandbox = () => {
             ))}
           </ul>
         </div>
+        <div className="world-status">
+          <strong>Broker status</strong>
+          <span>{remoteEntities.status}</span>
+          <span>Remote crafts: {remoteEntities.entities.size}</span>
+          {remoteEntities.error && <span className="world-error">{remoteEntities.error}</span>}
+        </div>
+        <div className="bridge-state">
+          <strong>Bridge telemetry</strong>
+          <span>Status: {bridgeStatusLabel}</span>
+          {bridgeState.snapshot && (
+            <>
+              <span>Tick: {bridgeState.snapshot.tickId}</span>
+              <span>Vehicles reported: {bridgeVehicles.length}</span>
+              <span>Sample age: {bridgeSampleAgeSeconds ?? 0}s</span>
+            </>
+          )}
+          {bridgeHint && <span className="bridge-hint">{bridgeHint}</span>}
+          {bridgeError && <span className="bridge-error">{bridgeError}</span>}
+        </div>
+        <SimulationBridgePanel />
       </article>
     </section>
   );

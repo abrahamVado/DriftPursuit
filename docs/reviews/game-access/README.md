@@ -2,11 +2,11 @@
 
 ## Docker Availability
 - The repository ships a `docker-compose.yml` configuration that builds three services (`broker`, `bot-runner`, `web-client`).
-- The `web-client` service exposes port 3000, depends on the broker, and injects the `NEXT_PUBLIC_BROKER_URL` needed for the Next.js front-end to connect.
+- The `web-client` service exposes port 3000, depends on the broker, and embeds the `VITE_BROKER_URL` value needed for the Vite front-end to connect.
 
 ## Three.js Game Client
-- The Next.js client in `tunnelcave_sandbox_web` mounts the game shell inside `<div id="canvas-root">`, creating a deterministic canvas for rendering.
-- `ClientBootstrap` dynamically imports the runtime shell and mounts it once the broker URL is resolved, ensuring the HUD and 3D renderer initialize when the page loads.
+- The Vite client in `planet_sandbox_web` mounts the sandbox inside the main React tree, creating a deterministic canvas for rendering.
+- The `PlanetSandbox` component resolves broker telemetry and simulation bridge configuration before wiring up the renderer so the HUD and 3D scene initialize when the page loads.
 
 ## Procedural Vehicle Geometry
 - The shared TypeScript client (`typescript-client`) includes a `VehicleSceneManager` that generates vehicle meshes from procedural geometry, assembles wheels and spoilers, and keeps them synchronised with server telemetry.

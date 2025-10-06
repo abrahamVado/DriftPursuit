@@ -128,3 +128,118 @@ canvas {
 .vehicle-status ul {
   grid-template-columns: 1fr;
 }
+
+.world-status {
+  /*1.- Highlight the broker connection metrics inside the info panel.*/
+  margin-top: 0.75rem;
+  display: grid;
+  gap: 0.25rem;
+  padding: 0.5rem 0.75rem;
+  border-radius: 10px;
+  background: rgba(22, 42, 78, 0.55);
+  border: 1px solid rgba(90, 160, 255, 0.2);
+  font-size: 0.95rem;
+}
+
+.world-status strong {
+  font-size: 1rem;
+}
+
+.world-status span {
+  display: block;
+}
+
+.world-error {
+  color: #ff8686;
+  font-size: 0.85rem;
+}
+
+.bridge-state {
+  /*1.- Present simulation bridge telemetry alongside broker metrics.*/
+  margin-top: 0.75rem;
+  display: grid;
+  gap: 0.25rem;
+  padding: 0.5rem 0.75rem;
+  border-radius: 10px;
+  background: rgba(12, 36, 68, 0.55);
+  border: 1px solid rgba(120, 210, 255, 0.2);
+  font-size: 0.95rem;
+}
+
+.bridge-state span {
+  display: block;
+}
+
+.bridge-panel {
+  /*1.- Stack handshake diagnostics and controls with consistent spacing.*/
+  margin-top: 0.75rem;
+  padding: 0.75rem 0.75rem 0.85rem;
+  border-radius: 10px;
+  border: 1px solid rgba(94, 191, 255, 0.25);
+  background: rgba(10, 29, 52, 0.7);
+  display: grid;
+  gap: 0.5rem;
+}
+
+.bridge-panel header h2 {
+  margin: 0;
+  font-size: 1.1rem;
+}
+
+.bridge-panel header p {
+  margin: 0.35rem 0 0;
+  font-size: 0.9rem;
+  color: #c2daff;
+}
+
+.bridge-status {
+  display: grid;
+  gap: 0.25rem;
+}
+
+.bridge-target {
+  font-size: 0.85rem;
+  color: #9fc7ff;
+}
+
+.bridge-hint {
+  font-size: 0.85rem;
+  color: #ffd7a0;
+}
+
+.bridge-error {
+  color: #ff8686;
+  font-size: 0.85rem;
+}
+
+.bridge-controls {
+  display: flex;
+  gap: 0.5rem;
+}
+
+.bridge-controls button {
+  flex: 1;
+  padding: 0.55rem 0.75rem;
+  border-radius: 8px;
+  border: 1px solid rgba(121, 201, 255, 0.35);
+  background: linear-gradient(135deg, rgba(40, 115, 210, 0.9), rgba(18, 70, 160, 0.9));
+  color: #f8fbff;
+  font-weight: 600;
+  cursor: pointer;
+  transition: transform 0.15s ease, box-shadow 0.15s ease;
+}
+
+.bridge-controls button:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 8px 18px rgba(16, 60, 140, 0.45);
+}
+
+.bridge-controls button:active {
+  transform: translateY(0);
+}
+
+.bridge-last-command {
+  margin: 0;
+  font-size: 0.85rem;
+  color: #cddcff;
+}
