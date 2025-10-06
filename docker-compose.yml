@@ -15,23 +15,6 @@ services:
       - battleground
     restart: unless-stopped
 
-  bot-runner:
-    build:
-      context: ./python-sim
-    image: driftpursuit/bot-runner:latest
-    depends_on:
-      - broker
-    environment:
-      BROKER_WS_URL: ws://broker:43127/ws   # container-to-container DNS works
-      TRACE_HEADER: X-Trace-ID
-      WEB_BRIDGE_HOST: 0.0.0.0
-      WEB_BRIDGE_PORT: 8000
-    ports:
-      - "8000:8000"
-    networks:
-      - battleground
-    restart: unless-stopped
-
   game:
     build:
       context: .
