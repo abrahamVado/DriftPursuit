@@ -1,23 +1,52 @@
 {
   "compilerOptions": {
-    "target": "ES2020",
-    "useDefineForClassFields": true,
-    "lib": ["ES2020", "DOM", "DOM.Iterable"],
-    "module": "ESNext",
-    "skipLibCheck": true,
-    "moduleResolution": "Bundler",
-    "allowSyntheticDefaultImports": true,
-    "esModuleInterop": true,
-    "strict": true,
-    "forceConsistentCasingInFileNames": true,
-    "jsx": "react-jsx",
-    "types": ["vitest", "@testing-library/jest-dom"],
+    "types": ["node", "three"],
+    "typeRoots": [
+      "./types",
+      "./node_modules/@types"
+    ],
     "baseUrl": ".",
     "paths": {
-      "@client/*": ["../typescript-client/src/*"],
-      "@web/*": ["src/*"]
-    }
+      "@web/*": ["src/*"],
+      "@client/*": [
+        "../typescript-client/src/*",
+        "./typescript-client/src/*"
+      ],
+      "three": ["types/three/index.d.ts"]
+    },
+    "target": "ES2022",
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "lib": [
+      "ES2023",
+      "DOM",
+      "DOM.Iterable"
+    ],
+    "strict": true,
+    "skipLibCheck": true,
+    "esModuleInterop": true,
+    "forceConsistentCasingInFileNames": true,
+    "resolveJsonModule": true,
+    "verbatimModuleSyntax": true,
+    "noEmit": true,
+    "allowJs": true,
+    "incremental": true,
+    "jsx": "preserve",
+    "plugins": [
+      {
+        "name": "next"
+      }
+    ]
   },
-  "include": ["src", "test", "types", "vite.config.ts"],
-  "exclude": ["node_modules", "dist"]
+  "include": [
+    "app",
+    "env.d.ts",
+    "src",
+    ".next/types/**/*.ts",
+    "../typescript-client/src/**/*.ts",   // local monorepo layout
+    "typescript-client/src/**/*.ts"       // Docker: lib copied inside /app
+  ],
+  "exclude": [
+    "node_modules"
+  ]
 }
