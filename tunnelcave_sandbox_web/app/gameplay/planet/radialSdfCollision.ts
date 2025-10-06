@@ -90,6 +90,27 @@ export interface AltitudeClampResult extends GroundSample {
   readonly maxRadius: number
 }
 
+export interface SurfaceVehicleState {
+  readonly position: Vector3Like
+  readonly velocity: Vector3Like
+}
+
+export interface SurfaceVehicleAdvanceOptions {
+  readonly dt: number
+  readonly mesh: CubedSphereMesh
+  readonly field: RadialDisplacementField
+  readonly classification: SurfaceClassification
+  readonly configuration: PlanetConfiguration
+  readonly radius: number
+  readonly clearance?: number
+}
+
+export interface SurfaceVehicleAdvanceResult {
+  readonly state: SurfaceVehicleState
+  readonly normal: Vector3Like
+  readonly clearance: number
+}
+
 export function clampVehicleAltitude(
   position: Vector3Like,
   mesh: CubedSphereMesh,
@@ -118,5 +139,65 @@ export function clampVehicleAltitude(
     minRadius,
     maxRadius,
   }
+}
+
+export function advanceSurfaceVehicle(
+  state: SurfaceVehicleState,
+  options: SurfaceVehicleAdvanceOptions,
+): SurfaceVehicleAdvanceResult {
+  const { dt, mesh, field, classification, configuration, radius, clearance = 0 } = options
+  if (!Number.isFinite(dt) || dt < 0) {
+    throw new Error('dt must be a finite, non-negative number')
+  }
+  if (!Number.isFinite(radius) || radius < 0) {
+    throw new Error('radius must be a non-negative number')
+  }
+  //1.- Predict the next centre position using the current velocity and timestep.
+  const predicted = {
+    x: state.position.x + state.velocity.x * dt,
+    y: state.position.y + state.velocity.y * dt,
+    z: state.position.z + state.velocity.z * dt,
+  }
+  let sampleSource: Vector3Like = predicted
+  if (vectorLength(sampleSource) === 0) {
+    const fallbackRadius = vectorLength(state.position)
+    if (fallbackRadius === 0) {
+      throw new Error('Surface vehicle position must not coincide with the planet origin')
+    }
+    sampleSource = state.position
+  }
+  const groundSample = sampleGroundDistance(sampleSource, mesh, field, classification)
+  //2.- Clamp the radius between the displaced ground clearance and atmospheric ceiling.
+  const requestedClearance = Math.max(configuration.surfaceClearance, radius + clearance)
+  const targetRadius = groundSample.surfaceRadius + requestedClearance
+  const maxRadius = field.baseRadius + configuration.atmosphereHeight
+  const clampedRadius = Math.min(Math.max(targetRadius, 0), maxRadius)
+  const normal = normaliseVector(groundSample.gradient)
+  const clampedPosition = createVector(
+    normal.x * clampedRadius,
+    normal.y * clampedRadius,
+    normal.z * clampedRadius,
+  )
+  //3.- Project velocity into the tangent plane so motion hugs the spherical surface.
+  const normalSpeed =
+    state.velocity.x * normal.x +
+    state.velocity.y * normal.y +
+    state.velocity.z * normal.z
+  const tangentialVelocity = createVector(
+    state.velocity.x - normal.x * normalSpeed,
+    state.velocity.y - normal.y * normalSpeed,
+    state.velocity.z - normal.z * normalSpeed,
+  )
+  const distance = clampedRadius - groundSample.surfaceRadius
+  const clearanceToSurface = Math.max(0, distance - radius)
+  const nextState: SurfaceVehicleState = Object.freeze({
+    position: clampedPosition,
+    velocity: tangentialVelocity,
+  })
+  return Object.freeze({
+    state: nextState,
+    normal,
+    clearance: clearanceToSurface,
+  })
 }
 
