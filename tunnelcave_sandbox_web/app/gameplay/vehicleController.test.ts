@@ -38,6 +38,7 @@ describe('createVehicleController', () => {
       bounds: 1000,
     })
     const craft = new THREE.Object3D()
+    //1.- Accelerate using the standard throttle so we can measure the unboosted terminal speed.
     window.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowUp' }))
     for (let index = 0; index < 60; index += 1) {
       controller.step(0.1, craft)
@@ -128,8 +129,42 @@ describe('createVehicleController', () => {
     for (let index = 0; index < 60; index += 1) {
       controller.step(0.1, craft)
     }
-    expect(controller.getSpeed()).toBeCloseTo(90, 0)
+    expect(controller.getSpeed()).toBeCloseTo(180, 0)
     controller.dispose()
+  })
+
+  it('applies a 200 percent velocity boost when PageUp engages overdrive', () => {
+    //1.- Accelerate using the standard throttle so we can capture the reference terminal velocity.
+    const baseline = createVehicleController({
+      baseAcceleration: 40,
+      maxForwardSpeed: 90,
+      dragFactor: 1,
+      bounds: 1000,
+    })
+    const baselineCraft = new THREE.Object3D()
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowUp' }))
+    for (let index = 0; index < 60; index += 1) {
+      baseline.step(0.1, baselineCraft)
+    }
+    window.dispatchEvent(new KeyboardEvent('keyup', { key: 'ArrowUp' }))
+    const standardSpeed = baseline.getSpeed()
+    baseline.dispose()
+
+    const boosted = createVehicleController({
+      baseAcceleration: 40,
+      maxForwardSpeed: 90,
+      dragFactor: 1,
+      bounds: 1000,
+    })
+    const boostedCraft = new THREE.Object3D()
+    //2.- Engage PageUp overdrive and confirm the vehicle climbs to double the baseline velocity.
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'PageUp' }))
+    window.dispatchEvent(new KeyboardEvent('keyup', { key: 'PageUp' }))
+    for (let index = 0; index < 60; index += 1) {
+      boosted.step(0.1, boostedCraft)
+    }
+    expect(boosted.getSpeed()).toBeCloseTo(standardSpeed * 2, 0)
+    boosted.dispose()
   })
 
   it('ratchets the latched throttle downward when PageDown is pressed', () => {

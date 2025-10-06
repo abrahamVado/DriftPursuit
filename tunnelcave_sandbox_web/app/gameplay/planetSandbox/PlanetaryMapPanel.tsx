@@ -10,6 +10,7 @@ import {
   PlanetTraveler,
   VehicleFleet,
   blueprintToSnapshot,
+  enforceSurfaceClearance,
   type MovementCommand,
   type SphericalPosition,
   type VehicleBlueprint,
@@ -26,11 +27,18 @@ interface TelemetrySnapshot {
   vehicles: VehicleSnapshot[]
 }
 
-const initialPosition: SphericalPosition = {
+const orbitalClearance = 80_000
+
+const withClearance = (position: SphericalPosition): SphericalPosition => {
+  //1.- Guarantee every vehicle altitude clears the rendered planet mesh before entering the scene.
+  return enforceSurfaceClearance(defaultPlanetaryShell, position, orbitalClearance)
+}
+
+const initialPosition: SphericalPosition = withClearance({
   latitudeDeg: 5,
   longitudeDeg: 45,
-  altitude: defaultPlanetaryShell.surfaceRadius + 150,
-}
+  altitude: defaultPlanetaryShell.surfaceRadius + orbitalClearance,
+})
 
 const travelCommand: MovementCommand = {
   headingDeg: 92,
@@ -41,24 +49,36 @@ const travelCommand: MovementCommand = {
 const vehicleBlueprints: VehicleBlueprint[] = [
   {
     id: 'scout',
-    start: { latitudeDeg: 15, longitudeDeg: 120, altitude: defaultPlanetaryShell.surfaceRadius + 300 },
+    start: withClearance({
+      latitudeDeg: 15,
+      longitudeDeg: 120,
+      altitude: defaultPlanetaryShell.surfaceRadius + orbitalClearance + 40_000,
+    }),
     command: { headingDeg: 80, distance: 3_000, climb: 3 },
   },
   {
     id: 'freighter',
-    start: { latitudeDeg: -10, longitudeDeg: -40, altitude: defaultPlanetaryShell.surfaceRadius + 120 },
+    start: withClearance({
+      latitudeDeg: -10,
+      longitudeDeg: -40,
+      altitude: defaultPlanetaryShell.surfaceRadius + orbitalClearance + 15_000,
+    }),
     command: { headingDeg: 115, distance: 2_500, climb: -1 },
   },
   {
     id: 'racer',
-    start: { latitudeDeg: 25, longitudeDeg: -150, altitude: defaultPlanetaryShell.surfaceRadius + 600 },
+    start: withClearance({
+      latitudeDeg: 25,
+      longitudeDeg: -150,
+      altitude: defaultPlanetaryShell.surfaceRadius + orbitalClearance + 60_000,
+    }),
     command: { headingDeg: 65, distance: 4_500, climb: 4 },
   },
 ]
 
 const initialVehicleTelemetry = vehicleBlueprints.map((blueprint) => {
   //1.- Seed the telemetry with blueprint defaults so the sidebar lists craft immediately.
-  return blueprintToSnapshot(blueprint)
+  return blueprintToSnapshot(blueprint, defaultPlanetaryShell, { surfacePadding: orbitalClearance })
 })
 
 const hasWebGlSupport = (): boolean => {
@@ -155,8 +175,8 @@ const PlanetaryMapPanel = ({ battlefield }: { battlefield: BattlefieldConfig }) 
     scene.add(terrainPreview.group)
 
     //6.- Prepare helpers to convert spherical telemetry into cartesian coordinates.
-    const traveler = new PlanetTraveler(defaultPlanetaryShell, initialPosition)
-    const fleet = new VehicleFleet(defaultPlanetaryShell, vehicleBlueprints)
+    const traveler = new PlanetTraveler(defaultPlanetaryShell, initialPosition, { surfacePadding: orbitalClearance })
+    const fleet = new VehicleFleet(defaultPlanetaryShell, vehicleBlueprints, { surfacePadding: orbitalClearance })
     const vehicleMeshes = new Map<
       string,
       THREE.Mesh<THREE.BufferGeometry, THREE.Material | THREE.Material[]>

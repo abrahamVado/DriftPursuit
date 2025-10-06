@@ -15,13 +15,34 @@ export interface VehicleSnapshot {
   readonly hittingCeiling: boolean;
 }
 
+export interface VehicleFleetOptions {
+  readonly surfacePadding?: number;
+}
+
+const sanitizeAltitude = (
+  shell: PlanetaryShell,
+  altitude: number,
+  surfacePadding: number
+): number => {
+  //1.- Clamp the provided altitude into a safe orbital band outside the surface but below the exosphere.
+  const minimum = shell.surfaceRadius + surfacePadding;
+  const maximum = shell.exosphereRadius;
+  return Math.min(Math.max(altitude, minimum), maximum);
+};
+
 export class VehicleFleet {
   private readonly travelers: Map<string, PlanetTraveler> = new Map();
   private readonly commands: Map<string, MovementCommand> = new Map();
 
-  constructor(shell: PlanetaryShell, blueprints: VehicleBlueprint[]) {
+  constructor(shell: PlanetaryShell, blueprints: VehicleBlueprint[], options: VehicleFleetOptions = {}) {
+    const surfacePadding = options.surfacePadding ?? 0.5;
     for (const blueprint of blueprints) {
-      const traveler = new PlanetTraveler(shell, blueprint.start);
+      const sanitizedStart: SphericalPosition = {
+        //1.- Raise the starting altitude so escort craft never intersect the rendered planet surface.
+        ...blueprint.start,
+        altitude: sanitizeAltitude(shell, blueprint.start.altitude, surfacePadding)
+      };
+      const traveler = new PlanetTraveler(shell, sanitizedStart, { surfacePadding });
       this.travelers.set(blueprint.id, traveler);
       this.commands.set(blueprint.id, blueprint.command);
     }
@@ -47,13 +68,33 @@ export class VehicleFleet {
   }
 }
 
-export const blueprintToSnapshot = (blueprint: VehicleBlueprint): VehicleSnapshot => {
-  //1.- Mirror the blueprint starting state into telemetry friendly structures.
+export const blueprintToSnapshot = (
+  blueprint: VehicleBlueprint,
+  shell?: PlanetaryShell,
+  options: VehicleFleetOptions = {}
+): VehicleSnapshot => {
+  const surfacePadding = options.surfacePadding ?? 0.5;
+  const altitude = shell
+    ? sanitizeAltitude(shell, blueprint.start.altitude, surfacePadding)
+    : blueprint.start.altitude;
+  //1.- Mirror the (potentially elevated) starting state so preflight telemetry already honours clearance.
   return {
     id: blueprint.id,
-    position: { ...blueprint.start },
+    position: { ...blueprint.start, altitude },
     laps: 0,
     touchingSurface: false,
     hittingCeiling: false
+  };
+};
+
+export const enforceSurfaceClearance = (
+  shell: PlanetaryShell,
+  position: SphericalPosition,
+  surfacePadding: number
+): SphericalPosition => {
+  //1.- Publish a helper so render code can share the same clearance sanitiser as the fleet controller.
+  return {
+    ...position,
+    altitude: sanitizeAltitude(shell, position.altitude, surfacePadding)
   };
 };

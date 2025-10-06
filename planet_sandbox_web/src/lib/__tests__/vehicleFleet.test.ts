@@ -1,9 +1,21 @@
 import { describe, expect, it } from 'vitest';
 import { defaultPlanetaryShell, MovementCommand, SphericalPosition } from '../planetConfig';
-import { VehicleFleet, VehicleSnapshot } from '../vehicleFleet';
+import {
+  VehicleFleet,
+  VehicleSnapshot,
+  VehicleFleetOptions,
+  blueprintToSnapshot
+} from '../vehicleFleet';
 
-const createFleet = (commands: Array<{ id: string; start: SphericalPosition; command: MovementCommand }>) => {
-  return new VehicleFleet(defaultPlanetaryShell, commands.map(({ id, start, command }) => ({ id, start, command })));
+const createFleet = (
+  commands: Array<{ id: string; start: SphericalPosition; command: MovementCommand }>,
+  options: VehicleFleetOptions = {}
+) => {
+  return new VehicleFleet(
+    defaultPlanetaryShell,
+    commands.map(({ id, start, command }) => ({ id, start, command })),
+    options
+  );
 };
 
 describe('VehicleFleet', () => {
@@ -48,5 +60,41 @@ describe('VehicleFleet', () => {
 
     expect(glider.touchingSurface).toBe(true);
     expect(orbiter.hittingCeiling).toBe(true);
+  });
+
+  it('applies orbital clearance when a minimum surface padding is requested', () => {
+    const clearance = 80_000;
+    const fleet = createFleet(
+      [
+        {
+          id: 'hopper',
+          start: { latitudeDeg: 12, longitudeDeg: -18, altitude: defaultPlanetaryShell.surfaceRadius + 100 },
+          command: { headingDeg: 40, distance: 500, climb: -400 }
+        }
+      ],
+      { surfacePadding: clearance }
+    );
+
+    const [snapshot] = fleet.advance();
+
+    //1.- The enforced clearance keeps the escort outside the planet surface while still reporting the attempted impact.
+    expect(snapshot.position.altitude).toBeGreaterThanOrEqual(defaultPlanetaryShell.surfaceRadius + clearance);
+    expect(snapshot.touchingSurface).toBe(true);
+  });
+
+  it('raises snapshot altitudes to respect the same clearance heuristic', () => {
+    const clearance = 60_000;
+    const blueprint = {
+      id: 'sentinel',
+      start: { latitudeDeg: -8, longitudeDeg: 72, altitude: defaultPlanetaryShell.surfaceRadius + 500 },
+      command: { headingDeg: 0, distance: 0, climb: 0 }
+    };
+
+    const snapshot = blueprintToSnapshot(blueprint, defaultPlanetaryShell, { surfacePadding: clearance });
+
+    //1.- Even before simulation ticks, the telemetry mirrors the lifted orbital altitude.
+    expect(snapshot.position.altitude).toBe(defaultPlanetaryShell.surfaceRadius + clearance);
+    expect(snapshot.touchingSurface).toBe(false);
+    expect(snapshot.hittingCeiling).toBe(false);
   });
 });
