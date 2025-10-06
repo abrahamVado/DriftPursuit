@@ -16,6 +16,9 @@ describe('planetSpecLoader', () => {
       frequencies: [0.25, 0.5, 1.0],
       amplitudes: [12, 6, 2],
       lodThresholds: [0.08, 0.04, 0.02],
+      seaLevel: 150,
+      surfaceClearance: 2,
+      atmosphereHeight: 35,
     }
     //2.- Execute the parser to normalise shape and freeze arrays for sharing across systems.
     const spec = parsePlanetSpec(raw)
@@ -35,6 +38,9 @@ describe('planetSpecLoader', () => {
       frequencies: [1, 2],
       amplitudes: [3],
       lodThresholds: [0.1],
+      seaLevel: 80,
+      surfaceClearance: 1.5,
+      atmosphereHeight: 20,
     }
     //2.- Verify the loader surfaces a targeted validation error for the caller.
     expect(() => parsePlanetSpec(raw)).toThrow(PlanetSpecValidationError)
@@ -48,6 +54,9 @@ describe('planetSpecLoader', () => {
       frequencies: [0.4, 0.8],
       amplitudes: [5.5, 2.75],
       lodThresholds: [0.12, 0.06],
+      seaLevel: 200,
+      surfaceClearance: 3.5,
+      atmosphereHeight: 60,
     }
     const spec = parsePlanetSpec(raw)
     const configuration = createPlanetConfiguration(spec)
@@ -60,6 +69,9 @@ describe('planetSpecLoader', () => {
         { frequency: 0.8, amplitude: 2.75 },
       ],
       lodThresholds: spec.lodThresholds,
+      seaLevel: spec.seaLevel,
+      surfaceClearance: spec.surfaceClearance,
+      atmosphereHeight: spec.atmosphereHeight,
     })
     expect(Object.isFrozen(configuration.noiseLayers)).toBe(true)
   })
@@ -72,11 +84,15 @@ describe('planetSpecLoader', () => {
       frequencies: [0.6],
       amplitudes: [4.2],
       lodThresholds: [0.05],
+      seaLevel: 120,
+      surfaceClearance: 1.2,
+      atmosphereHeight: 25,
     })
     //2.- Ensure loader surfaces the composed configuration and respects the numeric payload.
     const configuration = loadPlanetConfigurationFromJson(json)
     expect(configuration.seed).toBe(77)
     expect(configuration.radii).toEqual([150])
+    expect(configuration.seaLevel).toBe(120)
   })
 
   it('raises a descriptive error on invalid JSON syntax', () => {
@@ -96,6 +112,9 @@ describe('planetSpecLoader', () => {
         frequencies: [0.3, 0.9],
         amplitudes: [8, 3],
         lodThresholds: [0.07, 0.035],
+        seaLevel: 140,
+        surfaceClearance: 2.2,
+        atmosphereHeight: 45,
       }),
     }))
     //2.- Load the configuration and verify the fetch call contract and parsed data.
@@ -105,6 +124,7 @@ describe('planetSpecLoader', () => {
       { frequency: 0.3, amplitude: 8 },
       { frequency: 0.9, amplitude: 3 },
     ])
+    expect(configuration.seaLevel).toBe(140)
   })
 
   it('reports network failures with the HTTP status text', async () => {
