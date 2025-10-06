@@ -1,8 +1,0 @@
-version: v1
-name: buf.build/driftpursuit/broker
-lint:
-  use:
-    - DEFAULT
-breaking:
-  use:
-    - FILE
