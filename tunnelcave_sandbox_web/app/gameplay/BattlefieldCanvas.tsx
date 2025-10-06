@@ -8,6 +8,7 @@ import { createChaseCamera } from './chaseCamera'
 import { createVehicleController } from './vehicleController'
 import { MiniMapOverlay, type MiniMapEntitySnapshot } from './miniMapOverlay'
 import { createNameplateSprite, type NameplateSprite } from './nameplate'
+import { wrapToInterval, wrappedDelta } from './worldWrapping'
 import { createWorldLobby, SHARED_WORLD_ID, type WorldPeerSnapshot } from './worldLobby'
 
 interface TreeRenderState {
@@ -389,6 +390,7 @@ export default function BattlefieldCanvas({ config, playerName, vehicleId, sessi
     scene.add(vehicleBody)
 
     //8.- Configure the vehicle controller with tunable thrust, braking, and collision handlers tailored to the battlefield layout.
+    const wrapSize = config.environment.wrapSize
     const controller = createVehicleController({
       bounds: config.environment.boundsRadius,
       baseAcceleration: 48,
@@ -415,6 +417,7 @@ export default function BattlefieldCanvas({ config, playerName, vehicleId, sessi
         waterBuoyancy: config.environment.waterBuoyancy,
         waterMinDepth: config.environment.waterMinDepth,
         maxWaterSpeedScale: config.environment.maxWaterSpeedScale,
+        wrapSize,
       },
     })
 
@@ -445,8 +448,16 @@ export default function BattlefieldCanvas({ config, playerName, vehicleId, sessi
         return
       }
       setMiniMapSnapshot({
-        player: { x: vehicleBody.position.x, z: vehicleBody.position.z },
-        peers: peersRef.current.map((peer) => ({ id: peer.id, label: peer.name || 'Wingmate', x: peer.position.x, z: peer.position.z })),
+        player: {
+          x: wrapToInterval(vehicleBody.position.x, wrapSize),
+          z: wrapToInterval(vehicleBody.position.z, wrapSize),
+        },
+        peers: peersRef.current.map((peer) => ({
+          id: peer.id,
+          label: peer.name || 'Wingmate',
+          x: wrapToInterval(peer.position.x, wrapSize),
+          z: wrapToInterval(peer.position.z, wrapSize),
+        })),
       })
     }
 
@@ -471,9 +482,9 @@ export default function BattlefieldCanvas({ config, playerName, vehicleId, sessi
         seen.add(snapshot.sessionId)
         const label = snapshot.name.trim() || `Wing ${snapshot.sessionId.slice(-4)}`
         const clampRadius = config.environment.boundsRadius
-        let px = snapshot.position.x
+        let px = wrapToInterval(snapshot.position.x, wrapSize)
         let py = snapshot.position.y
-        let pz = snapshot.position.z
+        let pz = wrapToInterval(snapshot.position.z, wrapSize)
         const planarDistance = Math.hypot(px, pz)
         if (planarDistance > clampRadius) {
           const scale = clampRadius / planarDistance
@@ -579,11 +590,15 @@ export default function BattlefieldCanvas({ config, playerName, vehicleId, sessi
       updateTreeLods()
       //1.- Broadcast the latest transform so other pilots can render this craft in real time.
       const invDelta = delta > 0 ? 1 / delta : 0
-      const velocityX = (vehicleBody.position.x - lastPosition.x) * invDelta
+      const velocityX = wrappedDelta(vehicleBody.position.x, lastPosition.x, wrapSize) * invDelta
       const velocityY = (vehicleBody.position.y - lastPosition.y) * invDelta
-      const velocityZ = (vehicleBody.position.z - lastPosition.z) * invDelta
+      const velocityZ = wrappedDelta(vehicleBody.position.z, lastPosition.z, wrapSize) * invDelta
       lobby.updatePresence({
-        position: { x: vehicleBody.position.x, y: vehicleBody.position.y, z: vehicleBody.position.z },
+        position: {
+          x: wrapToInterval(vehicleBody.position.x, wrapSize),
+          y: vehicleBody.position.y,
+          z: wrapToInterval(vehicleBody.position.z, wrapSize),
+        },
         velocity: { x: velocityX, y: velocityY, z: velocityZ },
       })
       lastPosition.copy(vehicleBody.position)
