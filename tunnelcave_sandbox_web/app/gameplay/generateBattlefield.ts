@@ -33,6 +33,7 @@ export interface BattlefieldEnvironment {
   waterBuoyancy: number
   waterMinDepth: number
   maxWaterSpeedScale: number
+  wrapSize: number
 }
 
 export interface BattlefieldTerrain {
@@ -306,6 +307,7 @@ export function generateBattlefield(seed = Date.now() & 0xffffffff): Battlefield
     waterBuoyancy: 14,
     waterMinDepth: 1.6,
     maxWaterSpeedScale: 0.55,
+    wrapSize: fieldSize,
   }
 
   return {

@@ -1,6 +1,7 @@
 import * as THREE from 'three'
 
 import { createValueNoise2D, domainWarp, fractalNoise, ridgedMultifractal } from './noise'
+import { wrapToInterval, wrappedDelta } from '../worldWrapping'
 
 export interface TerrainTunables {
   baseAmplitude: number
@@ -59,9 +60,25 @@ export function createTerrainSampler(options: TerrainSamplerOptions): TerrainSam
   const spawnRadius = options.spawnRadius
   const waterOverrides: { x: number; z: number; level: number; radius: number }[] = []
 
+  const wrapCoordinate = (value: number) => wrapToInterval(value, options.fieldSize)
+
+  const distanceToSpawn = (x: number, z: number) => {
+    const dx = wrappedDelta(x, spawnPoint.x, options.fieldSize)
+    const dz = wrappedDelta(z, spawnPoint.z, options.fieldSize)
+    return Math.hypot(dx, dz)
+  }
+
   const computeBaseHeight = (x: number, z: number) => {
+    const sx = wrapCoordinate(x)
+    const sz = wrapCoordinate(z)
     //2.- Warp the domain and accumulate fractal brownian motion to produce rolling hills around the arena.
-    const warpedCoord = domainWarp(noise, x * 0.0025, z * 0.0025, options.terrain.warpStrength, options.terrain.warpFrequency)
+    const warpedCoord = domainWarp(
+      noise,
+      sx * 0.0025,
+      sz * 0.0025,
+      options.terrain.warpStrength,
+      options.terrain.warpFrequency,
+    )
     const fbm = fractalNoise(noise, warpedCoord.x, warpedCoord.z, {
       amplitude: options.terrain.baseAmplitude,
       frequency: options.terrain.baseFrequency,
@@ -73,15 +90,17 @@ export function createTerrainSampler(options: TerrainSamplerOptions): TerrainSam
   }
 
   const computeMountainContribution = (x: number, z: number) => {
+    const sx = wrapCoordinate(x)
+    const sz = wrapCoordinate(z)
     //3.- Shape ridged multifractal peaks and mask them so they ramp in away from the spawn runway.
-    const ridge = ridgedMultifractal(noise, x * 0.002, z * 0.002, {
+    const ridge = ridgedMultifractal(noise, sx * 0.002, sz * 0.002, {
       amplitude: options.mountains.intensity,
       frequency: options.terrain.baseFrequency,
       octaves: options.mountains.octaves,
       gain: options.mountains.gain,
       lacunarity: options.mountains.lacunarity,
     })
-    const distance = Math.hypot(x - spawnPoint.x, z - spawnPoint.z)
+    const distance = distanceToSpawn(sx, sz)
     const mask = Math.min(1, Math.max(0, (distance - spawnRadius) / Math.max(1, options.mountains.maskRadius)))
     const boosted = Math.max(0, ridge - options.mountains.threshold) * options.mountains.intensity
     return boosted * mask
@@ -94,7 +113,7 @@ export function createTerrainSampler(options: TerrainSamplerOptions): TerrainSam
     const base = computeBaseHeight(x, z)
     const mountains = computeMountainContribution(x, z)
     const rawHeight = base + mountains
-    const distance = Math.hypot(x - spawnPoint.x, z - spawnPoint.z)
+    const distance = distanceToSpawn(x, z)
     if (distance < spawnRadius) {
       const t = distance / spawnRadius
       return rawHeight * t * t
@@ -125,12 +144,16 @@ export function createTerrainSampler(options: TerrainSamplerOptions): TerrainSam
   const sampleWater = (x: number, z: number) => {
     //7.- Lower the terrain into basins wherever the noise dips under the threshold to form deterministic lakes.
     for (const override of waterOverrides) {
-      const distance = Math.hypot(x - override.x, z - override.z)
+      const dx = wrappedDelta(x, override.x, options.fieldSize)
+      const dz = wrappedDelta(z, override.z, options.fieldSize)
+      const distance = Math.hypot(dx, dz)
       if (distance < override.radius) {
         return override.level
       }
     }
-    const basinNoise = fractalNoise(noise, x * 0.0014, z * 0.0014, {
+    const sx = wrapCoordinate(x)
+    const sz = wrapCoordinate(z)
+    const basinNoise = fractalNoise(noise, sx * 0.0014, sz * 0.0014, {
       amplitude: 1,
       frequency: 1,
       octaves: 4,
@@ -154,7 +177,7 @@ export function createTerrainSampler(options: TerrainSamplerOptions): TerrainSam
     sampleWater,
     flatSpawnRadius: spawnRadius,
     registerWaterOverride: (x: number, z: number, level: number, radius: number) => {
-      waterOverrides.push({ x, z, level, radius })
+      waterOverrides.push({ x: wrapCoordinate(x), z: wrapCoordinate(z), level, radius })
     },
   }
 }

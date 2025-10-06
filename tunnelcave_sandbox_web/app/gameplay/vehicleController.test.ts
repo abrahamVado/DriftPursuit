@@ -259,5 +259,39 @@ describe('createVehicleController', () => {
     expect(craft.position.y).toBeGreaterThanOrEqual(environment.sampleWater(0, 0) + environment.vehicleRadius - environment.waterMinDepth - 0.01)
     controller.dispose()
   })
+
+  it('wraps planar movement into the seamless tile when wrap size is configured', () => {
+    const wrapSize = 40
+    const environment = {
+      sampleGround: () => ({ height: 0, normal: new THREE.Vector3(0, 1, 0), slopeRadians: 0 }),
+      sampleCeiling: () => 60,
+      sampleWater: () => Number.NEGATIVE_INFINITY,
+      vehicleRadius: 1.2,
+      slopeLimitRadians: Math.PI / 3,
+      bounceDamping: 0,
+      groundSnapStrength: 6,
+      boundsRadius: 120,
+      waterDrag: 0.4,
+      waterBuoyancy: 14,
+      waterMinDepth: 1.2,
+      maxWaterSpeedScale: 0.6,
+      wrapSize,
+    }
+    const controller = createVehicleController({
+      baseAcceleration: 40,
+      maxForwardSpeed: 80,
+      dragFactor: 1,
+      deltaClamp: 0.2,
+      environment,
+    })
+    const craft = new THREE.Object3D()
+    //1.- Place the craft beyond the positive seam so the next frame evaluates wrapping logic.
+    craft.position.set(wrapSize / 2 + 5, 0, 0)
+    controller.step(0.1, craft)
+    //2.- Confirm the craft appears on the opposite side of the tile rather than clamping against bounds.
+    expect(craft.position.x).toBeLessThan(0)
+    expect(Math.abs(craft.position.x)).toBeLessThanOrEqual(wrapSize / 2)
+    controller.dispose()
+  })
 })
 

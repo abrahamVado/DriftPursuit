@@ -1,5 +1,7 @@
 import * as THREE from 'three'
 
+import { wrapToInterval } from './worldWrapping'
+
 export interface VehicleCollisionEnvironment {
   sampleGround: (x: number, z: number) => { height: number; normal: THREE.Vector3; slopeRadians: number }
   sampleCeiling: (x: number, z: number) => number
@@ -13,6 +15,7 @@ export interface VehicleCollisionEnvironment {
   waterBuoyancy: number
   waterMinDepth: number
   maxWaterSpeedScale: number
+  wrapSize?: number
 }
 
 export interface VehicleControllerOptions {
@@ -105,6 +108,7 @@ export function createVehicleController(options: VehicleControllerOptions = {}):
     waterBuoyancy: 12,
     waterMinDepth: 1.2,
     maxWaterSpeedScale: 0.6,
+    wrapSize: undefined,
   }
 
   const environment: VehicleCollisionEnvironment = {
@@ -240,18 +244,24 @@ export function createVehicleController(options: VehicleControllerOptions = {}):
     nextPosition.y = object.position.y
     nextPosition.z = object.position.z
     addScaled(nextPosition, velocity, dt)
-    const boundsRadius = environment.boundsRadius
-    const planarDistance = Math.hypot(nextPosition.x, nextPosition.z)
-    if (planarDistance > boundsRadius) {
-      const length = Math.hypot(nextPosition.x, nextPosition.z) || 1
-      boundaryDirection.x = nextPosition.x / length
-      boundaryDirection.y = 0
-      boundaryDirection.z = nextPosition.z / length
-      const pullBack = planarDistance - boundsRadius
-      addScaled(nextPosition, boundaryDirection, -pullBack)
-      const outwardSpeed = dot(velocity, boundaryDirection)
-      if (outwardSpeed > 0) {
-        addScaled(velocity, boundaryDirection, -outwardSpeed)
+    const wrapSize = environment.wrapSize ?? 0
+    if (wrapSize > 0) {
+      nextPosition.x = wrapToInterval(nextPosition.x, wrapSize)
+      nextPosition.z = wrapToInterval(nextPosition.z, wrapSize)
+    } else {
+      const boundsRadius = environment.boundsRadius
+      const planarDistance = Math.hypot(nextPosition.x, nextPosition.z)
+      if (planarDistance > boundsRadius) {
+        const length = Math.hypot(nextPosition.x, nextPosition.z) || 1
+        boundaryDirection.x = nextPosition.x / length
+        boundaryDirection.y = 0
+        boundaryDirection.z = nextPosition.z / length
+        const pullBack = planarDistance - boundsRadius
+        addScaled(nextPosition, boundaryDirection, -pullBack)
+        const outwardSpeed = dot(velocity, boundaryDirection)
+        if (outwardSpeed > 0) {
+          addScaled(velocity, boundaryDirection, -outwardSpeed)
+        }
       }
     }
 
