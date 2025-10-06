@@ -122,7 +122,7 @@ export function createTerrainSampler(options: TerrainSamplerOptions): TerrainSam
   }
 
   const sampleGround = (x: number, z: number): TerrainSample => {
-    //5.- Calculate the ground height, then differentiate via central differences to obtain a normal and slope angle.
+    //5.- Calculate the ground height, then differentiate via central differences to obtain a normal and slope angle while guarding against degenerate gradients.
     const height = computeGroundHeight(x, z)
     const epsilon = 0.75
     const hx = computeGroundHeight(x + epsilon, z) - computeGroundHeight(x - epsilon, z)
@@ -130,8 +130,12 @@ export function createTerrainSampler(options: TerrainSamplerOptions): TerrainSam
     const nx = -hx
     const ny = 2 * epsilon
     const nz = -hz
-    const length = Math.sqrt(nx * nx + ny * ny + nz * nz) || 1
-    const normal = { x: nx / length, y: ny / length, z: nz / length }
+    const normal = new THREE.Vector3(nx, ny, nz)
+    if (normal.lengthSq() === 0) {
+      normal.set(0, 1, 0)
+    } else {
+      normal.normalize()
+    }
     const slopeRadians = Math.acos(Math.max(-1, Math.min(1, normal.y)))
     return { height, normal, slopeRadians }
   }
