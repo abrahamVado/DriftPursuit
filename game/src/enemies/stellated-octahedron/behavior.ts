@@ -37,7 +37,6 @@ export function createEnemy(scene: THREE.Scene, position: THREE.Vector3){
   scene.add(mesh)
   const vel = new THREE.Vector3()
   const dir = new THREE.Vector3()
-  const tmp = new THREE.Vector3()
   const obj = {
     mesh,
     hp: 40,
