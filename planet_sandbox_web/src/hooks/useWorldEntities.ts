@@ -73,7 +73,7 @@ export function useWorldEntities(options?: UseWorldEntitiesOptions): UseWorldEnt
     });
     sessionRef.current = session;
 
-    const unsubscribe = session.store.subscribe((snapshot) => {
+    const unsubscribe = session.store.subscribe((snapshot: ReadonlyMap<string, EntityTransform>) => {
       //3.- Clone the world snapshot into component state whenever the broker publishes updates.
       if (cancelled) {
         return;
