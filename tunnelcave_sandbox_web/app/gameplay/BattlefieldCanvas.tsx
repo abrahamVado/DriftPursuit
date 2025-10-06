@@ -7,7 +7,8 @@ import type { BattlefieldConfig, TreeInstance } from './generateBattlefield'
 import { createChaseCamera } from './chaseCamera'
 import { createVehicleController } from './vehicleController'
 import { MiniMapOverlay, type MiniMapEntitySnapshot } from './miniMapOverlay'
-import { createNameplateSprite } from './nameplate'
+import { createNameplateSprite, type NameplateSprite } from './nameplate'
+import { createWorldLobby, SHARED_WORLD_ID, type WorldPeerSnapshot } from './worldLobby'
 
 interface TreeRenderState {
   position: THREE.Vector3
@@ -21,18 +22,20 @@ interface TreeRenderState {
   branchCount: number
 }
 
-interface PeerTemplate {
-  //1.- Track the peer identifier and legend label.
+interface PeerState {
+  //1.- Unique identifier matching the remote session.
   id: string
-  label: string
-  //2.- Maintain world space position and planar velocity for lightweight motion updates.
+  //2.- Callsign used for overlays and nameplates.
+  name: string
+  //3.- Vehicle identifier so future cosmetics can tint the craft.
+  vehicleId: string
+  //4.- Latest reported position and velocity samples from the network.
   position: THREE.Vector3
   velocity: THREE.Vector3
-}
-
-interface PeerState extends PeerTemplate {
-  //1.- Reference to the rendered craft so animation updates can reposition it without allocations.
+  //5.- Render resources representing the escort craft and nameplate.
   craft: THREE.Group
+  nameplate: NameplateSprite
+  dispose: () => void
 }
 
 function mulberry32(seed: number) {
@@ -141,24 +144,34 @@ function createTreeState(
   }
 }
 
-function createPeerSwarm(config: BattlefieldConfig): PeerTemplate[] {
-  //1.- Generate a compact formation sized to the battlefield with deterministic spacing.
-  const random = mulberry32(config.seed + 4096)
-  const count = Math.max(2, Math.min(6, Math.round(config.fieldSize / 160)))
-  const peers: PeerTemplate[] = []
-  for (let index = 0; index < count; index += 1) {
-    const id = `wing-${index + 1}`
-    const label = `Wing ${index + 1}`
-    const horizontalSpread = config.fieldSize * 0.6
-    const position = new THREE.Vector3(
-      (random() - 0.5) * horizontalSpread,
-      config.spawnPoint.y + 6 + random() * 18,
-      (random() - 0.5) * horizontalSpread,
-    )
-    const velocity = new THREE.Vector3((random() - 0.5) * 18, 0, (random() - 0.5) * 18)
-    peers.push({ id, label, position, velocity })
+function createEscortCraft(label: string): { craft: THREE.Group; nameplate: NameplateSprite; dispose: () => void } {
+  //1.- Construct a compact escort craft composed of a hull, thruster, and floating nameplate.
+  const craft = new THREE.Group()
+  const hullGeometry = new THREE.ConeGeometry(1.8, 5.5, 10)
+  const hullMaterial = new THREE.MeshStandardMaterial({ color: 0x6c7bff, metalness: 0.55, roughness: 0.42 })
+  const hull = new THREE.Mesh(hullGeometry, hullMaterial)
+  hull.rotation.x = Math.PI / 2
+  const thrusterGeometry = new THREE.CylinderGeometry(0.45, 1.2, 1.6, 8)
+  const thrusterMaterial = new THREE.MeshStandardMaterial({ color: 0x1d242f })
+  const thruster = new THREE.Mesh(thrusterGeometry, thrusterMaterial)
+  thruster.position.set(0, 0, 1.6)
+  thruster.rotation.x = Math.PI / 2
+  craft.add(hull)
+  craft.add(thruster)
+  const nameplate = createNameplateSprite(label)
+  nameplate.sprite.position.set(0, 3.6, 0)
+  craft.add(nameplate.sprite)
+  return {
+    craft,
+    nameplate,
+    dispose: () => {
+      hullGeometry.dispose()
+      hullMaterial.dispose()
+      thrusterGeometry.dispose()
+      thrusterMaterial.dispose()
+      nameplate.dispose()
+    },
   }
-  return peers
 }
 
 export default function BattlefieldCanvas({ config, playerName, vehicleId, sessionId }: {
@@ -171,12 +184,11 @@ export default function BattlefieldCanvas({ config, playerName, vehicleId, sessi
   const mountRef = useRef<HTMLDivElement | null>(null)
   //5.- Cache the welcome banner so the overlay remains stable between renders.
   const welcomeMessage = useMemo(() => `${playerName || 'Rookie'} piloting ${vehicleId}`, [playerName, vehicleId])
-  const peerBlueprints = useMemo(() => createPeerSwarm(config), [config])
   const peersRef = useRef<PeerState[]>([])
   const [miniMapSnapshot, setMiniMapSnapshot] = useState<{ player: { x: number; z: number }; peers: MiniMapEntitySnapshot[] }>(
     () => ({
       player: { x: config.spawnPoint.x, z: config.spawnPoint.z },
-      peers: peerBlueprints.map((peer) => ({ id: peer.id, label: peer.label, x: peer.position.x, z: peer.position.z })),
+      peers: [],
     }),
   )
 
@@ -425,59 +437,100 @@ export default function BattlefieldCanvas({ config, playerName, vehicleId, sessi
     let miniMapTimer = 0
     let disposed = false
 
-    const peerCleanup: Array<() => void> = []
+    const remotePeers = new Map<string, PeerState>()
+    peersRef.current = []
 
-    //10.- Clone the generated peer formation and instantiate escort craft so their motion persists across animation frames.
-    peersRef.current = peerBlueprints.map((peer, index) => {
-      const craft = new THREE.Group()
-      const escortHullGeometry = new THREE.ConeGeometry(1.8, 5.5, 10)
-      const escortHullMaterial = new THREE.MeshStandardMaterial({ color: 0x6c7bff, metalness: 0.55, roughness: 0.42 })
-      const escortHull = new THREE.Mesh(escortHullGeometry, escortHullMaterial)
-      escortHull.rotation.x = Math.PI / 2
-      const escortThrusterGeometry = new THREE.CylinderGeometry(0.45, 1.2, 1.6, 8)
-      const escortThrusterMaterial = new THREE.MeshStandardMaterial({ color: 0x1d242f })
-      const escortThruster = new THREE.Mesh(escortThrusterGeometry, escortThrusterMaterial)
-      escortThruster.position.set(0, 0, 1.6)
-      escortThruster.rotation.x = Math.PI / 2
-      craft.add(escortHull)
-      craft.add(escortThruster)
-      craft.position.copy(peer.position)
-      craft.scale.setScalar(0.9 + index * 0.03)
-      const peerNameplate = createNameplateSprite(peer.label)
-      peerNameplate.sprite.position.set(0, 3.6, 0)
-      craft.add(peerNameplate.sprite)
-      scene.add(craft)
-      peerCleanup.push(() => {
-        scene.remove(craft)
-        escortHullGeometry.dispose()
-        escortHullMaterial.dispose()
-        escortThrusterGeometry.dispose()
-        escortThrusterMaterial.dispose()
-        peerNameplate.dispose()
-      })
-      return {
-        id: peer.id,
-        label: peer.label,
-        position: peer.position.clone(),
-        velocity: peer.velocity.clone(),
-        craft,
-      }
-    })
     const publishMiniMap = () => {
       if (disposed) {
         return
       }
       setMiniMapSnapshot({
         player: { x: vehicleBody.position.x, z: vehicleBody.position.z },
-        peers: peersRef.current.map((peer) => ({ id: peer.id, label: peer.label, x: peer.position.x, z: peer.position.z })),
+        peers: peersRef.current.map((peer) => ({ id: peer.id, label: peer.name || 'Wingmate', x: peer.position.x, z: peer.position.z })),
       })
     }
+
+    const lobby = createWorldLobby(
+      {
+        worldId: SHARED_WORLD_ID,
+        sessionId,
+        name: playerName || 'Rookie',
+        vehicleId,
+        spawn: { x: config.spawnPoint.x, y: config.spawnPoint.y, z: config.spawnPoint.z },
+      },
+      { now: () => performance.now() },
+    )
+
+    const reconcilePeers = (snapshots: WorldPeerSnapshot[]) => {
+      //1.- Reconcile the remote roster with the latest lobby snapshot to spawn, update, or despawn escorts.
+      const seen = new Set<string>()
+      snapshots.forEach((snapshot) => {
+        if (snapshot.sessionId === sessionId) {
+          return
+        }
+        seen.add(snapshot.sessionId)
+        const label = snapshot.name.trim() || `Wing ${snapshot.sessionId.slice(-4)}`
+        const clampRadius = config.environment.boundsRadius
+        let px = snapshot.position.x
+        let py = snapshot.position.y
+        let pz = snapshot.position.z
+        const planarDistance = Math.hypot(px, pz)
+        if (planarDistance > clampRadius) {
+          const scale = clampRadius / planarDistance
+          px *= scale
+          pz *= scale
+        }
+        let peer = remotePeers.get(snapshot.sessionId)
+        if (!peer) {
+          const { craft, nameplate, dispose } = createEscortCraft(label)
+          craft.position.set(px, py, pz)
+          scene.add(craft)
+          peer = {
+            id: snapshot.sessionId,
+            name: snapshot.name,
+            vehicleId: snapshot.vehicleId,
+            position: new THREE.Vector3(px, py, pz),
+            velocity: new THREE.Vector3(snapshot.velocity.x, snapshot.velocity.y, snapshot.velocity.z),
+            craft,
+            nameplate,
+            dispose: () => {
+              scene.remove(craft)
+              dispose()
+            },
+          }
+          remotePeers.set(snapshot.sessionId, peer)
+        } else {
+          peer.name = snapshot.name
+          peer.vehicleId = snapshot.vehicleId
+          peer.position.set(px, py, pz)
+          peer.velocity.set(snapshot.velocity.x, snapshot.velocity.y, snapshot.velocity.z)
+        }
+      })
+      remotePeers.forEach((peer, id) => {
+        if (!seen.has(id)) {
+          peer.dispose()
+          remotePeers.delete(id)
+        }
+      })
+      peersRef.current = Array.from(remotePeers.values())
+      publishMiniMap()
+    }
+
+    const unsubscribeLobby = lobby.subscribe(reconcilePeers)
+
+    lobby.updatePresence({
+      position: { x: vehicleBody.position.x, y: vehicleBody.position.y, z: vehicleBody.position.z },
+      velocity: { x: 0, y: 0, z: 0 },
+    })
+
     publishMiniMap()
 
     const billboardQuaternion = new THREE.Quaternion()
     const farMatrix = new THREE.Matrix4()
     const farPosition = new THREE.Vector3()
-    const peerNormal = new THREE.Vector3()
+    const peerAlignment = new THREE.Vector3()
+    const peerLookTarget = new THREE.Vector3()
+    const lastPosition = new THREE.Vector3().copy(vehicleBody.position)
 
     //10.- Refresh LOD instances so nearby trees show branches while distant ones collapse to impostors.
     const updateTreeLods = () => {
@@ -515,8 +568,6 @@ export default function BattlefieldCanvas({ config, playerName, vehicleId, sessi
       }
     }
 
-    const boundsRadius = config.environment.boundsRadius
-
     //11.- Advance the simulation with a clamped delta time before rendering the latest frame.
     const animate = () => {
       animationFrame = requestAnimationFrame(animate)
@@ -526,21 +577,25 @@ export default function BattlefieldCanvas({ config, playerName, vehicleId, sessi
       controller.step(delta, vehicleBody)
       chaseRig.update(camera, vehicleBody, controller.getSpeed(), delta)
       updateTreeLods()
-      //1.- Integrate simple peer motion and keep markers within the battlefield bounds.
+      //1.- Broadcast the latest transform so other pilots can render this craft in real time.
+      const invDelta = delta > 0 ? 1 / delta : 0
+      const velocityX = (vehicleBody.position.x - lastPosition.x) * invDelta
+      const velocityY = (vehicleBody.position.y - lastPosition.y) * invDelta
+      const velocityZ = (vehicleBody.position.z - lastPosition.z) * invDelta
+      lobby.updatePresence({
+        position: { x: vehicleBody.position.x, y: vehicleBody.position.y, z: vehicleBody.position.z },
+        velocity: { x: velocityX, y: velocityY, z: velocityZ },
+      })
+      lastPosition.copy(vehicleBody.position)
+      //2.- Smoothly interpolate remote craft positions and align them with their reported velocity vectors.
       peersRef.current.forEach((peer) => {
-        peer.position.addScaledVector(peer.velocity, delta)
-        const planarDistance = Math.hypot(peer.position.x, peer.position.z)
-        if (planarDistance > boundsRadius) {
-          peerNormal.set(peer.position.x, 0, peer.position.z).normalize()
-          const outward = peer.velocity.dot(peerNormal)
-          if (outward > 0) {
-            peer.velocity.addScaledVector(peerNormal, -2 * outward)
-          }
-          const clampScale = boundsRadius / planarDistance
-          peer.position.x *= clampScale
-          peer.position.z *= clampScale
+        peer.craft.position.lerp(peer.position, Math.min(1, delta * 6))
+        peerAlignment.set(peer.velocity.x, peer.velocity.y, peer.velocity.z)
+        if (peerAlignment.lengthSq() > 0.01) {
+          peerAlignment.normalize()
+          peerLookTarget.copy(peer.craft.position).addScaledVector(peerAlignment, 6)
+          peer.craft.lookAt(peerLookTarget)
         }
-        peer.craft.position.copy(peer.position)
       })
       miniMapTimer += delta
       if (miniMapTimer >= 0.12) {
@@ -598,7 +653,10 @@ export default function BattlefieldCanvas({ config, playerName, vehicleId, sessi
       canopyMidMesh.dispose()
       canopyFarMesh.dispose()
       branchMesh?.dispose()
-      peerCleanup.forEach((disposePeer) => disposePeer())
+      unsubscribeLobby()
+      lobby.dispose()
+      remotePeers.forEach((peer) => peer.dispose())
+      remotePeers.clear()
       playerNameplate.dispose()
       ;(hull.geometry as THREE.BufferGeometry).dispose()
       ;(hull.material as THREE.Material).dispose()
@@ -606,7 +664,7 @@ export default function BattlefieldCanvas({ config, playerName, vehicleId, sessi
       ;(thruster.material as THREE.Material).dispose()
       mount.removeChild(canvas)
     }
-  }, [config, peerBlueprints, playerName, sessionId, vehicleId])
+  }, [config, playerName, sessionId, vehicleId])
 
   return (
     <div className="battlefield-wrapper" data-testid="battlefield-wrapper" ref={mountRef}>

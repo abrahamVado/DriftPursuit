@@ -5,6 +5,7 @@ import { useMemo, useState } from 'react'
 
 import BattlefieldCanvas from './BattlefieldCanvas'
 import { generateBattlefield } from './generateBattlefield'
+import { SHARED_WORLD_SEED } from './worldLobby'
 import { createPlayerSessionId } from './playerSession'
 
 const VEHICLES = ['arrowhead', 'aurora', 'duskfall', 'steelwing'] as const
@@ -19,7 +20,7 @@ export default function GameplayPage() {
   const [vehicleId, setVehicleId] = useState<VehicleOption>('arrowhead')
   const [nameError, setNameError] = useState('')
   //3.- Generate the procedural battlefield once so re-renders preserve the map layout.
-  const battlefield = useMemo(() => generateBattlefield(), [])
+  const battlefield = useMemo(() => generateBattlefield(SHARED_WORLD_SEED), [])
   //4.- Allocate a session identifier per tab load to satisfy the unique player requirement.
   const sessionId = useMemo(() => createPlayerSessionId(), [])
 
