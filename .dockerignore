@@ -1,0 +1,13 @@
+# never send these to the daemon
+**/node_modules
+**/.next
+**/dist
+**/build
+**/.turbo
+**/.cache
+**/.git
+**/*.log
+
+# ensure the app subdir is clean too
+planet_sandbox_web/node_modules
+planet_sandbox_web/.next
