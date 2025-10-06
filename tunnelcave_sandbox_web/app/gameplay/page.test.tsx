@@ -2,6 +2,17 @@ import React from 'react'
 import { fireEvent, render, screen } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
+import { SHARED_WORLD_SEED } from './worldLobby'
+
+const generateBattlefieldMock = vi.fn(() => ({
+  fieldSize: 320,
+  spawnPoint: { x: 0, y: 0, z: 0 },
+}) as unknown)
+
+vi.mock('./generateBattlefield', () => ({
+  generateBattlefield: (...args: unknown[]) => generateBattlefieldMock(...args),
+}))
+
 vi.mock('./BattlefieldCanvas', () => ({
   __esModule: true,
   default: ({ playerName, vehicleId, sessionId }: { playerName: string; vehicleId: string; sessionId: string }) => (
@@ -15,6 +26,7 @@ describe('GameplayPage', () => {
   beforeEach(() => {
     //1.- Reset the DOM between scenarios to avoid leaking rendered components or validation states.
     document.body.innerHTML = ''
+    generateBattlefieldMock.mockClear()
   })
 
   it('renders the join call to action by default', async () => {
@@ -51,6 +63,13 @@ describe('GameplayPage', () => {
     fireEvent.click(screen.getByTestId('launch-button'))
     expect(screen.queryByTestId('battle-stage')).not.toBeNull()
     expect(screen.getByTestId('mock-canvas').textContent).toContain('Nova-aurora-pilot')
+  })
+
+  it('generates the shared battlefield using the global world seed', async () => {
+    const { default: GameplayPage } = await import('./page')
+    render(<GameplayPage />)
+    //1.- The memoised generator must resolve with the shared seed so every player sees the same terrain.
+    expect(generateBattlefieldMock).toHaveBeenCalledWith(SHARED_WORLD_SEED)
   })
 })
 
