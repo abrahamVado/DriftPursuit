@@ -8,7 +8,7 @@ from typing import List, Sequence, Tuple
 from .config import GenerationSeeds
 from .divergence_free import DivergenceFreeField, integrate_streamline
 from .swept_tube import SweptTube, build_swept_tube
-from .settings import GeneratorSettings
+from .settings import GeneratorSettings, WorldSettings
 from ..world import WorldDescriptor, build_loop_descriptor
 
 
@@ -75,7 +75,44 @@ def _tube_from_profile(path: Sequence[Sequence[float]], radii: Sequence[float]) 
     return build_swept_tube(path, radius=radius_callback)
 
 
-# //7.- High-level helper generating a single loop instance from seeds.
+# //7.- Normalize vectors with fallback for degenerate inputs.
+def _normalize_vector(vector: Sequence[float]) -> Tuple[float, float, float]:
+    x, y, z = (float(component) for component in vector)
+    length = math.sqrt(x * x + y * y + z * z)
+    if length < 1e-6:
+        return (0.0, 0.0, 1.0)
+    scale = 1.0 / length
+    return (x * scale, y * scale, z * scale)
+
+
+# //8.- Project a path onto the surface of a configurable sphere.
+def _project_path_to_sphere(
+    path: Sequence[Sequence[float]],
+    *,
+    radius: float,
+) -> List[Tuple[float, float, float]]:
+    projected: List[Tuple[float, float, float]] = []
+    for point in path:
+        direction = _normalize_vector(point)
+        projected.append((direction[0] * radius, direction[1] * radius, direction[2] * radius))
+    return projected
+
+
+# //9.- Apply configured world geometry transformation to the path.
+def _apply_world_geometry(
+    path: Sequence[Sequence[float]],
+    *,
+    world: WorldSettings,
+) -> List[Tuple[float, float, float]]:
+    geometry = world.geometry
+    if geometry == "flat":
+        return [tuple(float(component) for component in point) for point in path]
+    if geometry == "sphere":
+        return _project_path_to_sphere(path, radius=world.radius_m)
+    raise ValueError(f"Unsupported world geometry '{geometry}'")
+
+
+# //10.- High-level helper generating a single loop instance from seeds.
 def generate_loop_tube(
     field: DivergenceFreeField,
     *,
@@ -91,14 +128,15 @@ def generate_loop_tube(
         step_size=settings.loop.step_size_m,
     )
     closed_path = _close_loop(list(path))
-    radii, rooms = _build_radius_profile(path_length=len(closed_path), seeds=seeds, settings=settings)
-    tube = _tube_from_profile(closed_path, radii)
+    shaped_path = _apply_world_geometry(closed_path, world=settings.world)
+    radii, rooms = _build_radius_profile(path_length=len(shaped_path), seeds=seeds, settings=settings)
+    tube = _tube_from_profile(shaped_path, radii)
     profile = LoopProfile(radii=tuple(radii), room_indices=tuple(rooms))
-    descriptor = build_loop_descriptor(closed_path, profile.radii, profile.room_indices)
+    descriptor = build_loop_descriptor(shaped_path, profile.radii, profile.room_indices)
     return LoopGenerationResult(tube=tube, profile=profile, descriptor=descriptor)
 
 
-# //8.- Validate generated tube against clearance constraints producing diagnostics.
+# //11.- Validate generated tube against clearance constraints producing diagnostics.
 def verify_loop_clearance(
     result: LoopGenerationResult,
     *,

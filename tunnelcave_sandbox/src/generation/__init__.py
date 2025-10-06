@@ -8,7 +8,14 @@ from .divergence_free import (
 )
 from .swept_tube import SweptTube, TubeSegment, build_swept_tube, generate_seeded_tube
 from .visualization import ContinuitySample, export_continuity_csv, sample_tube_clearance
-from .settings import GeneratorSettings, LoopSettings, RoomSettings, ClearanceSettings, load_generator_settings
+from .settings import (
+    GeneratorSettings,
+    LoopSettings,
+    RoomSettings,
+    ClearanceSettings,
+    WorldSettings,
+    load_generator_settings,
+)
 from .loop_generation import (
     LoopProfile,
     LoopGenerationResult,
@@ -32,6 +39,7 @@ __all__ = [
     "LoopSettings",
     "RoomSettings",
     "ClearanceSettings",
+    "WorldSettings",
     "load_generator_settings",
     "LoopProfile",
     "LoopGenerationResult",
