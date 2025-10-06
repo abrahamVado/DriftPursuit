@@ -1,15 +1,11 @@
 import { useEffect, useRef, useState } from 'react';
 import * as THREE from 'three';
 import { describeAtmosphere } from '../lib/atmosphere';
-import { defaultPlanetaryShell, MovementCommand, SphericalPosition } from '../lib/planetConfig';
+import { defaultPlanetaryShell } from '../lib/planetConfig';
+import type { MovementCommand, SphericalPosition } from '../lib/planetConfig';
 import { PlanetTraveler } from '../lib/sphericalNavigator';
-import {
-  VehicleBlueprint,
-  VehicleFleet,
-  VehicleSnapshot,
-  blueprintToSnapshot,
-  enforceSurfaceClearance
-} from '../lib/vehicleFleet';
+import { VehicleFleet, blueprintToSnapshot, enforceSurfaceClearance } from '../lib/vehicleFleet';
+import type { VehicleBlueprint, VehicleSnapshot } from '../lib/vehicleFleet';
 import { useWorldEntities } from '../hooks/useWorldEntities';
 import { useSimulationBridgeState } from '../hooks/useSimulationBridgeState';
 import type { EntityTransform } from '@client/networking/worldSession';

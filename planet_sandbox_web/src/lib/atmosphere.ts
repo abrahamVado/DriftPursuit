@@ -1,4 +1,4 @@
-import { PlanetaryShell, SphericalPosition } from './planetConfig';
+import type { PlanetaryShell, SphericalPosition } from './planetConfig';
 
 export interface AtmosphereState {
   altitudeToSurface: number;
