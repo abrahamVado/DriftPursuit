@@ -6,6 +6,20 @@ import * as THREE from 'three'
 import { createVehicleModel } from '../3dmodel/vehicles'
 import type { VehicleId } from '../vehicles'
 
+type DisposableResource = { dispose?: () => void } | null | undefined
+
+type MeshLike = THREE.Object3D & {
+  geometry?: DisposableResource
+  material?: DisposableResource | DisposableResource[]
+}
+
+const disposeResource = (resource: DisposableResource) => {
+  //1.- Invoke disposal when the resource exposes a compatible API without assuming WebGL capabilities in tests.
+  if (resource && typeof resource === 'object' && 'dispose' in resource && typeof resource.dispose === 'function') {
+    resource.dispose()
+  }
+}
+
 const isWebGLAvailable = () => {
   //1.- Attempt to acquire a WebGL context to determine whether rendering is possible in the host environment.
   try {
@@ -37,6 +51,11 @@ const createCamera = (aspect: number) => {
   camera.position.set(4.5, 3.2, 5.4)
   camera.lookAt(new THREE.Vector3(0, 0, 0))
   return camera
+}
+
+export const isMeshLikeObject = (object: THREE.Object3D): object is MeshLike => {
+  //1.- Ensure the traversed node exposes geometry and material slots so cleanup hooks can run when available.
+  return 'geometry' in object && 'material' in object
 }
 
 export default function VehiclePreviewCanvas({ vehicleId }: VehiclePreviewCanvasProps) {
@@ -93,15 +112,13 @@ export default function VehiclePreviewCanvas({ vehicleId }: VehiclePreviewCanvas
       window.removeEventListener('resize', handleResize)
       scene.remove(model)
       model.traverse((child) => {
-        if ('geometry' in child && child.geometry) {
-          child.geometry.dispose()
-        }
-        if ('material' in child) {
-          const material = child.material as THREE.Material | THREE.Material[]
+        if (isMeshLikeObject(child)) {
+          disposeResource(child.geometry)
+          const material = child.material
           if (Array.isArray(material)) {
-            material.forEach((entry) => entry.dispose())
+            material.forEach(disposeResource)
           } else {
-            material.dispose()
+            disposeResource(material)
           }
         }
       })
