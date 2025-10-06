@@ -3,7 +3,7 @@ import * as THREE from 'three';
 import { describeAtmosphere } from '../lib/atmosphere';
 import { defaultPlanetaryShell, MovementCommand, SphericalPosition } from '../lib/planetConfig';
 import { PlanetTraveler } from '../lib/sphericalNavigator';
-import { VehicleBlueprint, VehicleFleet, VehicleSnapshot } from '../lib/vehicleFleet';
+import { VehicleBlueprint, VehicleFleet, VehicleSnapshot, blueprintToSnapshot } from '../lib/vehicleFleet';
 
 interface TelemetrySnapshot {
   position: SphericalPosition;
@@ -43,6 +43,11 @@ const vehicleBlueprints: VehicleBlueprint[] = [
   }
 ];
 
+const initialVehicleTelemetry = vehicleBlueprints.map((blueprint) => {
+  //1.- Seed the telemetry list so companion traffic renders before animations tick.
+  return blueprintToSnapshot(blueprint);
+});
+
 const PlanetSandbox = () => {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const [telemetry, setTelemetry] = useState<TelemetrySnapshot>(() => ({
@@ -50,7 +55,11 @@ const PlanetSandbox = () => {
     laps: 0,
     collidedWithSurface: false,
     hitAtmosphereCeiling: false,
-    vehicles: []
+    vehicles: initialVehicleTelemetry.map((snapshot) => ({
+      //2.- Clone the prepared vehicle snapshots so component state stays immutable.
+      ...snapshot,
+      position: { ...snapshot.position }
+    }))
   }));
 
   useEffect(() => {
@@ -138,6 +147,8 @@ const PlanetSandbox = () => {
       const mesh = new THREE.Mesh(vehicleGeometry, vehicleMaterial);
       mesh.rotation.x = Math.PI / 2;
       scene.add(mesh);
+      const startingPosition = toCartesian(blueprint.start);
+      mesh.position.copy(startingPosition);
       vehicleMeshes.set(blueprint.id, mesh);
     }
 
@@ -199,7 +210,11 @@ const PlanetSandbox = () => {
 
   return (
     <section className="sandbox-wrapper">
-      <div ref={containerRef} style={{ width: 'min(720px, 95vw)', height: 'min(720px, 95vw)' }} />
+      <div ref={containerRef} className="canvas-container" />
+      <header className="sandbox-header">
+        <h1>Planet Sandbox</h1>
+        <p>Navigate a spherical world and stay within the atmosphere.</p>
+      </header>
       <article className="info-panel">
         <span>
           <strong>Latitude</strong>
@@ -239,7 +254,12 @@ const PlanetSandbox = () => {
             {telemetry.vehicles.map((vehicle) => (
               <li key={vehicle.id}>
                 <span>{vehicle.id}</span>
-                <span>{vehicle.position.latitudeDeg.toFixed(1)}° / {vehicle.position.longitudeDeg.toFixed(1)}°</span>
+                <span>
+                  {vehicle.position.latitudeDeg.toFixed(1)}° / {vehicle.position.longitudeDeg.toFixed(1)}°
+                </span>
+                <span>
+                  {(vehicle.position.altitude - defaultPlanetaryShell.surfaceRadius).toFixed(0)} m
+                </span>
               </li>
             ))}
           </ul>

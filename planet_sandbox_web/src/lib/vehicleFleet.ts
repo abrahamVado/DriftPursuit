@@ -46,3 +46,14 @@ export class VehicleFleet {
     return snapshots;
   }
 }
+
+export const blueprintToSnapshot = (blueprint: VehicleBlueprint): VehicleSnapshot => {
+  //1.- Mirror the blueprint starting state into telemetry friendly structures.
+  return {
+    id: blueprint.id,
+    position: { ...blueprint.start },
+    laps: 0,
+    touchingSurface: false,
+    hittingCeiling: false
+  };
+};
