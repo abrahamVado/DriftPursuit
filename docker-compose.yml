@@ -30,7 +30,7 @@ services:
       NEXT_PUBLIC_BROKER_WS_URL: ws://broker:43127/ws
       NEXT_PUBLIC_BROKER_HTTP_URL: http://broker:43127
     ports:
-      - "3000:3000"
+      - "${GAME_HOST_PORT:-3000}:3000"
     networks:
       - battleground
     restart: unless-stopped
