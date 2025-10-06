@@ -113,6 +113,8 @@ export function createVehicleController(options: VehicleControllerOptions = {}):
   }
 
   const activeKeys = new Set<string>()
+  //1.- Remember the most recent PageUp/PageDown throttle adjustments so acceleration can persist without a held key.
+  let latchedThrottle = 0
   const forwardVector: SimpleVector = { x: 0, y: 0, z: -1 }
   const nextPosition: SimpleVector = { x: 0, y: 0, z: 0 }
   const penetrationVector: SimpleVector = { x: 0, y: 0, z: 0 }
@@ -135,7 +137,14 @@ export function createVehicleController(options: VehicleControllerOptions = {}):
   }
 
   const handleKeyDown = (event: KeyboardEvent) => {
-    activeKeys.add(normaliseKey(event.key))
+    //1.- Capture the pressed key, latch throttle adjustments, and track active modifiers for direct controls.
+    const key = normaliseKey(event.key)
+    if (key === 'pageup') {
+      latchedThrottle = Math.min(1, latchedThrottle + 1)
+    } else if (key === 'pagedown') {
+      latchedThrottle = Math.max(-1, latchedThrottle - 1)
+    }
+    activeKeys.add(key)
   }
 
   const handleKeyUp = (event: KeyboardEvent) => {
@@ -147,8 +156,8 @@ export function createVehicleController(options: VehicleControllerOptions = {}):
     window.addEventListener('keyup', handleKeyUp)
   }
 
-  const forwardKeys = ['arrowup', 'pageup']
-  const backwardKeys = ['arrowdown', 'pagedown']
+  const forwardKeys = ['arrowup']
+  const backwardKeys = ['arrowdown']
   const leftKeys = ['a', 'arrowleft']
   const rightKeys = ['d', 'arrowright']
 
@@ -160,8 +169,9 @@ export function createVehicleController(options: VehicleControllerOptions = {}):
   const step = (delta: number, object: THREE.Object3D) => {
     //1.- Determine the frame delta, active control intents, and whether boost or brake modifiers are engaged.
     const dt = Math.min(delta, deltaClamp)
-    const forwardIntent = (forwardKeys.some((key) => activeKeys.has(key)) ? 1 : 0) -
+    const directThrottle = (forwardKeys.some((key) => activeKeys.has(key)) ? 1 : 0) -
       (backwardKeys.some((key) => activeKeys.has(key)) ? 1 : 0)
+    const forwardIntent = Math.max(-1, Math.min(1, latchedThrottle + directThrottle))
     const turnIntent = (leftKeys.some((key) => activeKeys.has(key)) ? 1 : 0) -
       (rightKeys.some((key) => activeKeys.has(key)) ? 1 : 0)
     const braking = brakeKeys.some((key) => activeKeys.has(key))
@@ -321,6 +331,7 @@ export function createVehicleController(options: VehicleControllerOptions = {}):
       window.removeEventListener('keyup', handleKeyUp)
     }
     activeKeys.clear()
+    latchedThrottle = 0
   }
 
   return {

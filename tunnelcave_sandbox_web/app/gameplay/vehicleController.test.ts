@@ -115,7 +115,7 @@ describe('createVehicleController', () => {
     controller.dispose()
   })
 
-  it('accepts PageUp as a throttle input for forward acceleration', () => {
+  it('latches throttle when PageUp is tapped', () => {
     const controller = createVehicleController({
       baseAcceleration: 40,
       maxForwardSpeed: 90,
@@ -124,10 +124,36 @@ describe('createVehicleController', () => {
     })
     const craft = new THREE.Object3D()
     window.dispatchEvent(new KeyboardEvent('keydown', { key: 'PageUp' }))
+    window.dispatchEvent(new KeyboardEvent('keyup', { key: 'PageUp' }))
     for (let index = 0; index < 60; index += 1) {
       controller.step(0.1, craft)
     }
     expect(controller.getSpeed()).toBeCloseTo(90, 0)
+    controller.dispose()
+  })
+
+  it('ratchets the latched throttle downward when PageDown is pressed', () => {
+    const controller = createVehicleController({
+      baseAcceleration: 50,
+      maxForwardSpeed: 80,
+      dragFactor: 0.9,
+      bounds: 1000,
+    })
+    const craft = new THREE.Object3D()
+    //1.- Engage a forward latch, allow the craft to build speed, and capture the resulting velocity.
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'PageUp' }))
+    window.dispatchEvent(new KeyboardEvent('keyup', { key: 'PageUp' }))
+    for (let index = 0; index < 20; index += 1) {
+      controller.step(0.1, craft)
+    }
+    const latchedForwardSpeed = controller.getSpeed()
+    //2.- Ratchet the throttle down with PageDown and confirm sustained steps now bleed off velocity.
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'PageDown' }))
+    window.dispatchEvent(new KeyboardEvent('keyup', { key: 'PageDown' }))
+    for (let index = 0; index < 30; index += 1) {
+      controller.step(0.1, craft)
+    }
+    expect(controller.getSpeed()).toBeLessThan(latchedForwardSpeed)
     controller.dispose()
   })
 
