@@ -15,6 +15,9 @@ describe('applyNoiseDisplacement', () => {
         Object.freeze({ frequency: 1.0, amplitude: 0 }),
       ]),
       lodThresholds: Object.freeze([0.1]),
+      seaLevel: 60,
+      surfaceClearance: 2,
+      atmosphereHeight: 50,
     }
     //2.- Evaluate the displacement field and verify each vertex simply scales by the maximum radius.
     const field = applyNoiseDisplacement(mesh, configuration)
@@ -42,6 +45,9 @@ describe('applyNoiseDisplacement', () => {
         Object.freeze({ frequency: 1.5, amplitude: 3 }),
       ]),
       lodThresholds: Object.freeze([0.1, 0.05]),
+      seaLevel: 140,
+      surfaceClearance: 5,
+      atmosphereHeight: 70,
     }
     //2.- Compute the displacement field and confirm the output varies while remaining stable across calls.
     const fieldA = applyNoiseDisplacement(mesh, configuration)
@@ -71,6 +77,9 @@ describe('applyNoiseDisplacement', () => {
       radii: Object.freeze([50, 55, 62]),
       noiseLayers: Object.freeze([Object.freeze({ frequency: 0.4, amplitude: 2.5 })]),
       lodThresholds: Object.freeze([0.2]),
+      seaLevel: 40,
+      surfaceClearance: 1.5,
+      atmosphereHeight: 25,
     }
     //2.- Verify the displacement output exposes immutable typed arrays sized to the vertex count.
     const field = applyNoiseDisplacement(mesh, configuration)

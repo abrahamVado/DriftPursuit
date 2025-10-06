@@ -4,6 +4,9 @@ export interface PlanetSpec {
   readonly frequencies: readonly number[]
   readonly amplitudes: readonly number[]
   readonly lodThresholds: readonly number[]
+  readonly seaLevel: number
+  readonly surfaceClearance: number
+  readonly atmosphereHeight: number
 }
 
 export interface PlanetNoiseLayer {
@@ -16,6 +19,9 @@ export interface PlanetConfiguration {
   readonly radii: readonly number[]
   readonly noiseLayers: readonly PlanetNoiseLayer[]
   readonly lodThresholds: readonly number[]
+  readonly seaLevel: number
+  readonly surfaceClearance: number
+  readonly atmosphereHeight: number
 }
 
 export interface FetchResponseLike {
@@ -79,6 +85,9 @@ export function parsePlanetSpec(raw: unknown): PlanetSpec {
   const frequencies = ensureNumberArray(record.frequencies, 'frequencies')
   const amplitudes = ensureNumberArray(record.amplitudes, 'amplitudes')
   const lodThresholds = ensureNumberArray(record.lodThresholds, 'lodThresholds')
+  const seaLevel = ensureNumber(record.seaLevel, 'seaLevel')
+  const surfaceClearance = ensureNumber(record.surfaceClearance, 'surfaceClearance')
+  const atmosphereHeight = ensureNumber(record.atmosphereHeight, 'atmosphereHeight')
   //2.- Guarantee that noise parameters remain paired by length to avoid runtime mismatches during FBM evaluation.
   if (frequencies.length !== amplitudes.length) {
     throw new PlanetSpecValidationError('frequencies and amplitudes must have matching lengths')
@@ -89,6 +98,9 @@ export function parsePlanetSpec(raw: unknown): PlanetSpec {
     frequencies: Object.freeze([...frequencies]),
     amplitudes: Object.freeze([...amplitudes]),
     lodThresholds: Object.freeze([...lodThresholds]),
+    seaLevel,
+    surfaceClearance,
+    atmosphereHeight,
   }
 }
 
@@ -106,6 +118,9 @@ export function createPlanetConfiguration(spec: PlanetSpec): PlanetConfiguration
     radii: spec.radii,
     noiseLayers: Object.freeze(noiseLayers),
     lodThresholds: spec.lodThresholds,
+    seaLevel: spec.seaLevel,
+    surfaceClearance: spec.surfaceClearance,
+    atmosphereHeight: spec.atmosphereHeight,
   }
 }
 
