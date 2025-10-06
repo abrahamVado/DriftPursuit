@@ -55,4 +55,22 @@ describe('PlanetTraveler', () => {
 
     expect(traveler.position.latitudeDeg).toBeCloseTo(0, 3);
   });
+
+  it('applies the surface clearance immediately when starting below the terrain', () => {
+    const belowSurface: SphericalPosition = {
+      latitudeDeg: 12,
+      longitudeDeg: -30,
+      altitude: defaultPlanetaryShell.surfaceRadius - 5_000
+    };
+    const clearance = 1_500;
+    const traveler = new PlanetTraveler(defaultPlanetaryShell, belowSurface, { surfacePadding: clearance });
+
+    //1.- The constructor should bump the traveler upwards before any movement occurs.
+    expect(traveler.position.altitude).toBe(defaultPlanetaryShell.surfaceRadius + clearance);
+
+    //2.- A stationary integration should keep the traveler outside without reporting a collision.
+    const result = traveler.move({ headingDeg: 0, distance: 0, climb: 0 });
+    expect(result.position.altitude).toBe(defaultPlanetaryShell.surfaceRadius + clearance);
+    expect(result.collidedWithSurface).toBe(false);
+  });
 });

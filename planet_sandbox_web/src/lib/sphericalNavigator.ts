@@ -35,12 +35,17 @@ export class PlanetTraveler {
   constructor(shell: PlanetaryShell, initialPosition: SphericalPosition, options: NavigatorOptions = {}) {
     //1.- Persist the configuration so every move uses the same planetary radii.
     this.shell = shell;
-    //2.- Remember where the traveler starts from to drive all subsequent updates.
-    this.current = { ...initialPosition };
-    //3.- Track longitude without wrapping to measure circumnavigation precisely.
-    this.unboundedLongitudeRad = initialPosition.longitudeDeg * DEG_TO_RAD;
-    //4.- Accept a tunable hover padding to avoid numerical collision chatter.
+    //2.- Accept a tunable hover padding to avoid numerical collision chatter.
     this.surfacePadding = options.surfacePadding ?? 0.5;
+    //3.- Elevate the starting state into the safe orbital band so spawning never happens inside the planet.
+    const minimumAltitude = this.shell.surfaceRadius + this.surfacePadding;
+    const maximumAltitude = this.shell.exosphereRadius;
+    this.current = {
+      ...initialPosition,
+      altitude: clamp(initialPosition.altitude, minimumAltitude, maximumAltitude)
+    };
+    //4.- Track longitude without wrapping to measure circumnavigation precisely.
+    this.unboundedLongitudeRad = initialPosition.longitudeDeg * DEG_TO_RAD;
   }
 
   get position(): SphericalPosition {
@@ -91,16 +96,15 @@ export class PlanetTraveler {
     this.unboundedLongitudeRad = newUnboundedLongitude;
 
     //7.- Integrate the climb command while clamping between the terrain and ceiling.
-    const newAltitude = clamp(
-      this.current.altitude + command.climb,
-      this.shell.surfaceRadius + this.surfacePadding,
-      this.shell.exosphereRadius
-    );
+    const minimumAltitude = this.shell.surfaceRadius + this.surfacePadding;
+    const maximumAltitude = this.shell.exosphereRadius;
+    const requestedAltitude = this.current.altitude + command.climb;
+    const newAltitude = clamp(requestedAltitude, minimumAltitude, maximumAltitude);
 
-    //8.- Flag collisions with the solid surface whenever the clamp hit the floor.
-    const collidedWithSurface = newAltitude <= this.shell.surfaceRadius + this.surfacePadding + Number.EPSILON;
-    //9.- Flag atmosphere ceiling hits when the clamp saturates the upper bound.
-    const hitAtmosphereCeiling = newAltitude >= this.shell.exosphereRadius - Number.EPSILON;
+    //8.- Flag collisions with the solid surface whenever movement tried to dip below the clearance band.
+    const collidedWithSurface = requestedAltitude < minimumAltitude;
+    //9.- Flag atmosphere ceiling hits when commands attempt to exceed the outer shell.
+    const hitAtmosphereCeiling = requestedAltitude > maximumAltitude;
 
     //10.- Assemble the updated state in degrees for downstream consumers.
     const updatedPosition: SphericalPosition = {
