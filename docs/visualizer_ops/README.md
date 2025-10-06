@@ -7,8 +7,7 @@ section in order to ensure the three services share credentials and network bind
 ## Prerequisites
 - **Go 1.24.x** (matches the `toolchain go1.24.3` directive in `go-broker/go.mod`).
 - **Python 3.11+** with `pip` available for managing the bridge dependencies.
-- **Node.js 20.x** with `corepack` enabled so pnpm 10.18.x can be activated (see `docs/visualizer_setup/README.md`).
-- **pnpm 10.18.x** (`corepack use pnpm@10.18.0`) for the Next.js workspace.
+- **Node.js 20.x** with npm 8+ available for the Next.js workspace (see `docs/visualizer_setup/README.md`).
 - **Environment ports** `43127` (WebSocket broker) and `8000` (HTTP bridge) must be free.
 
 ## 1. Launch the Go broker
@@ -52,29 +51,29 @@ section in order to ensure the three services share credentials and network bind
    Expect a JSON payload similar to `{ "status": "ok", "message": "Simulation bridge online" }` as defined in
    `python-sim/web_bridge/server.py`.
 
-## 3. Configure and run the Vite visualizer client
+## 3. Configure and run the Next.js visualizer client
 1. Install dependencies:
-   ```bash
-   cd planet_sandbox_web
-   npm install
-   ```
+  ```bash
+  cd game
+  npm install
+  ```
 2. Scaffold `.env.local` with broker endpoints:
-   ```bash
-   ../scripts/setup-env.sh --force
-   ```
-   The generated file defines `VITE_BROKER_URL=ws://localhost:43127/ws` and
-   `VITE_SIM_BRIDGE_URL=http://localhost:8000` so the browser can reach both services.
+  ```bash
+  ../scripts/setup-env.sh --force
+  ```
+  The generated file defines `NEXT_PUBLIC_BROKER_WS_URL=ws://localhost:43127/ws` and
+  `NEXT_PUBLIC_BROKER_HTTP_URL=http://localhost:43127` so the browser can reach both services.
 3. Launch the development server:
-   ```bash
-   npm run dev
-   ```
+  ```bash
+  npm run dev
+  ```
 4. Open `http://localhost:3000` in a browser. The bridge panel surfaces handshake status and highlights missing configuration.
 
 ## 4. Test expectations before merge
 All automated suites must be green prior to merging changes:
 - Run the Go unit suite: `cd go-broker && go test ./...`.
 - Execute the Python bridge tests: `cd python-sim && pytest`.
-- From `planet_sandbox_web`, ensure `npm test` passes so the networking mocks, procedural geometry, and UI interaction
+- From `game`, ensure `npm test` passes so the networking mocks, procedural geometry, and UI interaction
   Vitest suites stay healthy.
 
 Document successful runs (timestamps and commit hash) in your pull request description when promoting changes to the main

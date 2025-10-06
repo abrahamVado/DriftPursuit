@@ -5,7 +5,7 @@ DriftPursuit is a cross‑service prototype for a cavernous aerial battle‑roya
 The repository contains:
 
 - **go-broker/** — authoritative Go simulation server with WebSocket and gRPC interfaces.
-- **planet_sandbox_web/** — Vite-powered web client that renders the orbital sandbox and connects to the live services.
+- **game/** — Next.js web client that renders the orbital sandbox and connects to the live services.
 - **python-sim/** — reference bots and SDK utilities for automated playtesting.
 
 Runtime behaviour is configuration‑driven. Environment variable defaults and override guidance live in
@@ -39,12 +39,12 @@ Runtime behaviour is configuration‑driven. Environment variable defaults and o
      go mod download
      cd ..
      ```
-   - **Web client (Vite + three.js app)**
-     ```bash
-     cd planet_sandbox_web
-     npm install            # or: pnpm install
-     cd ..
-     ```
+  - **Web client (Next.js + three.js app)**
+    ```bash
+    cd game
+    npm install            # or: pnpm install
+    cd ..
+    ```
    - **Bots / SDK (Python)**
      ```bash
      cd python-sim
@@ -68,17 +68,17 @@ Runtime behaviour is configuration‑driven. Environment variable defaults and o
    - Broker listens on **:43127** (WebSocket + gRPC).
 
 4. **Start the web client (terminal B)**
-   ```bash
-   cd planet_sandbox_web
-   npm run dev
-   ```
-   - Served at **http://localhost:3000**.
-   - Ensure the web client knows how to reach the broker via env:
-     ```bash
-     # in planet_sandbox_web/.env.local (example)
-     VITE_BROKER_URL=ws://localhost:43127/ws
-     VITE_SIM_BRIDGE_URL=http://localhost:8000
-     ```
+  ```bash
+  cd game
+  npm run dev
+  ```
+  - Served at **http://localhost:3000**.
+  - Ensure the web client knows how to reach the broker via env:
+    ```bash
+    # in game/.env.local (example)
+    NEXT_PUBLIC_BROKER_WS_URL=ws://localhost:43127/ws
+    NEXT_PUBLIC_BROKER_HTTP_URL=http://localhost:43127
+    ```
 
 5. **(Optional) Run a reference bot (terminal C)**
    ```bash
@@ -99,7 +99,7 @@ Runtime behaviour is configuration‑driven. Environment variable defaults and o
 - Web: **http://localhost:3000**
 - Broker: **localhost:43127**
 - Simulation bridge: **http://localhost:8000/handshake**
-- The web client container builds the static Vite bundle with `VITE_BROKER_URL=ws://host.docker.internal:43127/ws` and `VITE_SIM_BRIDGE_URL=http://localhost:8000` so the browser reaches the bundled services without additional configuration.
+- The web client container builds the production Next.js bundle with `NEXT_PUBLIC_BROKER_WS_URL=ws://broker:43127/ws` and `NEXT_PUBLIC_BROKER_HTTP_URL=http://broker:43127` so in-cluster requests resolve correctly. You may override these values at runtime if required.
 - Stop with `docker compose down`.
 
 7. **(Optional) Build container images individually**
@@ -111,15 +111,15 @@ Runtime behaviour is configuration‑driven. Environment variable defaults and o
    docker build -t driftpursuit/bot-runner:local python-sim
 
    # Web client
-   docker build -t driftpursuit/web-client:local planet_sandbox_web
+   docker build -t driftpursuit/game:local -f game/Dockerfile .
    ```
 
 8. **(Optional) Production build for the web client**
-   ```bash
-   cd planet_sandbox_web
-   npm run build
-   npm run preview   # serves the built Vite app
-   ```
+  ```bash
+  cd game
+  npm run build
+  npm run start   # serves the built Next.js app
+  ```
 
 ---
 
@@ -133,7 +133,7 @@ cd go-broker
 go run ./...
 
 # In a new shell, run client assets
-cd ../planet_sandbox_web
+cd ../game
 npm install      # or pnpm install
 npm run dev
 
@@ -144,7 +144,7 @@ poetry run python scripts/run_bot.py
 ```
 
 - The broker listens on **:43127** and serves **WebSocket** plus **gRPC** endpoints.
-- The web client defaults to **http://localhost:3000** and expects **VITE_BROKER_URL** to reference the broker address.
+- The web client defaults to **http://localhost:3000** and expects **NEXT_PUBLIC_BROKER_WS_URL** to reference the broker address.
 - Bots use gRPC/WebSocket endpoints; ensure **BROKER_WS_URL** and **BROKER_GRPC_ADDR** match your local broker settings.
 
 Key broker endpoints while iterating:
@@ -168,7 +168,7 @@ Service summary:
 
 - **broker** — exposed on `localhost:43127`; override environment variables via `.env` or inline Compose edits.
 - **bot-runner** — connects using `BROKER_WS_URL=ws://broker:43127/ws` and propagates the configured `TRACE_HEADER`.
-- **web-client** — served on `http://localhost:3000` with `VITE_BROKER_URL` embedded during the build.
+- **game** — served on `http://localhost:3000` with `NEXT_PUBLIC_BROKER_*` values embedded during the build.
 
 Shut everything down with `docker compose down` and inspect logs using `docker compose logs -f <service>`.
 
@@ -182,7 +182,7 @@ docker build -t driftpursuit/broker:local go-broker
 docker build -t driftpursuit/bot-runner:local python-sim
 
 # Web client
-docker build -t driftpursuit/web-client:local planet_sandbox_web
+docker build -t driftpursuit/game:local -f game/Dockerfile .
 ```
 
 ---
