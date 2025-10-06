@@ -81,9 +81,11 @@ describe('ClientBootstrap', () => {
     const statusText = message?.textContent ?? ''
     expect(statusText).toContain('ws://localhost:43127/ws')
     expect(statusText).toContain('Pilot: sandbox-player')
+    expect(statusText).toContain('Session: shared-sandbox')
     expect(statusText).toContain('Vehicle: arrowhead')
     expect(mountClientShell).toHaveBeenCalledWith({
       brokerUrl: 'ws://localhost:43127/ws',
+      brokerSubject: 'shared-sandbox',
       playerProfile: { pilotName: '', vehicleId: 'arrowhead' },
     })
     await teardown()
@@ -115,15 +117,20 @@ describe('ClientBootstrap', () => {
     })
 
     const nameInput = container.querySelector<HTMLInputElement>('[data-testid="pilot-name-input"]')
+    const sessionInput = container.querySelector<HTMLInputElement>('[data-testid="session-code-input"]')
     const vehicleSelect = container.querySelector<HTMLSelectElement>('[data-testid="vehicle-select"]')
     const startButton = container.querySelector<HTMLButtonElement>('[data-testid="start-session-button"]')
 
     expect(nameInput).not.toBeNull()
+    expect(sessionInput).not.toBeNull()
     expect(vehicleSelect).not.toBeNull()
     expect(startButton).not.toBeNull()
 
     if (nameInput) {
       fireEvent.change(nameInput, { target: { value: 'Nova Seeker' } })
+    }
+    if (sessionInput) {
+      fireEvent.change(sessionInput, { target: { value: 'squad-alpha' } })
     }
     if (vehicleSelect) {
       fireEvent.change(vehicleSelect, { target: { value: 'aurora' } })
@@ -137,11 +144,13 @@ describe('ClientBootstrap', () => {
     })
     expect(mountClientShell).toHaveBeenLastCalledWith({
       brokerUrl: 'ws://localhost:43127/ws',
+      brokerSubject: 'squad-alpha',
       playerProfile: { pilotName: 'Nova Seeker', vehicleId: 'aurora' },
     })
     const params = new URLSearchParams(window.location.search)
     expect(params.get('pilot')).toBe('Nova Seeker')
     expect(params.get('vehicle')).toBe('aurora')
+    expect(params.get('session')).toBe('squad-alpha')
 
     await teardown()
   })
@@ -159,6 +168,7 @@ describe('ClientBootstrap', () => {
 
     expect(shareInput?.value ?? '').toMatch(/^http:\/\/localhost(?::\d+)?\/play/)
     expect(shareInput?.value ?? '').toContain('vehicle=arrowhead')
+    expect(shareInput?.value ?? '').toContain('session=shared-sandbox')
 
     if (nameInput) {
       fireEvent.change(nameInput, { target: { value: 'Nova Seeker' } })
@@ -171,6 +181,7 @@ describe('ClientBootstrap', () => {
       expect(shareUrl.pathname).toBe('/play')
       expect(shareUrl.searchParams.get('pilot')).toBe('Nova Seeker')
       expect(shareUrl.searchParams.get('vehicle')).toBe('arrowhead')
+      expect(shareUrl.searchParams.get('session')).toBe('shared-sandbox')
     })
 
     await teardown()
