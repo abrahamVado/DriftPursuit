@@ -11,6 +11,7 @@ from .planet import (
     CubedSphereTile,
     PlanetSDF,
     PlanetSpec,
+    PlanetSurfaceAdvance,
     TileScatterer,
     TileStreamer,
 )
@@ -25,6 +26,7 @@ __all__ = [
     "advance_surface_bound_body",
     "PlanetSpec",
     "PlanetSDF",
+    "PlanetSurfaceAdvance",
     "CubedSphereTile",
     "TileStreamer",
     "TileScatterer",

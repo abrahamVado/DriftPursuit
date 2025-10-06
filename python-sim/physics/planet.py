@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from typing import Dict, Iterable, Iterator, List, Mapping, MutableMapping, Optional, Sequence, Tuple
 
 from .sdf import SignedDistanceField
+from .penetration import BodyState
 
 Vector3 = Tuple[float, float, float]
 
@@ -218,6 +219,61 @@ class PlanetSDF(SignedDistanceField):
         if temperature > 0.3:
             return "grassland" if moisture < 0.6 else "forest"
         return "tundra" if moisture < 0.5 else "taiga"
+
+    def advance_surface_body(
+        self,
+        state: BodyState,
+        *,
+        radius: float,
+        dt: float,
+        clearance: float = 0.0,
+        normal_epsilon: float = 1e-3,
+    ) -> "PlanetSurfaceAdvance":
+        """Integrate a surface vehicle while enforcing the spherical altitude band."""
+
+        if radius < 0.0:
+            raise ValueError("radius must be non-negative for surface vehicles")
+        # //1.- Advance the position using explicit Euler integration in planet-fixed space.
+        predicted_position = (
+            state.position[0] + state.velocity[0] * dt,
+            state.position[1] + state.velocity[1] * dt,
+            state.position[2] + state.velocity[2] * dt,
+        )
+        try:
+            direction = _normalize(predicted_position)
+        except ValueError:
+            direction = _normalize(state.position)
+        displacement = self._displacement_field.displacement(direction)
+        terrain_radius = self._spec.radius + displacement + clearance + radius
+        atmosphere_radius = self._spec.radius + self._spec.atmosphere_height
+        clamped_radius = min(max(terrain_radius, 0.0), atmosphere_radius)
+        clamped_position = (
+            direction[0] * clamped_radius,
+            direction[1] * clamped_radius,
+            direction[2] * clamped_radius,
+        )
+        # //2.- Sample the SDF gradient to provide a world-space surface normal.
+        normal = self.surface_normal(clamped_position, epsilon=normal_epsilon)
+        # //3.- Project the velocity onto the tangent plane to remain glued to the surface.
+        normal_speed = _dot(state.velocity, normal)
+        tangential_velocity = (
+            state.velocity[0] - normal[0] * normal_speed,
+            state.velocity[1] - normal[1] * normal_speed,
+            state.velocity[2] - normal[2] * normal_speed,
+        )
+        # //4.- Derive the residual clearance between the hull and displaced surface.
+        altitude = max(0.0, self.sample(clamped_position) - radius)
+        next_state = BodyState(position=clamped_position, velocity=tangential_velocity)
+        return PlanetSurfaceAdvance(state=next_state, normal=normal, clearance=altitude)
+
+
+@dataclass(frozen=True)
+class PlanetSurfaceAdvance:
+    """Result of advancing a body constrained to the procedural planet."""
+
+    state: BodyState
+    normal: Vector3
+    clearance: float
 
 
 @dataclass(frozen=True)
@@ -489,4 +545,9 @@ def _remap(displacement_field: PlanetDisplacementField, direction: Sequence[floa
     # //1.- Evaluate a low-frequency displacement to drive the climate fields.
     value = displacement_field._noise.sample(direction, frequency)
     return value * 0.5 + 0.5
+
+
+def _dot(a: Sequence[float], b: Sequence[float]) -> float:
+    # //1.- Compute the dot product to project velocities onto the surface normal.
+    return float(a[0]) * float(b[0]) + float(a[1]) * float(b[1]) + float(a[2]) * float(b[2])
 

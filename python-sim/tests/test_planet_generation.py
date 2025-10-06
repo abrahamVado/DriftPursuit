@@ -18,6 +18,7 @@ from physics.planet import (
     TileScatterer,
     TileStreamer,
 )
+from physics import BodyState  # type: ignore  # pylint: disable=import-error
 
 
 @pytest.fixture
@@ -100,4 +101,58 @@ def test_scatterer_is_deterministic(sample_spec: PlanetSpec) -> None:
     # //2.- Altering the seed must update the distribution.
     alternate = scatterer.scatter(tile, seed=sample_spec.scatter_seed + 1)
     assert first != alternate
+
+
+def _length(vector: tuple[float, float, float]) -> float:
+    return math.sqrt(sum(component * component for component in vector))
+
+
+def _normalize(vector: tuple[float, float, float]) -> tuple[float, float, float]:
+    magnitude = _length(vector)
+    return tuple(component / magnitude for component in vector)
+
+
+def _dot(a: tuple[float, float, float], b: tuple[float, float, float]) -> float:
+    return a[0] * b[0] + a[1] * b[1] + a[2] * b[2]
+
+
+def _cross(a: tuple[float, float, float], b: tuple[float, float, float]) -> tuple[float, float, float]:
+    return (
+        a[1] * b[2] - a[2] * b[1],
+        a[2] * b[0] - a[0] * b[2],
+        a[0] * b[1] - a[1] * b[0],
+    )
+
+
+def test_surface_body_tracks_planet(sample_spec: PlanetSpec) -> None:
+    # //1.- Constrain a body to the spherical terrain and verify it follows curvature.
+    planet = PlanetSDF(sample_spec)
+    vehicle_radius = 2.0
+    clearance = 3.0
+    start_direction = (1.0, 0.25, 0.0)
+    start_direction = _normalize(start_direction)
+    start_center = planet.clamp_height(
+        tuple(component * (sample_spec.radius + clearance + vehicle_radius) for component in start_direction),
+        clearance=clearance + vehicle_radius,
+    )
+    normal = planet.surface_normal(start_center)
+    tangent_seed = _cross(normal, (0.0, 1.0, 0.0))
+    if _length(tangent_seed) < 1e-6:
+        tangent_seed = _cross(normal, (0.0, 0.0, 1.0))
+    tangent = _normalize(tangent_seed)
+    state = BodyState(position=start_center, velocity=tuple(component * 120.0 for component in tangent))
+    total_steps = 180
+    dt = 0.05
+    for _ in range(total_steps):
+        result = planet.advance_surface_body(
+            state, radius=vehicle_radius, dt=dt, clearance=clearance
+        )
+        state = result.state
+        # //2.- The clamped altitude should equal the requested clearance tolerance.
+        assert result.clearance == pytest.approx(clearance, abs=1e-3, rel=1e-3)
+        assert _dot(state.position, result.normal) > 0.0
+        assert _dot(state.velocity, result.normal) == pytest.approx(0.0, abs=1e-3)
+    # //3.- Confirm that the trajectory wraps around the planet instead of remaining planar.
+    final_direction = _normalize(state.position)
+    assert abs(final_direction[2]) > 0.1
 
