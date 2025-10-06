@@ -48,6 +48,20 @@ export class Vector3 {
     this.z += (target.z - this.z) * alpha
     return this
   }
+
+  lengthSq(): number {
+    //1.- Provide squared length calculations so terrain sampling logic can detect zero vectors.
+    return this.x * this.x + this.y * this.y + this.z * this.z
+  }
+
+  normalize(): this {
+    //2.- Normalise the vector while guarding against division by zero for deterministic slopes.
+    const length = Math.sqrt(this.lengthSq()) || 1
+    this.x /= length
+    this.y /= length
+    this.z /= length
+    return this
+  }
 }
 
 export class Euler {
@@ -377,6 +391,27 @@ export class SphereGeometry extends BufferGeometry {
 export class ConeGeometry extends BufferGeometry {
   //1.- Capture cone dimensions for stalactite generation assertions.
   constructor(public radius: number, public height: number, public radialSegments: number) {
+    super()
+  }
+}
+
+export class BoxGeometry extends BufferGeometry {
+  //1.- Record box dimensions so previews can inspect fuselage proportions.
+  constructor(public width: number, public height: number, public depth: number) {
+    super()
+  }
+}
+
+export class CylinderGeometry extends BufferGeometry {
+  //1.- Track top/bottom radii for glider fuselage approximations.
+  constructor(public radiusTop: number, public radiusBottom: number, public height: number, public radialSegments: number) {
+    super()
+  }
+}
+
+export class CapsuleGeometry extends BufferGeometry {
+  //1.- Persist capsule parameters so heavy escort meshes can be asserted without full geometry buffers.
+  constructor(public radius: number, public length: number, public capSegments: number, public radialSegments: number) {
     super()
   }
 }
