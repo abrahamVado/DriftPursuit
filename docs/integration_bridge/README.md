@@ -3,7 +3,7 @@
 ## Audit Summary
 - `python-sim` exposes vehicle state via physics modules and now provides an HTTP bridge at `web_bridge.server` for handshake, state polling, and command dispatch.
 - `tunnelcave_sandbox` hosts legacy simulation scenes compatible with the Python runtime.
-- `planet_sandbox_web` renders the browser client using Vite + React, with components that connect directly to the HTTP bridge.
+- `game` renders the browser client using Next.js + React, with components that connect directly to the HTTP bridge.
 
 ## Communication Layer Decisions
 - Initial integration keeps the authoritative simulation in Python and synchronises through an HTTP bridge to reduce browser-side porting.
@@ -14,7 +14,7 @@
 - Convert assets to `glTF` using Blender export presets to minimise file size before publishing to the web client.
 
 ## Front-End Rendering & Controls
-- The Vite client includes `SimulationBridgePanel`, enabling handshake verification and dispatch of throttle/brake commands.
+- The Next.js client includes `SimulationBridgePanel`, enabling handshake verification and dispatch of throttle/brake commands.
 - Integration with the 3D renderer will map telemetry returned by `/state` into scene graph updates.
 
 ## Back-End API
@@ -29,7 +29,7 @@
 
 ## Deployment Notes
 - Start the server via `python -m web_bridge.server` with `PYTHONPATH=python-sim` during development.
-- Run `npm run dev` inside `planet_sandbox_web` and set `VITE_SIM_BRIDGE_URL` to the bridge origin (e.g. `http://localhost:8000`).
+- Run `npm run dev` inside `game` and set `NEXT_PUBLIC_BROKER_HTTP_URL` or the bridge-specific env to the origin (e.g. `http://localhost:8000`).
 
 ## Next Steps
 - Wire real simulation telemetry into the `state_provider` callback.
