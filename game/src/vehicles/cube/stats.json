@@ -1,0 +1,6 @@
+{
+  "thrust": 10,
+  "turn": 1.1,
+  "hp": 260,
+  "missileLock": 1.2
+}
