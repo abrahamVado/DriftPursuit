@@ -6,6 +6,7 @@ import { createPlayer } from '@/vehicles/shared/player'
 import { createInput } from '@/ui/inputMap'
 import { createCorridor } from '@/spawn/corridor'
 import { createSpawner } from '@/spawn/spawnTable'
+import type { BrokerIntentSnapshot, BrokerWorldDiffEnvelope } from '@/lib/brokerClient'
 
 export type GameAPI = {
   actions: any
@@ -20,6 +21,8 @@ export type GameAPI = {
     laserCooldown: number
     bombArmed: boolean
   }
+  ingestWorldDiff: (diff: BrokerWorldDiffEnvelope) => void
+  sampleIntent: () => BrokerIntentSnapshot
 }
 
 export const DEFAULT_SCENE_OPTS = {
@@ -76,6 +79,7 @@ export function initGame(container: HTMLDivElement, opts = DEFAULT_SCENE_OPTS, o
   let last = performance.now()
   let stage = 1
   let score = 0
+  let latestTick = 0
   let readyFired = false
 
   function frame(now: number) {
@@ -117,13 +121,54 @@ export function initGame(container: HTMLDivElement, opts = DEFAULT_SCENE_OPTS, o
       missiles: player.controller.missiles,
       laserCooldown: player.controller.laserCooldownMs,
       bombArmed: player.controller.bombArmed
-    })
+    }),
+    ingestWorldDiff: (diff) => {
+      //1.- Ignore stale or unrelated payloads so the local scene only reacts to advancing authoritative ticks.
+      if (!diff || diff.type !== 'world_diff' || typeof diff.tick !== 'number' || diff.tick <= latestTick) {
+        return
+      }
+      latestTick = diff.tick
+
+      //2.- Fold HUD-centric metadata into the aggregated score and stage trackers.
+      if (Array.isArray(diff.events)) {
+        for (const event of diff.events) {
+          const metadata = event?.metadata
+          if (!metadata) continue
+          const scoreDelta = Number(metadata.score_delta ?? metadata.score)
+          if (!Number.isNaN(scoreDelta)) {
+            score += scoreDelta
+          }
+          const stageValue = Number(metadata.stage ?? metadata.stage_index)
+          if (!Number.isNaN(stageValue) && stageValue > 0) {
+            stage = stageValue
+          }
+        }
+      }
+    },
+    sampleIntent: () => {
+      //3.- Translate the instantaneous input map into the broker intent schema fields.
+      const throttle = input.pressed('KeyW') ? 1 : input.pressed('KeyS') ? -1 : 0
+      const brake = input.pressed('Space') || throttle < 0 ? 1 : 0
+      const steer = (input.pressed('KeyD') ? 1 : 0) - (input.pressed('KeyA') ? 1 : 0)
+      const handbrake = input.pressed('KeyF') || input.pressed('KeyC')
+      const boost = input.pressed('ShiftLeft') || input.pressed('ShiftRight')
+
+      return {
+        throttle,
+        brake,
+        steer,
+        handbrake,
+        gear: 1,
+        boost
+      }
+    }
   }
 
   function dispose() {
     removeEventListener('resize', onResize)
     renderer.dispose()
     container.removeChild(renderer.domElement)
+    input.dispose()
   }
 
   return { api, dispose }
