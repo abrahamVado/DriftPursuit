@@ -4,6 +4,7 @@ import { testDifficultyScalingAdjustments } from './specs/difficultyScaling.test
 import { testEnvironmentAdjustments } from './specs/environmentAdjustments.test'
 import { testPlayerVehicleCreation } from './specs/playerCreation.test'
 import { testWorldStatusBootstrap } from './specs/worldStatusBootstrap.test'
+import { testStreamerDeltaDefault } from './specs/streamerDeltaDefault.test'
 
 async function main(): Promise<void> {
   //1.- Execute the deterministic boss phase assertions.
@@ -16,9 +17,11 @@ async function main(): Promise<void> {
   await testEnvironmentAdjustments()
   //5.- Confirm the broker world status handshake seeds deterministic terrain streaming across clients.
   await testWorldStatusBootstrap()
-  //6.- Validate the vehicle builder registry for the player stays in sync with the available blueprints.
+  //6.- Confirm streamer updates succeed even when callers omit the optional delta time parameter.
+  await testStreamerDeltaDefault()
+  //7.- Validate the vehicle builder registry for the player stays in sync with the available blueprints.
   testPlayerVehicleCreation()
-  //7.- All checks passed if execution reaches this point, so emit a concise summary for CI logs.
+  //8.- All checks passed if execution reaches this point, so emit a concise summary for CI logs.
   console.log('All tests passed')
 }
 
