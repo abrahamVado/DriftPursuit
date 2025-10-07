@@ -198,13 +198,19 @@ class BrokerClientImpl {
   }
 
   close() {
-    //14.- Terminate the websocket and suppress future reconnect attempts during teardown.
+    //14.- Terminate the websocket regardless of whether the handshake completed while suppressing future reconnect attempts during teardown.
     this.shouldReconnect = false;
     this.clearTimer();
     this.listeners.clear();
-    if (this.socket && this.socket.readyState === WebSocket.OPEN) {
-      this.socket.close();
+    const socket = this.socket;
+    if (
+      socket &&
+      (socket.readyState === WebSocket.OPEN || socket.readyState === WebSocket.CONNECTING)
+    ) {
+      socket.close();
     }
+    this.socket = null;
+    this.state = "closed";
   }
 }
 
