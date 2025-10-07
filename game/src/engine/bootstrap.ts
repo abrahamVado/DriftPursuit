@@ -57,6 +57,7 @@ export type MinimapSnapshot = {
 export type InitGameOptions = {
   initialVehicle?: VehicleKey
   pilotId?: string
+  pilotName?: string
   worldId?: string
   mapId?: string
 }
@@ -102,9 +103,9 @@ export function initGame(
   const streamer = createStreamer(scene, { worldId: options?.worldId, mapId: options?.mapId })
   const remotePlayers = createRemotePlayerManager(scene)
 
-  //1.- Spawn the player with the requested vehicle or gracefully fall back to the Arrowhead chassis.
+  //1.- Spawn the player with the requested vehicle and name, or gracefully fall back to defaults.
   const startingVehicle = options?.initialVehicle ?? DEFAULT_VEHICLE_KEY
-  const player = createPlayer(startingVehicle, scene)
+  const player = createPlayer(startingVehicle, scene, options?.pilotName)
   const pilotId = options?.pilotId ?? 'pilot-local'
 
   // Spawn corridor and spawner
