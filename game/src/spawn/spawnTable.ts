@@ -1,10 +1,12 @@
 import * as THREE from 'three'
-import { createEnemy } from '@/enemies/stellated-octahedron/behavior'
+import { createEnemy, updateEnemies } from '@/enemies/stellated-octahedron/behavior'
 
 export function createSpawner(scene: THREE.Scene, player: any, streamer: any){
   let t = 0
   return {
     update(dt:number, stage:number){
+      //1.- Ensure previously spawned enemies pursue their assigned targets before handling cadence logic.
+      updateEnemies(scene, dt)
       t += dt
       if (t > Math.max(0.6, 2.5 - stage*0.2)){
         t = 0
