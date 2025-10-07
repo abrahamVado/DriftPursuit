@@ -1,4 +1,5 @@
 import { getDifficultyState, onDifficultyChange } from '@/engine/difficulty'
+import { getWorldSeedSnapshot } from './worldSeed'
 
 // Tiny FBM noise to get hills/mountains
 function hash(x:number, z:number) { return Math.sin(x*127.1 + z*311.7)*43758.5453 % 1 }
@@ -32,10 +33,13 @@ export function heightAt(x:number,z:number){
   //1.- Derive canyon width and vertical richness modifiers from the cached difficulty state.
   const width = Math.max(0.6, envCache.canyonWidth)
   const richness = 0.8 + envCache.propDensity * 0.1
-  const scaledX = x / width
-  const scaledZ = z / width
-  const hills = fbm(scaledX,scaledZ,4,2.0,0.5) * 40 * richness
-  const mountains = Math.pow(fbm(scaledX+1000,scaledZ+1000,5,2.1,0.45), 3) * 120 * (1 + envCache.windStrength * 0.05)
+  const { noiseOffsetX, noiseOffsetZ, frequencyJitter } = getWorldSeedSnapshot()
+  //2.- Blend the negotiated world seed offsets into the FBM lookups so terrain aligns across observers.
+  const jitterScale = 1 + frequencyJitter * 0.25
+  const scaledX = (x + noiseOffsetX) / width
+  const scaledZ = (z + noiseOffsetZ) / width
+  const hills = fbm(scaledX * jitterScale,scaledZ * jitterScale,4,2.0 + frequencyJitter * 0.25,0.5 + frequencyJitter * 0.05) * 40 * richness * (0.9 + frequencyJitter * 0.2)
+  const mountains = Math.pow(fbm(scaledX+1000 + frequencyJitter * 180,scaledZ+1000 + frequencyJitter * 180,5,2.1 + frequencyJitter * 0.2,0.45), 3) * 120 * (1 + envCache.windStrength * 0.05) * (0.9 + frequencyJitter * 0.2)
   const base = (hills + mountains) / Math.max(1, width * 0.9)
   const waterline = 8 - envCache.windStrength * 0.4
   return Math.max(base, waterline)

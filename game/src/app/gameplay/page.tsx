@@ -26,74 +26,126 @@ export default function GameplayPage() {
   useEffect(() => {
     if (!mountRef.current) return
 
-    //1.- Bootstrap the local scene graph and retain the exposed API for downstream broker synchronisation.
-    const { api, dispose } = initGame(
-      mountRef.current,
-      DEFAULT_SCENE_OPTS,
-      () => setReady(true),
-      { initialVehicle: pilotProfile.vehicle, pilotId: pilotProfile.clientId }
-    )
-    apiRef.current = api
+    setReady(false)
 
-    //2.- Connect to the broker so authoritative world diffs can steer the HUD and server-side actors.
+    //1.- Maintain lifecycle guards so timers, subscriptions, and the scene graph unwind cleanly during teardown.
+    let started = false
+    let stopped = false
+    let intentTimer: ReturnType<typeof setTimeout> | null = null
+    let presenceTimer: ReturnType<typeof setTimeout> | null = null
+    let unsubscribeWorldDiff: (() => void) | null = null
+    let unsubscribeWorldStatus: (() => void) | null = null
+    let unsubscribePresence: (() => void) | null = null
+    let disposeGame: (() => void) | null = null
+    let presence: ReturnType<typeof createPresenceChannel> | null = null
+    let beforeUnloadBound = false
+    let announceDeparture: () => void = () => {}
+
+    //2.- Establish the broker connection immediately so the world status handshake can arrive before the scene spins up.
     const broker = createBrokerClient({
       clientId: pilotProfile.clientId,
       pilotProfile: { name: pilotProfile.name, vehicle: pilotProfile.vehicle }
     })
-    const unsubscribe = broker.onWorldDiff((diff) => {
-      apiRef.current?.ingestWorldDiff(diff)
+
+    const stopIntentPump = () => {
+      if (intentTimer) {
+        clearTimeout(intentTimer)
+        intentTimer = null
+      }
+    }
+    const stopPresencePump = () => {
+      if (presenceTimer) {
+        clearTimeout(presenceTimer)
+        presenceTimer = null
+      }
+    }
+
+    const beginScene = (status: { worldId: string; mapId: string }) => {
+      if (started || !mountRef.current) {
+        return
+      }
+      started = true
+      unsubscribeWorldStatus?.()
+      unsubscribeWorldStatus = null
+
+      //3.- Bootstrap the local scene graph once the broker reveals the deterministic world identifiers.
+      const { api, dispose } = initGame(
+        mountRef.current,
+        DEFAULT_SCENE_OPTS,
+        () => setReady(true),
+        {
+          initialVehicle: pilotProfile.vehicle,
+          pilotId: pilotProfile.clientId,
+          worldId: status.worldId,
+          mapId: status.mapId
+        }
+      )
+      apiRef.current = api
+      disposeGame = dispose
+
+      //4.- Mirror authoritative world diffs and intention frames through the freshly initialised API surface.
+      unsubscribeWorldDiff = broker.onWorldDiff((diff) => {
+        apiRef.current?.ingestWorldDiff(diff)
+      })
+
+      const pumpIntent = () => {
+        if (stopped) return
+        const snapshot = apiRef.current?.sampleIntent()
+        if (snapshot) {
+          broker.sendIntent(snapshot)
+        }
+        intentTimer = setTimeout(pumpIntent, 100)
+      }
+      pumpIntent()
+
+      //5.- Broadcast local pilot presence so sibling tabs can project this client as a remote craft.
+      presence = createPresenceChannel({ clientId: pilotProfile.clientId })
+      unsubscribePresence = presence.subscribe((message) => {
+        if (message.type === 'update') {
+          apiRef.current?.ingestPresenceSnapshot(message.snapshot)
+        } else if (message.type === 'leave') {
+          apiRef.current?.removeRemoteVehicle(message.vehicleId)
+        }
+      })
+
+      const pumpPresence = () => {
+        if (stopped) return
+        const snapshot = apiRef.current?.samplePresence()
+        if (snapshot) {
+          presence?.publish(snapshot)
+        }
+        presenceTimer = setTimeout(pumpPresence, 150)
+      }
+      pumpPresence()
+
+      announceDeparture = () => {
+        const snapshot = apiRef.current?.samplePresence()
+        presence?.announceDeparture(snapshot?.vehicle_id ?? pilotProfile.clientId)
+      }
+      window.addEventListener('beforeunload', announceDeparture)
+      beforeUnloadBound = true
+    }
+
+    unsubscribeWorldStatus = broker.onWorldStatus((status) => {
+      beginScene(status)
     })
-
-    //3.- Stream the player's latest inputs back to the broker on a short cadence.
-    let stopped = false
-    let intentTimer: ReturnType<typeof setTimeout> | null = null
-    const pumpIntent = () => {
-      if (stopped) return
-      const snapshot = apiRef.current?.sampleIntent()
-      if (snapshot) {
-        broker.sendIntent(snapshot)
-      }
-      intentTimer = setTimeout(pumpIntent, 100)
-    }
-    pumpIntent()
-
-    //4.- Mirror the local pilot over a BroadcastChannel so parallel tabs manifest as remote players.
-    const presence = createPresenceChannel({ clientId: pilotProfile.clientId })
-    const unsubscribePresence = presence.subscribe((message) => {
-      if (message.type === 'update') {
-        apiRef.current?.ingestPresenceSnapshot(message.snapshot)
-      } else if (message.type === 'leave') {
-        apiRef.current?.removeRemoteVehicle(message.vehicleId)
-      }
-    })
-    let presenceTimer: ReturnType<typeof setTimeout> | null = null
-    const pumpPresence = () => {
-      if (stopped) return
-      const snapshot = apiRef.current?.samplePresence()
-      if (snapshot) {
-        presence.publish(snapshot)
-      }
-      presenceTimer = setTimeout(pumpPresence, 150)
-    }
-    pumpPresence()
-
-    const announceDeparture = () => {
-      const snapshot = apiRef.current?.samplePresence()
-      presence.announceDeparture(snapshot?.vehicle_id ?? pilotProfile.clientId)
-    }
-    window.addEventListener('beforeunload', announceDeparture)
 
     return () => {
       stopped = true
-      if (intentTimer) clearTimeout(intentTimer)
-      if (presenceTimer) clearTimeout(presenceTimer)
-      unsubscribe()
+      stopIntentPump()
+      stopPresencePump()
+      unsubscribeWorldDiff?.()
+      unsubscribeWorldStatus?.()
       broker.close()
-      announceDeparture()
-      unsubscribePresence()
-      presence.close()
-      window.removeEventListener('beforeunload', announceDeparture)
-      dispose()
+      if (started) {
+        announceDeparture()
+      }
+      unsubscribePresence?.()
+      presence?.close()
+      if (beforeUnloadBound) {
+        window.removeEventListener('beforeunload', announceDeparture)
+      }
+      disposeGame?.()
     }
   }, [pilotProfile.clientId, pilotProfile.name, pilotProfile.vehicle])
 
