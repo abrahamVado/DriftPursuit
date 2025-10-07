@@ -129,4 +129,21 @@ describe("broker client", () => {
 
     client.close();
   });
+
+  it("closes sockets that are still connecting", () => {
+    const client = createBrokerClient({ clientId: "closing-pilot", reconnectDelayMs: 0 });
+    const socket = MockWebSocket.instances[0];
+    if (!socket) {
+      throw new Error("expected websocket to be constructed");
+    }
+
+    //5.- Validate that terminating during CONNECTING invokes close() and suppresses the broker handshake.
+    const closeSpy = vi.spyOn(socket, "close");
+    client.close();
+    expect(closeSpy).toHaveBeenCalledTimes(1);
+    expect(socket.readyState).toBe(MockWebSocket.CLOSED);
+
+    socket.simulateOpen();
+    expect(socket.sent).toHaveLength(0);
+  });
 });
