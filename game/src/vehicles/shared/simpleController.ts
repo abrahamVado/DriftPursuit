@@ -31,6 +31,18 @@ export function createController(group: THREE.Group, scene: THREE.Scene){
   }
   let targetProvider: () => WeaponTarget[] = () => []
 
+  const bounds = new THREE.Box3()
+  const size = new THREE.Vector3()
+
+  function computeLauncherClearance(){
+    bounds.setFromObject(group)
+    bounds.getSize(size)
+    const span = Math.max(size.x, size.y, size.z)
+    const distance = Math.max(5, span * 5)
+    meteorRedSystem.setLauncherClearance(distance)
+    meteorVioletSystem.setLauncherClearance(distance)
+  }
+
   const gatling = createGatlingSystem({
     fireRate: 25,
     spread: THREE.MathUtils.degToRad(1.5),
@@ -53,6 +65,9 @@ export function createController(group: THREE.Group, scene: THREE.Scene){
     detonationRadius: 6,
     smokeTrailIntervalMs: 70,
     maxLifetimeMs: 15000,
+    clearanceDistance: 30,
+    swayAmplitude: 24,
+    swayFrequency: 1.2,
   })
 
   const meteorVioletSystem = createMeteorMissileSystem({
@@ -66,6 +81,9 @@ export function createController(group: THREE.Group, scene: THREE.Scene){
     detonationRadius: 6,
     smokeTrailIntervalMs: 70,
     maxLifetimeMs: 15000,
+    clearanceDistance: 30,
+    swayAmplitude: 26,
+    swayFrequency: 1.25,
   })
 
   const meteorRedVisual = createHomingMissileVisual(scene, {
@@ -128,6 +146,8 @@ export function createController(group: THREE.Group, scene: THREE.Scene){
     DASH: 'DASH',
     ULTIMATE: 'ULTIMATE',
   }
+
+  computeLauncherClearance()
 
   function update(dt:number, input:any, queryHeight:(x:number,z:number)=>number){
     // Mouse steering: aim reticle in NDC controls yaw/pitch
@@ -269,6 +289,7 @@ export function createController(group: THREE.Group, scene: THREE.Scene){
 
   return {
     update,
+    refreshVehicleClearance: computeLauncherClearance,
     get speed(){ return effectiveSpeed },
     get weaponName(){ return slotLabels[activeSlot] },
     get activeSlot(){ return activeSlot },

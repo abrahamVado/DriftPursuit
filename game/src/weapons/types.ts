@@ -6,6 +6,8 @@ export type WeaponTarget = {
   position: THREE.Vector3
   velocity: THREE.Vector3
   alive: boolean
+  onFire?: boolean
+  falling?: boolean
 }
 
 //2.- Context handed to weapons so they can reason about the shooter pose and available targets.

@@ -11,7 +11,7 @@ const BASE_FORWARD = new THREE.Vector3(0, 0, 1)
 const TMP_FORWARD = new THREE.Vector3()
 
 export type HomingMissileVisual = {
-  update: (missiles: HomingMissileState[]) => void
+  update: (missiles: VisualMissileState[]) => void
   dispose: () => void
   readonly group: THREE.Group
 }
@@ -19,6 +19,13 @@ export type HomingMissileVisual = {
 type MissileRenderState = {
   mesh: THREE.Group
   trail: THREE.Line
+  flame: THREE.Mesh
+  smoke: THREE.Mesh
+}
+
+type VisualMissileState = HomingMissileState & {
+  stage?: 'ejecting' | 'burning'
+  stageMs?: number
 }
 
 export function createHomingMissileVisual(scene: THREE.Scene, palette: MissilePalette = {
@@ -47,6 +54,23 @@ export function createHomingMissileVisual(scene: THREE.Scene, palette: MissilePa
   const bodyGeometry = new THREE.CylinderGeometry(0.25, 0.32, 1.4, 10, 1, true)
   const noseGeometry = new THREE.ConeGeometry(0.32, 0.7, 10, 1)
   const finGeometry = new THREE.BoxGeometry(0.05, 0.4, 0.25)
+  const flameGeometry = new THREE.ConeGeometry(0.18, 0.9, 12, 1)
+  const smokeGeometry = new THREE.CylinderGeometry(0.08, 0.22, 1.4, 8, 1, true)
+
+  const flameMaterial = new THREE.MeshBasicMaterial({
+    color: palette.emissive,
+    transparent: true,
+    opacity: 0.9,
+    blending: THREE.AdditiveBlending,
+  })
+  const smokeMaterial = new THREE.MeshBasicMaterial({
+    color: 0x444f63,
+    transparent: true,
+    opacity: 0.45,
+    depthWrite: false,
+    blending: THREE.NormalBlending,
+    side: THREE.DoubleSide,
+  })
 
   const renderStates = new Map<number, MissileRenderState>()
 
@@ -74,12 +98,22 @@ export function createHomingMissileVisual(scene: THREE.Scene, palette: MissilePa
     const trail = new THREE.Line(trailGeometry, trailMaterial)
     missileGroup.add(trail)
 
+    const flame = new THREE.Mesh(flameGeometry, flameMaterial)
+    flame.position.z = 0.75
+    flame.rotation.x = Math.PI
+    missileGroup.add(flame)
+
+    const smoke = new THREE.Mesh(smokeGeometry, smokeMaterial.clone())
+    smoke.position.z = 0.9
+    smoke.rotation.x = Math.PI / 2
+    missileGroup.add(smoke)
+
     group.add(missileGroup)
 
-    return { mesh: missileGroup, trail }
+    return { mesh: missileGroup, trail, flame, smoke }
   }
 
-  function update(missiles: HomingMissileState[]) {
+  function update(missiles: VisualMissileState[]) {
     const seen = new Set<number>()
 
     for (const missile of missiles) {
@@ -100,6 +134,18 @@ export function createHomingMissileVisual(scene: THREE.Scene, palette: MissilePa
       }
       TMP_FORWARD.normalize()
       renderState.mesh.quaternion.setFromUnitVectors(BASE_FORWARD, TMP_FORWARD)
+
+      const burning = missile.stage === 'burning'
+      renderState.flame.visible = burning
+      renderState.smoke.visible = burning
+      if (burning){
+        const stageMs = missile.stageMs ?? 0
+        const intensity = Math.min(1, stageMs / 400)
+        renderState.flame.scale.setScalar(0.7 + intensity * 0.6)
+        renderState.smoke.scale.set(1 + intensity * 0.8, 1 + intensity * 0.8, 1)
+        const smokeMat = renderState.smoke.material as THREE.MeshBasicMaterial
+        smokeMat.opacity = 0.3 + intensity * 0.3
+      }
 
       //4.- Rebuild the exhaust ribbon so contrails appear where guidance history says they were.
       const points = missile.smokeTrail.length > 0 ? missile.smokeTrail : [missile.position]
@@ -126,9 +172,13 @@ export function createHomingMissileVisual(scene: THREE.Scene, palette: MissilePa
     bodyGeometry.dispose()
     noseGeometry.dispose()
     finGeometry.dispose()
+    flameGeometry.dispose()
+    smokeGeometry.dispose()
     bodyMaterial.dispose()
     finMaterial.dispose()
     trailMaterial.dispose()
+    flameMaterial.dispose()
+    smokeMaterial.dispose()
   }
 
   return { update, dispose, group }
