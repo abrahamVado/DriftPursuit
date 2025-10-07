@@ -5,6 +5,7 @@ import { createNeonLaserSystem } from '@/weapons/neonLaser'
 import { createBombSystem } from '@/weapons/bomb'
 import { createHomingMissileVisual } from '@/weapons/visuals/homingMissileVisual'
 import { createNeonLaserVisual } from '@/weapons/visuals/neonLaserVisual'
+import { createMeteorMissileSystem } from '@/weapons/meteorMissile'
 import type { WeaponContext, WeaponTarget } from '@/weapons/types'
 
 export function createController(group: THREE.Group, scene: THREE.Scene){
@@ -43,6 +44,21 @@ export function createController(group: THREE.Group, scene: THREE.Scene){
 
   const missileVisuals = createHomingMissileVisual(scene)
 
+  const meteorSystem = createMeteorMissileSystem({
+    maxConcurrent: 2,
+    cooldownMs: 2500,
+    ammo: 2,
+    ejectionDurationMs: 1000,
+    ejectionSpeed: 40,
+    burnSpeed: 220,
+    navigationConstant: 3.5,
+    detonationRadius: 6,
+    smokeTrailIntervalMs: 70,
+    maxLifetimeMs: 15000,
+  })
+
+  const meteorVisuals = createHomingMissileVisual(scene)
+
   const laserSystem = createNeonLaserSystem({
     cooldownMs: 2000,
     durationMs: 600,
@@ -67,11 +83,14 @@ export function createController(group: THREE.Group, scene: THREE.Scene){
   let weaponName = 'GATLING'
   let ammo = gatling.ammo
   let missiles = missilesSystem.ammo
+  let meteorAmmo = meteorSystem.ammo
   let laserCooldownMs = laserSystem.cooldownMs
   let bombArmed = bombSystem.isArmed
   let fireHeld = false
   let fireJustPressed = false
   let fireJustReleased = false
+  let meteorHeld = false
+  let meteorJustPressed = false
 
   function update(dt:number, input:any, queryHeight:(x:number,z:number)=>number){
     // Mouse steering: aim reticle in NDC controls yaw/pitch
@@ -110,6 +129,10 @@ export function createController(group: THREE.Group, scene: THREE.Scene){
     fireJustPressed = fireHeld && !previouslyHeld
     fireJustReleased = !fireHeld && previouslyHeld
 
+    const previouslyMeteorHeld = meteorHeld
+    meteorHeld = Boolean(input.pressed('Digit1'))
+    meteorJustPressed = meteorHeld && !previouslyMeteorHeld
+
     // Weapons input (placeholders)
     if (input.pressed('Digit1')) weaponName = 'GATLING'
     if (input.pressed('Digit2')) weaponName = 'MISSILE'
@@ -121,19 +144,27 @@ export function createController(group: THREE.Group, scene: THREE.Scene){
     weaponContext.dt = dt
     weaponContext.targets = targetProvider()
 
+    if (meteorJustPressed){
+      //1.- Kick the Meteor canister clear of the fuselage when the pilot taps slot one.
+      meteorSystem.tryFire(weaponContext)
+    }
+    meteorSystem.update(weaponContext)
+    //2.- Sync the slow-burn launch visuals so the canister and plume remain authoritative.
+    meteorVisuals.update(meteorSystem.missiles)
+
     if (weaponName === 'GATLING'){
-      //1.- Advance the hitscan gun and respect trigger state.
+      //3.- Advance the hitscan gun and respect trigger state.
       gatling.update(weaponContext, fireHeld)
     } else {
       gatling.update(weaponContext, false)
     }
 
     if (weaponName === 'MISSILE' && fireJustPressed){
-      //2.- Launch homing missiles when ammo and pool constraints allow.
+      //4.- Launch homing missiles when ammo and pool constraints allow.
       missilesSystem.tryFire(weaponContext)
     }
     missilesSystem.update(weaponContext)
-    //3.- Mirror the guidance results into the scene so each missile gains a visible shell.
+    //5.- Mirror the guidance results into the scene so each missile gains a visible shell.
     missileVisuals.update(missilesSystem.missiles)
 
     if (weaponName === 'LASER'){
@@ -152,11 +183,11 @@ export function createController(group: THREE.Group, scene: THREE.Scene){
       }
     }
     laserSystem.update(weaponContext)
-    //4.- Stretch and orient the neon beam according to the freshly sampled weapon state.
+    //6.- Stretch and orient the neon beam according to the freshly sampled weapon state.
     laserVisual.update(laserSystem.state)
 
     if (weaponName === 'BOMB' && fireJustPressed){
-      //5.- Drop a bomb while relaying the terrain sampler to trigger ground detonation.
+      //7.- Drop a bomb while relaying the terrain sampler to trigger ground detonation.
       bombSystem.fire({ ...weaponContext, sampleGroundHeight: queryHeight })
     }
     bombSystem.update({ ...weaponContext, sampleGroundHeight: queryHeight })
@@ -164,13 +195,15 @@ export function createController(group: THREE.Group, scene: THREE.Scene){
     // Cooldowns
     ammo = gatling.ammo
     missiles = missilesSystem.ammo
+    meteorAmmo = meteorSystem.ammo
     laserCooldownMs = laserSystem.cooldownMs
     bombArmed = bombSystem.isArmed
   }
 
   function dispose(){
-    //6.- Tear down transient weapon meshes so hot swaps between vehicles stay safe.
+    //8.- Tear down transient weapon meshes so hot swaps between vehicles stay safe.
     missileVisuals.dispose()
+    meteorVisuals.dispose()
     laserVisual.dispose()
   }
 
@@ -180,6 +213,7 @@ export function createController(group: THREE.Group, scene: THREE.Scene){
     get weaponName(){ return weaponName },
     get ammo(){ return ammo },
     get missiles(){ return missiles },
+    get meteorAmmo(){ return meteorAmmo },
     get laserCooldownMs(){ return laserCooldownMs },
     get bombArmed(){ return bombArmed },
     setTargetProvider(provider: () => WeaponTarget[]){

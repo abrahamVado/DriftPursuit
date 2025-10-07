@@ -4,6 +4,7 @@ import { createHomingMissileSystem } from '@/weapons/homingMissile'
 import { createNeonLaserSystem } from '@/weapons/neonLaser'
 import { createBombSystem } from '@/weapons/bomb'
 import { createGatlingSystem } from '@/weapons/gatling'
+import { createMeteorMissileSystem } from '@/weapons/meteorMissile'
 import type { WeaponContext, WeaponTarget } from '@/weapons/types'
 
 function makeContext(overrides: Partial<WeaponContext> = {}): WeaponContext{
@@ -61,6 +62,79 @@ describe('homing missile system', () => {
     const missile = system.missiles[0]
     expect(missile).toBeDefined()
     expect(missile?.targetId).toBe('bravo')
+  })
+})
+
+describe('meteor missile system', () => {
+  it('ignites after the ejection delay and homes the earliest live contact', () => {
+    const system = createMeteorMissileSystem({
+      maxConcurrent: 1,
+      cooldownMs: 0,
+      ammo: 2,
+      ejectionDurationMs: 1000,
+      ejectionSpeed: 30,
+      burnSpeed: 200,
+      navigationConstant: 3,
+      detonationRadius: 5,
+      smokeTrailIntervalMs: 50,
+      maxLifetimeMs: 8000,
+    })
+
+    const alpha: WeaponTarget = {
+      id: 'alpha',
+      position: new THREE.Vector3(0, 0, -300),
+      velocity: new THREE.Vector3(),
+      alive: true,
+    }
+    const bravo: WeaponTarget = {
+      id: 'bravo',
+      position: new THREE.Vector3(30, 0, -320),
+      velocity: new THREE.Vector3(),
+      alive: true,
+    }
+
+    const context = makeContext({ dt: 0.25, targets: [alpha, bravo] })
+
+    const fired = system.tryFire(context)
+    expect(fired.fired).toBe(true)
+    const missile = system.missiles[0]
+    expect(missile?.stage).toBe('ejecting')
+
+    for (let i = 0; i < 5; i++){
+      system.update(context)
+    }
+
+    const burning = system.missiles[0]
+    //1.- After a full second the canister should ignite and immediately lock the first target.
+    expect(burning?.stage).toBe('burning')
+    expect(burning?.targetId).toBe('alpha')
+  })
+
+  it('self-destructs when ignition finds no enemies to pursue', () => {
+    const system = createMeteorMissileSystem({
+      maxConcurrent: 1,
+      cooldownMs: 0,
+      ammo: 1,
+      ejectionDurationMs: 1000,
+      ejectionSpeed: 30,
+      burnSpeed: 200,
+      navigationConstant: 3,
+      detonationRadius: 5,
+      smokeTrailIntervalMs: 50,
+      maxLifetimeMs: 8000,
+    })
+
+    const context = makeContext({ dt: 0.5, targets: [] })
+
+    const fired = system.tryFire(context)
+    expect(fired.fired).toBe(true)
+
+    for (let i = 0; i < 3; i++){
+      system.update(context)
+    }
+
+    //2.- Without a contact to chase the missile should be removed once ignition completes.
+    expect(system.activeCount).toBe(0)
   })
 })
 
