@@ -5,10 +5,25 @@ import { buildPyramid } from '@/vehicles/pyramid/build'
 import { buildIcosahedron } from '@/vehicles/icosahedron/build'
 import { buildCube } from '@/vehicles/cube/build'
 import { buildTransformer } from '@/vehicles/transformer/build'
+import { buildTank } from '@/vehicles/tank/build'
 import { createController } from '@/vehicles/shared/simpleController'
 import { createNameplate } from '@/ui/nameplate'
 
-type VehicleKey = 'arrowhead' | 'octahedron' | 'pyramid' | 'icosahedron' | 'cube' | 'transformer'
+type VehicleKey =
+  | 'arrowhead'
+  | 'octahedron'
+  | 'pyramid'
+  | 'icosahedron'
+  | 'cube'
+  | 'transformer'
+  | 'tank'
+
+type InputLike = { pressed: (code: string) => boolean }
+
+type VehicleHooks = {
+  update?: (dt: number, input: InputLike) => void
+  dispose?: () => void
+}
 
 export function createPlayer(initial: VehicleKey, scene: THREE.Scene, pilotName?: string) {
   //1.- Instantiate the player anchor group and populate the builder registry keyed by vehicle ids.
@@ -20,7 +35,8 @@ export function createPlayer(initial: VehicleKey, scene: THREE.Scene, pilotName?
     pyramid: buildPyramid,
     icosahedron: buildIcosahedron,
     cube: buildCube,
-    transformer: buildTransformer
+    transformer: buildTransformer,
+    tank: buildTank
   }
 
   const resolveVehicle = (key: VehicleKey) => {
@@ -37,6 +53,22 @@ export function createPlayer(initial: VehicleKey, scene: THREE.Scene, pilotName?
   group.add(currentMesh)
   const controller = createController(group, scene)
   controller.refreshVehicleClearance?.()
+
+  let activeHooks: VehicleHooks | null = null
+
+  function extractHooks(mesh: THREE.Object3D | null): VehicleHooks | null {
+    //1.- Safely read the optional vehicle hook bag while tolerating meshes without custom behaviour.
+    if (!mesh) {
+      return null
+    }
+    const hooks = mesh.userData?.vehicleHooks
+    if (hooks && typeof hooks === 'object') {
+      return hooks as VehicleHooks
+    }
+    return null
+  }
+
+  activeHooks = extractHooks(currentMesh)
 
   let nameplate: THREE.Sprite | null = null
 
@@ -63,7 +95,15 @@ export function createPlayer(initial: VehicleKey, scene: THREE.Scene, pilotName?
     if (label) {
       group.add(label)
       nameplate = label
+      return
     }
+    //2.- Fall back to an invisible sprite so tests without a canvas implementation retain the metadata contract.
+    const placeholderMaterial = new THREE.SpriteMaterial({ opacity: 0, transparent: true, depthTest: false })
+    const placeholder = new THREE.Sprite(placeholderMaterial)
+    placeholder.userData.nameplate = { pilotName, vehicleKey: currentKey }
+    placeholder.visible = false
+    group.add(placeholder)
+    nameplate = placeholder
   }
 
   //2.- Prime the HUD label so the local pilot mirrors remote displays immediately after spawning.
@@ -71,12 +111,14 @@ export function createPlayer(initial: VehicleKey, scene: THREE.Scene, pilotName?
 
   //3.- Allow downstream consumers to swap vehicles while keeping the controller in sync.
   function setVehicle(key: VehicleKey) {
+    activeHooks?.dispose?.()
     if (currentMesh) group.remove(currentMesh)
     currentKey = key
     currentMesh = resolveVehicle(currentKey)
     group.add(currentMesh)
     controller.refreshVehicleClearance?.()
     refreshNameplate()
+    activeHooks = extractHooks(currentMesh)
   }
 
   //4.- Provide a convenience cycle helper for sequential vehicle selection.
@@ -86,5 +128,10 @@ export function createPlayer(initial: VehicleKey, scene: THREE.Scene, pilotName?
     setVehicle(keys[(i + 1) % keys.length])
   }
 
-  return { group, controller, setVehicle, cycleVehicle }
+  function updateVehicle(dt: number, input: InputLike) {
+    //1.- Allow vehicle-specific hooks to react to frame input alongside the shared flight controller.
+    activeHooks?.update?.(dt, input)
+  }
+
+  return { group, controller, setVehicle, cycleVehicle, updateVehicle }
 }
