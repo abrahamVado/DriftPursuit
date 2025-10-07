@@ -1,3 +1,4 @@
+'use client'
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { BrokerConfig, getBrokerConfig, resolveBrowserUrl } from "../lib/brokerConfig";
 
