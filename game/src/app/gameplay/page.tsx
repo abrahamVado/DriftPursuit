@@ -1,10 +1,12 @@
 'use client'
 
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
+import { useSearchParams } from 'next/navigation'
 import { initGame, type GameAPI, DEFAULT_SCENE_OPTS } from '@/engine/bootstrap'
 import { createBrokerClient } from '@/lib/brokerClient'
 import { HUD } from '@/components/HUD'
 import { LoadingOverlay } from '@/components/LoadingOverlay'
+import { createPilotProfile } from '@/lib/pilotProfile'
 
 export const dynamic = 'force-dynamic'
 
@@ -12,23 +14,28 @@ export default function GameplayPage() {
   const mountRef = useRef<HTMLDivElement>(null)
   const apiRef = useRef<GameAPI | null>(null)
   const [ready, setReady] = useState(false)
-  const [clientId] = useState(() => {
-    //1.- Derive a stable yet unique identifier so parallel browser sessions do not collide on the broker bus.
-    const uuid = typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
-      ? crypto.randomUUID()
-      : Math.random().toString(36).slice(2)
-    return `pilot-${uuid}`
-  })
+  const searchParams = useSearchParams()
+  const pilotProfile = useMemo(() => {
+    return createPilotProfile({
+      name: searchParams?.get('pilot'),
+      vehicle: searchParams?.get('vehicle')
+    })
+  }, [searchParams])
 
   useEffect(() => {
     if (!mountRef.current) return
 
     //1.- Bootstrap the local scene graph and retain the exposed API for downstream broker synchronisation.
-    const { api, dispose } = initGame(mountRef.current, DEFAULT_SCENE_OPTS, () => setReady(true))
+    const { api, dispose } = initGame(
+      mountRef.current,
+      DEFAULT_SCENE_OPTS,
+      () => setReady(true),
+      { initialVehicle: pilotProfile.vehicle, pilotId: pilotProfile.clientId }
+    )
     apiRef.current = api
 
     //2.- Connect to the broker so authoritative world diffs can steer the HUD and server-side actors.
-    const broker = createBrokerClient({ clientId })
+    const broker = createBrokerClient({ clientId: pilotProfile.clientId })
     const unsubscribe = broker.onWorldDiff((diff) => {
       apiRef.current?.ingestWorldDiff(diff)
     })
@@ -53,7 +60,7 @@ export default function GameplayPage() {
       broker.close()
       dispose()
     }
-  }, [])
+  }, [pilotProfile.clientId, pilotProfile.vehicle])
 
   return (
     <div style={{ position: 'fixed', inset: 0, overflow: 'hidden' }}>
