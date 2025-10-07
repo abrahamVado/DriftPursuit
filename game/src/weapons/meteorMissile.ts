@@ -165,7 +165,9 @@ export function createMeteorMissileSystem(options: MeteorMissileOptions){
         missile.position.addScaledVector(missile.ejectionDirection, travel)
         missile.velocity.copy(missile.ejectionDirection).multiplyScalar(options.ejectionSpeed)
         missile.ejectionTravel += travel
-        if (missile.ejectionTravel >= clearanceDistance || missile.stageMs >= options.ejectionDurationMs){
+        const ejectionThreshold = clearanceDistance * 0.1
+        //4.- Stop the ballistic push once the missile is 10% clear so the booster lights earlier than the physical stand-off.
+        if (missile.ejectionTravel >= ejectionThreshold || missile.stageMs >= options.ejectionDurationMs){
           igniteMissile(missile, context)
         }
       } else {
@@ -273,6 +275,7 @@ export function createMeteorMissileSystem(options: MeteorMissileOptions){
   }
 
   function setLauncherClearance(distance: number){
+    //5.- Only the spawn offset honors this distance; the ejection threshold derives its own 10% window.
     clearanceDistance = Math.max(1, distance)
   }
 
