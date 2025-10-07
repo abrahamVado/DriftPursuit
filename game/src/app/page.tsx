@@ -12,6 +12,7 @@ import {
   normalizeVehicleChoice
 } from '@/lib/pilotProfile'
 
+//1.- Provide readable lobby labels for each chassis so the dropdown reflects the latest hangar inventory.
 const VEHICLE_LABELS: Record<VehicleKey, string> = {
   arrowhead: 'Arrowhead',
   octahedron: 'Octahedron',
@@ -19,7 +20,7 @@ const VEHICLE_LABELS: Record<VehicleKey, string> = {
   icosahedron: 'Icosahedron',
   cube: 'Cube',
   transformer: 'Transformer',
-  tank: 'Tank'
+  tank: 'Tank (Planetform)'
 }
 
 export default function LobbyPage() {
