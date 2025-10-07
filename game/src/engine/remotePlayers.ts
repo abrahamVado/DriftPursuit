@@ -14,6 +14,7 @@ import { buildIcosahedron } from '@/vehicles/icosahedron/build'
 import { buildOctahedron } from '@/vehicles/octahedron/build'
 import { buildPyramid } from '@/vehicles/pyramid/build'
 import { buildTransformer } from '@/vehicles/transformer/build'
+import { buildTank } from '@/vehicles/tank/build'
 
 export type VehicleDiffPayload = {
   updated?: Array<Record<string, unknown>>
@@ -56,7 +57,8 @@ const VEHICLE_BUILDERS: Record<VehicleKey, () => THREE.Object3D> = {
   pyramid: buildPyramid,
   icosahedron: buildIcosahedron,
   cube: buildCube,
-  transformer: buildTransformer
+  transformer: buildTransformer,
+  tank: buildTank
 }
 
 export type RemoteVehicleTransform = {
