@@ -6,6 +6,7 @@ import {
   normalizeVehicleChoice,
   type VehicleKey
 } from '@/lib/pilotProfile'
+import type { BrokerOccupantDiff, BrokerOccupantSnapshot } from '@/lib/brokerClient'
 import { buildArrowhead } from '@/vehicles/arrowhead/build'
 import { buildCube } from '@/vehicles/cube/build'
 import { buildIcosahedron } from '@/vehicles/icosahedron/build'
@@ -18,12 +19,28 @@ export type VehicleDiffPayload = {
   removed?: string[]
 }
 
+type OccupantDiffPayload = BrokerOccupantDiff
+
+type OccupantState = {
+  playerName: string | null
+  lifePct: number | null
+}
+
+type HealthBar = {
+  root: THREE.Group
+  fill: THREE.Mesh<THREE.PlaneGeometry, THREE.MeshBasicMaterial>
+  background: THREE.Mesh<THREE.PlaneGeometry, THREE.MeshBasicMaterial>
+}
+
 type RemoteVehicle = {
   group: THREE.Group
   mesh: THREE.Object3D
   label: THREE.Sprite | null
-  vehicleKey: VehicleKey
-  pilotName: string
+  profile: RemoteProfile
+  labelSnapshot: { name: string; vehicleKey: VehicleKey }
+  occupantName: string | null
+  occupantLifePct: number | null
+  healthBar: HealthBar | null
 }
 
 type RemoteProfile = {
@@ -41,7 +58,7 @@ const VEHICLE_BUILDERS: Record<VehicleKey, () => THREE.Object3D> = {
 }
 
 export type RemotePlayersManager = {
-  ingestDiff: (diff?: VehicleDiffPayload | null) => void
+  ingestDiff: (diff?: VehicleDiffPayload | null, occupants?: OccupantDiffPayload | null) => void
   dispose: () => void
   getVehicleGroup: (vehicleId: string) => THREE.Group | undefined
   activeVehicleIds: () => string[]
@@ -96,9 +113,9 @@ function instantiateVehicleMesh(vehicleKey: VehicleKey): THREE.Object3D {
   return mesh
 }
 
-function formatGroupName(profile: RemoteProfile) {
-  //1.- Embed the pilot name and vehicle key in the group name to simplify scene graph inspection tools.
-  return `remote-player:${profile.pilotName} (${profile.vehicleKey})`
+function formatGroupName(name: string, vehicleKey: VehicleKey) {
+  //1.- Embed the effective display name and vehicle key in the group name to simplify scene graph inspection tools.
+  return `remote-player:${name} (${vehicleKey})`
 }
 
 function createNameplate(profile: RemoteProfile): THREE.Sprite | null {
@@ -159,7 +176,7 @@ function extractProfile(state: Record<string, unknown>, fallback?: RemoteVehicle
   ]
   const candidateName = rawNameCandidates.find((value): value is string => typeof value === 'string')
   const normalisedName = normalizePilotName(candidateName)
-  const pilotName = normalisedName || fallback?.pilotName || DEFAULT_PILOT_NAME
+  const pilotName = normalisedName || fallback?.profile.pilotName || DEFAULT_PILOT_NAME
 
   //2.- Coerce the vehicle key to a known builder, preserving the previous chassis when metadata is absent.
   const rawVehicleCandidates = [
@@ -173,7 +190,7 @@ function extractProfile(state: Record<string, unknown>, fallback?: RemoteVehicle
     state.vehicleType
   ]
   const candidateVehicle = rawVehicleCandidates.find((value): value is string => typeof value === 'string')
-  const fallbackVehicle = fallback?.vehicleKey ?? DEFAULT_VEHICLE_KEY
+  const fallbackVehicle = fallback?.profile.vehicleKey ?? DEFAULT_VEHICLE_KEY
   const vehicleKey = normalizeVehicleChoice(candidateVehicle ?? fallbackVehicle)
 
   return { pilotName, vehicleKey }
@@ -186,48 +203,148 @@ export function createRemotePlayerManager(scene: THREE.Scene): RemotePlayersMana
   scene.add(root)
 
   const registry = new Map<string, RemoteVehicle>()
+  const occupantRegistry = new Map<string, OccupantState>()
+
+  function createHealthBar(): HealthBar {
+    //1.- Build a simple quad-based HUD that floats above the vehicle to visualise occupant health.
+    const root = new THREE.Group()
+    root.name = 'remote-health-bar'
+    root.position.set(0, 5.5, 0)
+    root.visible = false
+
+    const backgroundGeometry = new THREE.PlaneGeometry(4.4, 0.4)
+    const backgroundMaterial = new THREE.MeshBasicMaterial({ color: 0x000000, opacity: 0.65, transparent: true, depthTest: false })
+    const background = new THREE.Mesh(backgroundGeometry, backgroundMaterial)
+    background.name = 'remote-health-bar-bg'
+    background.renderOrder = 10
+    root.add(background)
+
+    const fillGeometry = new THREE.PlaneGeometry(4, 0.24)
+    const fillMaterial = new THREE.MeshBasicMaterial({ color: 0x00ff00, depthTest: false })
+    const fill = new THREE.Mesh(fillGeometry, fillMaterial)
+    fill.name = 'remote-health-bar-fill'
+    fill.position.set(0, 0, 0.01)
+    fill.renderOrder = 11
+    root.add(fill)
+
+    return { root, fill, background }
+  }
+
+  function disposeHealthBar(bar: HealthBar | null) {
+    //1.- Release the quad geometries and materials attached to the occupant health indicator.
+    if (!bar) {
+      return
+    }
+    bar.root.parent?.remove(bar.root)
+    bar.fill.geometry.dispose()
+    bar.fill.material.dispose()
+    bar.background.geometry.dispose()
+    bar.background.material.dispose()
+  }
+
+  function refreshDisplayMetadata(vessel: RemoteVehicle) {
+    //1.- Resolve the preferred display name, prioritising the occupant overlay when present.
+    const displayName = vessel.occupantName ?? vessel.profile.pilotName
+    const displayVehicleKey = vessel.profile.vehicleKey
+    const previous = vessel.labelSnapshot
+    const requiresRefresh =
+      !previous || previous.name !== displayName || previous.vehicleKey !== displayVehicleKey
+
+    if (requiresRefresh) {
+      disposeLabel(vessel.label)
+      const label = createNameplate({ pilotName: displayName, vehicleKey: displayVehicleKey })
+      if (label) {
+        vessel.group.add(label)
+      }
+      vessel.label = label
+      vessel.labelSnapshot = { name: displayName, vehicleKey: displayVehicleKey }
+    }
+
+    //2.- Surface the latest metadata on the group for diagnostics and tests.
+    vessel.group.name = formatGroupName(displayName, displayVehicleKey)
+    vessel.group.userData.remoteProfile = vessel.profile
+    vessel.group.userData.remoteOccupant = vessel.occupantName
+      ? { playerName: vessel.occupantName, lifePct: vessel.occupantLifePct }
+      : null
+  }
+
+  function updateHealthVisual(vessel: RemoteVehicle) {
+    //1.- Hide the indicator entirely when no occupant health is provided.
+    const bar = vessel.healthBar
+    if (!bar) {
+      return
+    }
+    const value = vessel.occupantLifePct
+    if (typeof value !== 'number' || !Number.isFinite(value)) {
+      bar.root.visible = false
+      return
+    }
+    const clamped = THREE.MathUtils.clamp(value, 0, 1)
+    bar.root.visible = true
+    bar.fill.scale.x = clamped
+    bar.fill.position.x = (clamped - 1) * 2
+    const material = bar.fill.material
+    material.color.setRGB(1 - clamped, clamped, 0)
+  }
 
   function createRemoteVehicle(profile: RemoteProfile): RemoteVehicle {
-    //1.- Materialise the remote pilot group with a vehicle mesh and optional HUD nameplate.
+    //1.- Materialise the remote pilot group with a vehicle mesh, optional HUD nameplate, and health bar.
     const group = new THREE.Group()
     const mesh = instantiateVehicleMesh(profile.vehicleKey)
     group.add(mesh)
+
     const label = createNameplate(profile)
     if (label) {
       group.add(label)
     }
-    group.name = formatGroupName(profile)
+
+    const healthBar = createHealthBar()
+    group.add(healthBar.root)
+
+    const snapshot = { name: profile.pilotName, vehicleKey: profile.vehicleKey }
+    group.name = formatGroupName(snapshot.name, snapshot.vehicleKey)
     group.userData.remoteProfile = profile
+    group.userData.remoteOccupant = null
     root.add(group)
-    return { group, mesh, label, vehicleKey: profile.vehicleKey, pilotName: profile.pilotName }
+
+    return {
+      group,
+      mesh,
+      label,
+      profile,
+      labelSnapshot: snapshot,
+      occupantName: null,
+      occupantLifePct: null,
+      healthBar
+    }
   }
 
   function updateRemoteVehicle(vessel: RemoteVehicle, profile: RemoteProfile) {
     //1.- Swap the chassis when the authoritative vehicle changes.
-    const previousVehicleKey = vessel.vehicleKey
+    const previousVehicleKey = vessel.profile.vehicleKey
     if (profile.vehicleKey !== previousVehicleKey) {
       vessel.group.remove(vessel.mesh)
       disposeObject3D(vessel.mesh)
       const replacement = instantiateVehicleMesh(profile.vehicleKey)
       vessel.group.add(replacement)
       vessel.mesh = replacement
-      vessel.vehicleKey = profile.vehicleKey
     }
 
-    //2.- Refresh the floating nameplate whenever the pilot identity or chassis changes.
-    if (profile.pilotName !== vessel.pilotName || profile.vehicleKey !== previousVehicleKey) {
-      disposeLabel(vessel.label)
-      const label = createNameplate(profile)
-      if (label) {
-        vessel.group.add(label)
-      }
-      vessel.label = label
-    }
+    vessel.profile = profile
+    refreshDisplayMetadata(vessel)
+  }
 
-    //3.- Persist the latest metadata on the group for external diagnostics.
-    vessel.group.name = formatGroupName(profile)
-    vessel.group.userData.remoteProfile = profile
-    vessel.pilotName = profile.pilotName
+  function applyOccupantToVehicle(vehicleId: string) {
+    //1.- Synchronise the cached occupant metadata with the instantiated remote vehicle.
+    const vessel = registry.get(vehicleId)
+    if (!vessel) {
+      return
+    }
+    const occupant = occupantRegistry.get(vehicleId)
+    vessel.occupantName = occupant?.playerName ?? null
+    vessel.occupantLifePct = occupant?.lifePct ?? null
+    refreshDisplayMetadata(vessel)
+    updateHealthVisual(vessel)
   }
 
   function upsertVehicle(state: Record<string, unknown>) {
@@ -263,26 +380,97 @@ export function createRemotePlayerManager(scene: THREE.Scene): RemotePlayersMana
     const orientation = state.orientation as Record<string, unknown> | undefined
     const { pitch, yaw, roll } = ensureOrientationRadians(orientation, vessel.group.rotation)
     vessel.group.rotation.set(pitch, yaw, roll, 'YXZ')
+
+    applyOccupantToVehicle(vehicleId)
   }
 
   function removeVehicle(vehicleId: string) {
     //1.- Remove stale remote pilots from the scene graph and dispose of their GPU resources.
     const entry = registry.get(vehicleId)
     if (!entry) {
+      occupantRegistry.delete(vehicleId)
       return
     }
+    disposeHealthBar(entry.healthBar)
     root.remove(entry.group)
     disposeGroup(entry.group)
     registry.delete(vehicleId)
+    occupantRegistry.delete(vehicleId)
   }
 
-  function ingestDiff(diff?: VehicleDiffPayload | null) {
+  function parseOccupantEntry(entry: BrokerOccupantSnapshot): { id: string; state: OccupantState } | null {
+    //1.- Validate the vehicle identifier and capture the associated occupant payload.
+    const vehicleId = typeof entry.vehicle_id === 'string' ? entry.vehicle_id.trim() : ''
+    if (!vehicleId) {
+      return null
+    }
+    const rawName =
+      typeof entry.player_name === 'string'
+        ? entry.player_name.trim()
+        : typeof (entry as Record<string, unknown>).playerName === 'string'
+          ? String((entry as Record<string, unknown>).playerName).trim()
+          : ''
+    const playerName = rawName !== '' ? rawName : null
+    const lifePct =
+      typeof entry.life_pct === 'number' && Number.isFinite(entry.life_pct)
+        ? THREE.MathUtils.clamp(entry.life_pct, 0, 1)
+        : typeof (entry as Record<string, unknown>).lifePct === 'number' && Number.isFinite((entry as Record<string, unknown>).lifePct)
+          ? THREE.MathUtils.clamp((entry as Record<string, unknown>).lifePct as number, 0, 1)
+          : null
+    return { id: vehicleId, state: { playerName, lifePct } }
+  }
+
+  function ingestOccupants(diff?: OccupantDiffPayload | null) {
+    //1.- Withdraw occupant overlays that were explicitly removed in the diff.
+    const removed = diff?.removed
+    if (Array.isArray(removed)) {
+      for (const id of removed) {
+        if (typeof id !== 'string') {
+          continue
+        }
+        const trimmed = id.trim()
+        if (!trimmed) {
+          continue
+        }
+        occupantRegistry.delete(trimmed)
+        const vessel = registry.get(trimmed)
+        if (vessel) {
+          vessel.occupantName = null
+          vessel.occupantLifePct = null
+          refreshDisplayMetadata(vessel)
+          updateHealthVisual(vessel)
+        }
+      }
+    }
+
+    const updated = diff?.updated
+    if (Array.isArray(updated)) {
+      for (const entry of updated) {
+        if (!entry) {
+          continue
+        }
+        const parsed = parseOccupantEntry(entry)
+        if (!parsed) {
+          continue
+        }
+        const previous = occupantRegistry.get(parsed.id) ?? { playerName: null, lifePct: null }
+        const next: OccupantState = {
+          playerName: parsed.state.playerName ?? previous.playerName,
+          lifePct: parsed.state.lifePct ?? previous.lifePct
+        }
+        occupantRegistry.set(parsed.id, next)
+        applyOccupantToVehicle(parsed.id)
+      }
+    }
+  }
+
+  function ingestDiff(diff?: VehicleDiffPayload | null, occupants?: OccupantDiffPayload | null) {
     //1.- Apply authoritative removals before updates so respawns do not inherit stale transforms.
     const removed = diff?.removed
     if (Array.isArray(removed)) {
       for (const id of removed) {
         if (typeof id === 'string' && id.trim() !== '') {
-          removeVehicle(id)
+          removeVehicle(id.trim())
         }
       }
     }
@@ -296,15 +484,19 @@ export function createRemotePlayerManager(scene: THREE.Scene): RemotePlayersMana
         }
       }
     }
+
+    ingestOccupants(occupants)
   }
 
   function dispose() {
     //1.- Detach the root container and drain all registered remote pilots.
     for (const entry of registry.values()) {
+      disposeHealthBar(entry.healthBar)
       root.remove(entry.group)
       disposeGroup(entry.group)
     }
     registry.clear()
+    occupantRegistry.clear()
     root.parent?.remove(root)
   }
 
