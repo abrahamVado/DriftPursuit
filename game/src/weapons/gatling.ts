@@ -195,10 +195,16 @@ export function createGatlingVisual(scene: THREE.Scene, options: GatlingOptions,
 
   function dispose() {
     // 5. Release GPU buffers when the owning entity despawns to prevent leaks.
-    tracers.forEach(tracer => {
+    tracers.forEach((tracer) => {
+      //1.- Strip the tracer from the scene graph and cleanly dispose its GPU buffers.
       scene.remove(tracer);
       tracer.geometry.dispose();
-      tracer.material.dispose();
+      const material = tracer.material;
+      if (Array.isArray(material)) {
+        material.forEach((entry) => entry.dispose());
+      } else {
+        material.dispose();
+      }
     });
   }
 

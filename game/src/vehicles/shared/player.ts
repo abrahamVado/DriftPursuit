@@ -6,11 +6,13 @@ import { buildIcosahedron } from '@/vehicles/icosahedron/build'
 import { buildCube } from '@/vehicles/cube/build'
 import { createController } from '@/vehicles/shared/simpleController'
 
-export function createPlayer(initial:'arrowhead'|'octahedron'|'pyramid'|'icosahedron'|'cube', scene: THREE.Scene){
+type VehicleKey = 'arrowhead' | 'octahedron' | 'pyramid' | 'icosahedron' | 'cube'
+
+export function createPlayer(initial: VehicleKey, scene: THREE.Scene) {
+  //1.- Instantiate the player anchor group and populate the builder registry keyed by vehicle ids.
   const group = new THREE.Group()
   scene.add(group)
-
-  const builders = {
+  const builders: Record<VehicleKey, () => THREE.Object3D> = {
     arrowhead: buildArrowhead,
     octahedron: buildOctahedron,
     pyramid: buildPyramid,
@@ -18,25 +20,35 @@ export function createPlayer(initial:'arrowhead'|'octahedron'|'pyramid'|'icosahe
     cube: buildCube
   }
 
-  let currentKey = initial
-  let currentMesh = builders[currentKey]()
-  group.add(currentMesh)
+  const resolveVehicle = (key: VehicleKey) => {
+    const builder = builders[key]
+    if (!builder) {
+      throw new Error(`Vehicle builder missing for key: ${key}`)
+    }
+    return builder()
+  }
 
+  //2.- Materialise the initial mesh and bootstrap the controller for input-driven updates.
+  let currentKey: VehicleKey = initial
+  let currentMesh = resolveVehicle(currentKey)
+  group.add(currentMesh)
   const controller = createController(group, scene)
   controller.refreshVehicleClearance?.()
 
-  function setVehicle(key: keyof typeof builders){
+  //3.- Allow downstream consumers to swap vehicles while keeping the controller in sync.
+  function setVehicle(key: VehicleKey) {
     if (currentMesh) group.remove(currentMesh)
     currentKey = key
-    currentMesh = builders[currentKey]()
+    currentMesh = resolveVehicle(currentKey)
     group.add(currentMesh)
     controller.refreshVehicleClearance?.()
   }
 
-  function cycleVehicle(){
-    const keys = Object.keys(builders) as Array<keyof typeof builders>
+  //4.- Provide a convenience cycle helper for sequential vehicle selection.
+  function cycleVehicle() {
+    const keys = Object.keys(builders) as VehicleKey[]
     const i = keys.indexOf(currentKey)
-    setVehicle(keys[(i+1)%keys.length])
+    setVehicle(keys[(i + 1) % keys.length])
   }
 
   return { group, controller, setVehicle, cycleVehicle }
