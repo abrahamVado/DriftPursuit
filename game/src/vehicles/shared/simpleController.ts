@@ -3,9 +3,11 @@ import { createGatlingSystem } from '@/weapons/gatling'
 import { createHomingMissileSystem } from '@/weapons/homingMissile'
 import { createNeonLaserSystem } from '@/weapons/neonLaser'
 import { createBombSystem } from '@/weapons/bomb'
+import { createHomingMissileVisual } from '@/weapons/visuals/homingMissileVisual'
+import { createNeonLaserVisual } from '@/weapons/visuals/neonLaserVisual'
 import type { WeaponContext, WeaponTarget } from '@/weapons/types'
 
-export function createController(group: THREE.Group){
+export function createController(group: THREE.Group, scene: THREE.Scene){
   const vel = new THREE.Vector3(0,0,60)
   const forward = new THREE.Vector3(0,0,-1)
   const weaponContext: WeaponContext = {
@@ -39,12 +41,16 @@ export function createController(group: THREE.Group){
     maxLifetimeMs: 12000,
   })
 
+  const missileVisuals = createHomingMissileVisual(scene)
+
   const laserSystem = createNeonLaserSystem({
     cooldownMs: 2000,
     durationMs: 600,
     range: 800,
     attenuation: 0.002,
   })
+
+  const laserVisual = createNeonLaserVisual(scene)
 
   const bombSystem = createBombSystem({
     maxConcurrent: 2,
@@ -127,6 +133,8 @@ export function createController(group: THREE.Group){
       missilesSystem.tryFire(weaponContext)
     }
     missilesSystem.update(weaponContext)
+    //3.- Mirror the guidance results into the scene so each missile gains a visible shell.
+    missileVisuals.update(missilesSystem.missiles)
 
     if (weaponName === 'LASER'){
       if (fireJustPressed){
@@ -144,9 +152,11 @@ export function createController(group: THREE.Group){
       }
     }
     laserSystem.update(weaponContext)
+    //4.- Stretch and orient the neon beam according to the freshly sampled weapon state.
+    laserVisual.update(laserSystem.state)
 
     if (weaponName === 'BOMB' && fireJustPressed){
-      //3.- Drop a bomb while relaying the terrain sampler to trigger ground detonation.
+      //5.- Drop a bomb while relaying the terrain sampler to trigger ground detonation.
       bombSystem.fire({ ...weaponContext, sampleGroundHeight: queryHeight })
     }
     bombSystem.update({ ...weaponContext, sampleGroundHeight: queryHeight })
@@ -156,6 +166,12 @@ export function createController(group: THREE.Group){
     missiles = missilesSystem.ammo
     laserCooldownMs = laserSystem.cooldownMs
     bombArmed = bombSystem.isArmed
+  }
+
+  function dispose(){
+    //6.- Tear down transient weapon meshes so hot swaps between vehicles stay safe.
+    missileVisuals.dispose()
+    laserVisual.dispose()
   }
 
   return {
@@ -168,6 +184,7 @@ export function createController(group: THREE.Group){
     get bombArmed(){ return bombArmed },
     setTargetProvider(provider: () => WeaponTarget[]){
       targetProvider = provider
-    }
+    },
+    dispose,
   }
 }
