@@ -416,7 +416,7 @@ export function createStreamer(scene: THREE.Scene, options: StreamerOptions = {}
   }
 
   return {
-    update(pos: THREE.Vector3, dt: number) {
+    update(pos: THREE.Vector3, dt = 0) {
       // radius can adjust with density if you wish; keep simple & stable here
       const radius = ACTIVE_RADIUS
       const cx = toChunk(pos.x)
@@ -438,8 +438,12 @@ export function createStreamer(scene: THREE.Scene, options: StreamerOptions = {}
         environmentDirty = false
       }
 
-      // fade step
-      stepFades(clock.getElapsedTime())
+      //1.- Combine the monotonically increasing clock time with the supplied dt so fades stay smooth during
+      //    deterministic test runs where requestAnimationFrame never fires.
+      const now = clock.getElapsedTime() + dt
+
+      //2.- Advance chunk fade transitions using the resolved timestamp, guaranteeing consistent cross-environment visuals.
+      stepFades(now)
     },
 
     queryHeight(x: number, z: number) {
