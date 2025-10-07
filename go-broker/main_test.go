@@ -14,6 +14,7 @@ import (
 	"encoding/pem"
 	"errors"
 	"fmt"
+	"math"
 	"math/big"
 	"net"
 	"net/http"
@@ -461,6 +462,30 @@ func drainInitialMatchStatus(t *testing.T, ch <-chan wsReadResult) {
 	}
 }
 
+func drainInitialWorldStatus(t *testing.T, ch <-chan wsReadResult) {
+	t.Helper()
+	select {
+	case res := <-ch:
+		//1.- Verify the handshake delivered a world status payload without transport errors.
+		if res.err != nil {
+			t.Fatalf("initial world status read failed: %v", res.err)
+		}
+		var envelope struct {
+			Type string `json:"type"`
+		}
+		//2.- Decode the envelope and assert the broker reported a world identifier.
+		if err := json.Unmarshal(res.msg, &envelope); err != nil {
+			t.Fatalf("decode initial world status: %v", err)
+		}
+		if envelope.Type != "world_status" {
+			t.Fatalf("unexpected world status message: %s", res.msg)
+		}
+	case <-time.After(time.Second):
+		//3.- Fail fast to avoid leaking goroutines waiting on the initial handshake.
+		t.Fatal("timed out waiting for initial world status")
+	}
+}
+
 func waitForBrokerRecovery(t *testing.T, broker *Broker) {
 	t.Helper()
 	deadline := time.Now().Add(2 * time.Second)
@@ -486,9 +511,11 @@ func TestServeWSDropsInvalidMessages(t *testing.T) {
 	sender := dialTestWebSocket(t, server.URL)
 	defer sender.Close()
 	drainInitialMatchStatus(t, listenOnce(sender))
+	drainInitialWorldStatus(t, listenOnce(sender))
 
 	pending := listenOnce(receiver)
 	drainInitialMatchStatus(t, pending)
+	drainInitialWorldStatus(t, listenOnce(receiver))
 	pending = listenOnce(receiver)
 
 	// Send invalid (non-JSON) message; should be dropped and not broadcast.
@@ -541,9 +568,12 @@ func TestServeWSRejectsOversizedMessages(t *testing.T) {
 	sender := dialTestWebSocket(t, server.URL)
 	defer sender.Close()
 
+	drainInitialMatchStatus(t, listenOnce(receiver))
+	drainInitialWorldStatus(t, listenOnce(receiver))
 	pending := listenOnce(receiver)
-	drainInitialMatchStatus(t, pending)
-	pending = listenOnce(receiver)
+
+	drainInitialMatchStatus(t, listenOnce(sender))
+	drainInitialWorldStatus(t, listenOnce(sender))
 
 	// Build an envelope that exceeds the 64-byte limit.
 	oversized := []byte(fmt.Sprintf(`{"type":"big","id":"%s"}`, strings.Repeat("x", 80)))
@@ -579,7 +609,7 @@ func TestServeWSRejectsOversizedMessages(t *testing.T) {
 		if err := json.Unmarshal(msg, &envelope); err != nil {
 			t.Fatalf("decode message before close: %v", err)
 		}
-		if envelope.Type != "match_status" {
+		if envelope.Type != "match_status" && envelope.Type != "world_status" {
 			t.Fatalf("unexpected payload before close: %s", msg)
 		}
 		if time.Now().After(closeDeadline) {
@@ -795,6 +825,23 @@ func TestBrokerSnapshotRecovery(t *testing.T) {
 			t.Fatalf("unexpected first message: %s", payload)
 		}
 	}
+	if err := conn.SetReadDeadline(time.Now().Add(time.Second)); err != nil {
+		t.Fatalf("set world status deadline: %v", err)
+	}
+	if _, payload, err := conn.ReadMessage(); err != nil {
+		t.Fatalf("read initial world status: %v", err)
+	} else {
+		var second struct {
+			Type string `json:"type"`
+		}
+		//1.- Confirm the broker advertises the singleton world to reconnecting clients.
+		if err := json.Unmarshal(payload, &second); err != nil {
+			t.Fatalf("decode initial world status: %v", err)
+		}
+		if second.Type != "world_status" {
+			t.Fatalf("unexpected second message: %s", payload)
+		}
+	}
 	var receivedTypes []string
 	for i := 0; i < 2; i++ {
 		if err := conn.SetReadDeadline(time.Now().Add(time.Second)); err != nil {
@@ -817,8 +864,9 @@ func TestBrokerSnapshotRecovery(t *testing.T) {
 		}
 	}
 	sort.Strings(receivedTypes)
-	if !reflect.DeepEqual(receivedTypes, []string{"match_state", "system_status"}) {
-		t.Fatalf("expected replay types match_state and system_status, got %v", receivedTypes)
+	expectedTypes := []string{"match_state", "system_status"}
+	if !reflect.DeepEqual(receivedTypes, expectedTypes) {
+		t.Fatalf("expected replay types %v, got %v", expectedTypes, receivedTypes)
 	}
 }
 
@@ -1049,7 +1097,7 @@ func TestAdvanceSimulationBroadcastsDiff(t *testing.T) {
 	broker.clients[client] = true
 	broker.lock.Unlock()
 
-	broker.storeVehicleState(&pb.VehicleState{VehicleId: "veh-adv", Position: &pb.Vector3{}})
+	broker.storeVehicleState("tester", &pb.VehicleState{VehicleId: "veh-adv", Position: &pb.Vector3{}})
 	broker.advanceSimulation(16 * time.Millisecond)
 
 	select {
@@ -1541,6 +1589,68 @@ func TestBrokerSubscribeStateDiffs(t *testing.T) {
 		}
 	case <-time.After(time.Second):
 		t.Fatal("timed out waiting for diff event")
+	}
+}
+
+func TestWorldDiffIncludesOccupants(t *testing.T) {
+	logger := logging.NewTestLogger()
+	broker := NewBroker(configpkg.DefaultMaxPayloadBytes, configpkg.DefaultMaxClients, time.Now(), logger)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	ch, stop, err := broker.SubscribeStateDiffs(ctx)
+	if err != nil {
+		t.Fatalf("subscribe state diffs failed: %v", err)
+	}
+	defer stop()
+
+	//1.- Seed a vehicle state so the broker records an occupant mapping.
+	vehicleState := &pb.VehicleState{VehicleId: "veh-occupant", EnergyRemainingPct: 0.5, UpdatedAtMs: 3210}
+	broker.storeVehicleState("pilot-alpha", vehicleState)
+
+	//2.- Publish a diff containing the vehicle update to trigger the occupant overlay payload.
+	diff := state.TickDiff{Vehicles: state.VehicleDiff{Updated: []*pb.VehicleState{vehicleState}}}
+	broker.publishWorldDiff(3, diff)
+
+	select {
+	case event := <-ch:
+		var envelope worldDiffEnvelope
+		if err := json.Unmarshal(event.Payload, &envelope); err != nil {
+			t.Fatalf("decode envelope: %v", err)
+		}
+		if envelope.Occupants == nil || len(envelope.Occupants.Updated) != 1 {
+			t.Fatalf("expected one occupant update, got %+v", envelope.Occupants)
+		}
+		occupant := envelope.Occupants.Updated[0]
+		if occupant.PlayerID != "pilot-alpha" {
+			t.Fatalf("unexpected player id %q", occupant.PlayerID)
+		}
+		if math.Abs(occupant.LifePct-0.5) > 1e-9 {
+			t.Fatalf("unexpected life pct %f", occupant.LifePct)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for occupant update")
+	}
+
+	//3.- Emit a removal diff to ensure the occupant entry is withdrawn.
+	removal := state.TickDiff{Vehicles: state.VehicleDiff{Removed: []string{"veh-occupant"}}}
+	broker.publishWorldDiff(4, removal)
+
+	select {
+	case event := <-ch:
+		var envelope worldDiffEnvelope
+		if err := json.Unmarshal(event.Payload, &envelope); err != nil {
+			t.Fatalf("decode removal envelope: %v", err)
+		}
+		if envelope.Occupants == nil || len(envelope.Occupants.Removed) != 1 {
+			t.Fatalf("expected one occupant removal, got %+v", envelope.Occupants)
+		}
+		if envelope.Occupants.Removed[0] != "veh-occupant" {
+			t.Fatalf("unexpected removal id %q", envelope.Occupants.Removed[0])
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for occupant removal")
 	}
 }
 
