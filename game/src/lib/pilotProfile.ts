@@ -38,14 +38,32 @@ export function normalizeVehicleChoice(input: string | null | undefined): Vehicl
   return VEHICLE_KEYS.includes(lower) ? lower : DEFAULT_VEHICLE_KEY
 }
 
+//1.- Produce a short random suffix so fallback identifiers remain unique across concurrent pilots.
+function generateUniqueSuffix(): string {
+  const cryptoRef = globalThis.crypto
+  if (cryptoRef && typeof cryptoRef.randomUUID === 'function') {
+    const [segment] = cryptoRef.randomUUID().split('-')
+    if (segment && segment.trim() !== '') {
+      return segment.toLowerCase()
+    }
+  }
+  const random = Math.random().toString(36).slice(2, 10)
+  return random || 'fallback'
+}
+
 //1.- Internal helper to slugify the pilot name into a broker-safe identifier.
-function toPilotIdentifier(name: string): string {
+function toPilotIdentifier(name: string, ensureUnique: boolean): string {
   const slug = name
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, '-')
     .replace(/^-+|-+$/g, '')
   const safeSlug = slug || 'rookie-pilot'
-  return `pilot-${safeSlug}`
+  const base = `pilot-${safeSlug}`
+  if (!ensureUnique) {
+    return base
+  }
+  const suffix = generateUniqueSuffix()
+  return `${base}-${suffix}`
 }
 
 export type PilotProfile = {
@@ -70,7 +88,7 @@ export function createPilotProfile(raw: {
   return {
     name: safeName,
     vehicle,
-    clientId: toPilotIdentifier(safeName),
+    clientId: toPilotIdentifier(safeName, usedFallbackName),
     usedFallbackName,
     usedFallbackVehicle
   }

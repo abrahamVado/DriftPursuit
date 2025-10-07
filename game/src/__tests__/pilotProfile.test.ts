@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import {
   DEFAULT_PILOT_NAME,
   DEFAULT_VEHICLE_KEY,
@@ -37,12 +37,16 @@ describe('normalizeVehicleChoice', () => {
 //1.- Validate the aggregated profile object exposes fallback metadata for UI flows.
 describe('createPilotProfile', () => {
   it('applies defaults when inputs are missing', () => {
+    const uuidSpy = vi
+      .spyOn(globalThis.crypto, 'randomUUID')
+      .mockReturnValue('11111111-2222-3333-4444-555555555555')
     const profile = createPilotProfile({ name: '', vehicle: '' })
+    uuidSpy.mockRestore()
     expect(profile.name).toBe(DEFAULT_PILOT_NAME)
     expect(profile.vehicle).toBe(DEFAULT_VEHICLE_KEY)
     expect(profile.usedFallbackName).toBe(true)
     expect(profile.usedFallbackVehicle).toBe(true)
-    expect(profile.clientId).toMatch(/^pilot-/)
+    expect(profile.clientId).toBe('pilot-rookie-pilot-11111111')
   })
 
   it('retains valid selections and produces a deterministic client id', () => {
@@ -52,5 +56,18 @@ describe('createPilotProfile', () => {
     expect(profile.usedFallbackName).toBe(false)
     expect(profile.usedFallbackVehicle).toBe(false)
     expect(profile.clientId).toBe('pilot-nova-prime')
+  })
+
+  it('generates distinct client ids when defaults apply multiple times', () => {
+    const uuidSpy = vi.spyOn(globalThis.crypto, 'randomUUID')
+    uuidSpy
+      .mockReturnValueOnce('aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa')
+      .mockReturnValueOnce('bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb')
+    const first = createPilotProfile({ name: '', vehicle: '' })
+    const second = createPilotProfile({ name: '', vehicle: '' })
+    uuidSpy.mockRestore()
+    expect(first.clientId).toBe('pilot-rookie-pilot-aaaaaaaa')
+    expect(second.clientId).toBe('pilot-rookie-pilot-bbbbbbbb')
+    expect(first.clientId).not.toBe(second.clientId)
   })
 })
