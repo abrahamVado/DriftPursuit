@@ -11,6 +11,12 @@ import { applyBossDefeat, getDifficultyState, onDifficultyChange } from '@/engin
 import type { BrokerIntentSnapshot, BrokerWorldDiffEnvelope } from '@/lib/brokerClient'
 import { DEFAULT_VEHICLE_KEY, type VehicleKey } from '@/lib/pilotProfile'
 
+export type PresenceSnapshot = {
+  vehicle_id: string
+  position: { x: number; y: number; z: number }
+  orientation: { yaw_deg: number; pitch_deg: number; roll_deg: number }
+}
+
 export type GameAPI = {
   actions: any
   getState: () => {
@@ -32,6 +38,9 @@ export type GameAPI = {
   }
   ingestWorldDiff: (diff: BrokerWorldDiffEnvelope) => void
   sampleIntent: () => BrokerIntentSnapshot
+  samplePresence: () => PresenceSnapshot | null
+  ingestPresenceSnapshot: (snapshot: PresenceSnapshot) => void
+  removeRemoteVehicle: (vehicleId: string) => void
   pilotId: string
 }
 
@@ -204,6 +213,44 @@ export function initGame(
         gear: 1,
         boost
       }
+    },
+    samplePresence: () => {
+      //1.- Capture the current vehicle transform so other browser tabs can replay the motion locally.
+      if (!pilotId) {
+        return null
+      }
+      const { position, rotation } = player.group
+      return {
+        vehicle_id: pilotId,
+        position: { x: position.x, y: position.y, z: position.z },
+        orientation: {
+          yaw_deg: THREE.MathUtils.radToDeg(rotation.y),
+          pitch_deg: THREE.MathUtils.radToDeg(rotation.x),
+          roll_deg: THREE.MathUtils.radToDeg(rotation.z)
+        }
+      }
+    },
+    ingestPresenceSnapshot: (snapshot) => {
+      //1.- Skip malformed payloads and self echoes so only remote presences manifest as ghost ships.
+      if (!snapshot || snapshot.vehicle_id === pilotId) {
+        return
+      }
+      remotePlayers.ingestDiff({
+        updated: [
+          {
+            vehicle_id: snapshot.vehicle_id,
+            position: snapshot.position,
+            orientation: snapshot.orientation
+          }
+        ]
+      })
+    },
+    removeRemoteVehicle: (vehicleId) => {
+      //1.- Cull stale presences using the existing diff ingestion pipeline for deterministic teardown.
+      if (!vehicleId || vehicleId === pilotId) {
+        return
+      }
+      remotePlayers.ingestDiff({ removed: [vehicleId] })
     },
     pilotId
   }
