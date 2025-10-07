@@ -75,8 +75,9 @@ export function createHomingMissileVisual(scene: THREE.Scene, palette: MissilePa
   const renderStates = new Map<number, MissileRenderState>()
 
   function buildMissile(): MissileRenderState {
-    //1.- Construct a reusable missile rig so pooled projectiles share GPU buffers.
+    //1.- Construct a reusable missile rig so pooled projectiles share GPU buffers and pre-scale the assembly.
     const missileGroup = new THREE.Group()
+    missileGroup.scale.setScalar(1.2)
 
     const body = new THREE.Mesh(bodyGeometry, bodyMaterial)
     body.rotation.x = Math.PI / 2

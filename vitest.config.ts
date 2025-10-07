@@ -2,7 +2,7 @@ import { fileURLToPath } from 'node:url'
 import { dirname, resolve } from 'node:path'
 import { defineConfig } from 'vitest/config'
 
-//1.- Align Vitest's module resolution with the tsconfig alias and scope coverage to the new remote player logic.
+//1.- Align Vitest's module resolution with the tsconfig alias while registering both HUD and weapon regression suites.
 const rootDir = fileURLToPath(new URL('.', import.meta.url))
 
 export default defineConfig({
@@ -12,7 +12,11 @@ export default defineConfig({
     }
   },
   test: {
-    include: ['game/src/__tests__/remotePlayers.test.ts', 'game/src/__tests__/minimap.test.tsx'],
+    include: [
+      'game/src/__tests__/remotePlayers.test.ts',
+      'game/src/__tests__/minimap.test.tsx',
+      'game/src/weapons/__tests__/**/*.test.ts'
+    ],
     environment: 'node',
     environmentMatchGlobs: [['**/*.test.tsx', 'jsdom']],
     coverage: {
