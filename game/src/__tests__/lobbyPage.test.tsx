@@ -39,4 +39,18 @@ describe('LobbyPage validation', () => {
 
     expect(push).toHaveBeenCalledWith('/gameplay?pilot=Nova+Prime&vehicle=icosahedron')
   })
+
+  it('lists the tank chassis as a selectable option', () => {
+    //1.- Render the lobby so the vehicle dropdown materialises the available chassis options.
+    render(<LobbyPage />)
+
+    //2.- Collect the option labels and assert the newly added tank form appears alongside legacy craft.
+    const options = screen.getAllByRole('option')
+    const labels = options.map((option) => option.textContent)
+    expect(labels).toContain('Tank (Planetform)')
+
+    //3.- Assert the select element exposes the explicit tank value so gameplay receives the correct key.
+    const values = options.map((option) => option.getAttribute('value'))
+    expect(values).toContain('tank')
+  })
 })
