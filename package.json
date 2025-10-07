@@ -6,9 +6,11 @@
     "three": "^0.162.0"
   },
   "devDependencies": {
+    "@vitest/coverage-v8": "^1.6.1",
     "ts-node": "^10.9.2",
     "tsconfig-paths": "^4.2.0",
-    "typescript": "^5.4.5"
+    "typescript": "^5.4.5",
+    "vitest": "^1.6.0"
   },
   "scripts": {
     "test": "node -r ts-node/register -r tsconfig-paths/register tests/runAllTests.ts"

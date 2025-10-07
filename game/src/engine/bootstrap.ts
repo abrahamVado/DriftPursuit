@@ -3,6 +3,7 @@ import * as THREE from 'three'
 import { createStreamer } from '@/world/chunks/streamer'
 import { createChaseCam } from '@/camera/chaseCam'
 import { createPlayer } from '@/vehicles/shared/player'
+import { createRemotePlayerManager } from '@/engine/remotePlayers'
 import { createInput } from '@/ui/inputMap'
 import { createCorridor } from '@/spawn/corridor'
 import { createSpawner } from '@/spawn/spawnTable'
@@ -78,6 +79,7 @@ export function initGame(
   const input = createInput(container)
   const chase = createChaseCam(camera)
   const streamer = createStreamer(scene)
+  const remotePlayers = createRemotePlayerManager(scene)
 
   //1.- Spawn the player with the requested vehicle or gracefully fall back to the Arrowhead chassis.
   const startingVehicle = options?.initialVehicle ?? DEFAULT_VEHICLE_KEY
@@ -180,6 +182,11 @@ export function initGame(
           }
         }
       }
+
+      //3.- Mirror authoritative vehicle transforms so remote pilots appear alongside the local craft.
+      if (diff.vehicles) {
+        remotePlayers.ingestDiff(diff.vehicles)
+      }
     },
     sampleIntent: () => {
       //3.- Translate the instantaneous input map into the broker intent schema fields.
@@ -208,6 +215,7 @@ export function initGame(
     input.dispose()
     streamer.dispose?.()
     spawner.dispose?.()
+    remotePlayers.dispose()
     unsubscribeDifficulty?.()
   }
 
