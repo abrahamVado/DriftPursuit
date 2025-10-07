@@ -21,6 +21,11 @@ export type GameAPI = {
     missiles: number
     laserCooldown: number
     bombArmed: boolean
+    ability: string
+    shieldActive: boolean
+    dashActive: boolean
+    ultimateActive: boolean
+    hull: number
     difficulty: ReturnType<typeof getDifficultyState>
   }
   ingestWorldDiff: (diff: BrokerWorldDiffEnvelope) => void
@@ -128,6 +133,11 @@ export function initGame(container: HTMLDivElement, opts = DEFAULT_SCENE_OPTS, o
       missiles: player.controller.missiles,
       laserCooldown: player.controller.laserCooldownMs,
       bombArmed: player.controller.bombArmed,
+      ability: player.controller.weaponName,
+      shieldActive: player.controller.shieldActive,
+      dashActive: player.controller.dashActive,
+      ultimateActive: player.controller.ultimateActive,
+      hull: player.controller.hull,
       difficulty: difficultyState
     }),
     ingestWorldDiff: (diff) => {
