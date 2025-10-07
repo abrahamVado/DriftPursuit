@@ -36,7 +36,10 @@ export default function GameplayPage() {
     apiRef.current = api
 
     //2.- Connect to the broker so authoritative world diffs can steer the HUD and server-side actors.
-    const broker = createBrokerClient({ clientId: pilotProfile.clientId })
+    const broker = createBrokerClient({
+      clientId: pilotProfile.clientId,
+      pilotProfile: { name: pilotProfile.name, vehicle: pilotProfile.vehicle }
+    })
     const unsubscribe = broker.onWorldDiff((diff) => {
       apiRef.current?.ingestWorldDiff(diff)
     })
@@ -92,7 +95,7 @@ export default function GameplayPage() {
       window.removeEventListener('beforeunload', announceDeparture)
       dispose()
     }
-  }, [pilotProfile.clientId, pilotProfile.vehicle])
+  }, [pilotProfile.clientId, pilotProfile.name, pilotProfile.vehicle])
 
   return (
     <div style={{ position: 'fixed', inset: 0, overflow: 'hidden' }}>

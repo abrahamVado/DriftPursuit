@@ -1700,6 +1700,62 @@ func TestWorldDiffIncludesOccupants(t *testing.T) {
 	}
 }
 
+func TestWorldDiffIncludesPilotProfiles(t *testing.T) {
+	logger := logging.NewTestLogger()
+	broker := NewBroker(configpkg.DefaultMaxPayloadBytes, configpkg.DefaultMaxClients, time.Now(), logger)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	ch, stop, err := broker.SubscribeStateDiffs(ctx)
+	if err != nil {
+		t.Fatalf("subscribe state diffs failed: %v", err)
+	}
+	defer stop()
+
+	pilotID := "pilot-profile"
+	profilePayload, err := json.Marshal(map[string]any{
+		"type":    "pilot_profile",
+		"id":      pilotID,
+		"name":    "Sky Racer",
+		"vehicle": "cube",
+	})
+	if err != nil {
+		t.Fatalf("marshal pilot profile: %v", err)
+	}
+	client := &Client{id: pilotID, log: logger}
+	broker.handleStructuredMessage(client, inboundEnvelope{Type: "pilot_profile", ID: pilotID}, profilePayload)
+
+	vehicleState := &pb.VehicleState{VehicleId: "veh-profile"}
+	broker.storeVehicleState(pilotID, vehicleState)
+
+	diff := state.TickDiff{Vehicles: state.VehicleDiff{Updated: []*pb.VehicleState{vehicleState}}}
+	broker.publishWorldDiff(9, diff)
+
+	select {
+	case event := <-ch:
+		var envelope worldDiffEnvelope
+		if err := json.Unmarshal(event.Payload, &envelope); err != nil {
+			t.Fatalf("decode envelope: %v", err)
+		}
+		if envelope.Vehicles == nil || len(envelope.Vehicles.Updated) != 1 {
+			t.Fatalf("expected single vehicle update, got %+v", envelope.Vehicles)
+		}
+		update := envelope.Vehicles.Updated[0]
+		if update == nil || update.Profile == nil {
+			t.Fatalf("expected profile metadata, got %+v", update)
+		}
+		if update.Profile.Name != "Sky Racer" {
+			t.Fatalf("unexpected profile name %q", update.Profile.Name)
+		}
+		if update.Profile.Vehicle != "cube" {
+			t.Fatalf("unexpected vehicle key %q", update.Profile.Vehicle)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for world diff")
+	}
+}
+
 func TestPublishWorldSnapshotHonoursBandwidthThrottle(t *testing.T) {
 	logger := logging.NewTestLogger()
 	current := time.Unix(0, 0)

@@ -13,6 +13,7 @@ type vehicleOccupant struct {
 	VehicleID   string  `json:"vehicle_id"`
 	PlayerID    string  `json:"player_id"`
 	PlayerName  string  `json:"player_name"`
+	VehicleKey  string  `json:"vehicle_key,omitempty"`
 	LifePct     float64 `json:"life_pct"`
 	UpdatedAtMs int64   `json:"updated_at_ms"`
 }
@@ -22,10 +23,16 @@ type occupantDiffEnvelope struct {
 	Removed []string           `json:"removed,omitempty"`
 }
 
+type pilotProfileRecord struct {
+	DisplayName string `json:"display_name,omitempty"`
+	VehicleKey  string `json:"vehicle_key,omitempty"`
+}
+
 type vehicleOccupantRegistry struct {
 	mu             sync.RWMutex
 	byVehicle      map[string]vehicleOccupant
 	playerVehicles map[string]string
+	profiles       map[string]pilotProfileRecord
 }
 
 func newVehicleOccupantRegistry() *vehicleOccupantRegistry {
@@ -34,10 +41,12 @@ func newVehicleOccupantRegistry() *vehicleOccupantRegistry {
 		byVehicle: make(map[string]vehicleOccupant),
 		//2.- Track the reverse mapping to cleanly evict vehicles when a pilot disconnects.
 		playerVehicles: make(map[string]string),
+		//3.- Cache the pilot profile metadata provided by the clients.
+		profiles: make(map[string]pilotProfileRecord),
 	}
 }
 
-func (r *vehicleOccupantRegistry) Record(playerID, playerName, vehicleID string, lifePct float64, updatedAt int64) vehicleOccupant {
+func (r *vehicleOccupantRegistry) Record(playerID, playerName, vehicleKey, vehicleID string, lifePct float64, updatedAt int64) vehicleOccupant {
 	if r == nil {
 		return vehicleOccupant{}
 	}
@@ -47,24 +56,102 @@ func (r *vehicleOccupantRegistry) Record(playerID, playerName, vehicleID string,
 	if trimmedVehicle == "" || trimmedPlayer == "" {
 		return vehicleOccupant{}
 	}
-	//2.- Prefer the supplied display name but fall back to the identifier.
-	name := strings.TrimSpace(playerName)
+	providedName := strings.TrimSpace(playerName)
+	providedVehicle := strings.TrimSpace(vehicleKey)
+	r.mu.Lock()
+	//2.- Merge the supplied metadata with any stored pilot profile for the controller.
+	profile := r.profiles[trimmedPlayer]
+	name := providedName
+	if name == "" {
+		name = strings.TrimSpace(profile.DisplayName)
+	}
 	if name == "" {
 		name = trimmedPlayer
+	}
+	key := providedVehicle
+	if key == "" {
+		key = strings.TrimSpace(profile.VehicleKey)
 	}
 	occupant := vehicleOccupant{
 		VehicleID:   trimmedVehicle,
 		PlayerID:    trimmedPlayer,
 		PlayerName:  name,
+		VehicleKey:  key,
 		LifePct:     clampUnitInterval(lifePct),
 		UpdatedAtMs: updatedAt,
 	}
-	r.mu.Lock()
 	//3.- Persist both the forward and reverse mapping for later diffs and evictions.
 	r.byVehicle[trimmedVehicle] = occupant
 	r.playerVehicles[trimmedPlayer] = trimmedVehicle
 	r.mu.Unlock()
 	return occupant
+}
+
+func (r *vehicleOccupantRegistry) RememberProfile(playerID, displayName, vehicleKey string) pilotProfileRecord {
+	if r == nil {
+		return pilotProfileRecord{}
+	}
+	trimmedPlayer := strings.TrimSpace(playerID)
+	if trimmedPlayer == "" {
+		return pilotProfileRecord{}
+	}
+	name := strings.TrimSpace(displayName)
+	if name == "" {
+		name = trimmedPlayer
+	}
+	key := strings.TrimSpace(strings.ToLower(vehicleKey))
+	record := pilotProfileRecord{DisplayName: name}
+	if key != "" {
+		record.VehicleKey = key
+	}
+	r.mu.Lock()
+	//1.- Store the metadata for future vehicle updates and refresh any cached occupant entry.
+	r.profiles[trimmedPlayer] = record
+	if vehicleID, ok := r.playerVehicles[trimmedPlayer]; ok && vehicleID != "" {
+		occupant := r.byVehicle[vehicleID]
+		occupant.PlayerName = record.DisplayName
+		if record.VehicleKey != "" {
+			occupant.VehicleKey = record.VehicleKey
+		}
+		r.byVehicle[vehicleID] = occupant
+	}
+	r.mu.Unlock()
+	return record
+}
+
+func (r *vehicleOccupantRegistry) ProfileForPlayer(playerID string) pilotProfileRecord {
+	if r == nil {
+		return pilotProfileRecord{}
+	}
+	trimmed := strings.TrimSpace(playerID)
+	if trimmed == "" {
+		return pilotProfileRecord{}
+	}
+	r.mu.RLock()
+	record := r.profiles[trimmed]
+	r.mu.RUnlock()
+	return record
+}
+
+func (r *vehicleOccupantRegistry) ProfileForVehicle(vehicleID string) (pilotProfileRecord, bool) {
+	if r == nil {
+		return pilotProfileRecord{}, false
+	}
+	trimmed := strings.TrimSpace(vehicleID)
+	if trimmed == "" {
+		return pilotProfileRecord{}, false
+	}
+	r.mu.RLock()
+	occupant, ok := r.byVehicle[trimmed]
+	r.mu.RUnlock()
+	if !ok {
+		return pilotProfileRecord{}, false
+	}
+	profile := pilotProfileRecord{DisplayName: occupant.PlayerName}
+	if strings.TrimSpace(occupant.VehicleKey) != "" {
+		profile.VehicleKey = strings.TrimSpace(occupant.VehicleKey)
+	}
+	return profile, true
 }
 
 func (r *vehicleOccupantRegistry) ForgetVehicles(vehicleIDs []string) []string {
@@ -114,6 +201,7 @@ func (r *vehicleOccupantRegistry) ForgetPlayer(playerID string) []string {
 		return nil
 	}
 	delete(r.playerVehicles, trimmed)
+	delete(r.profiles, trimmed)
 	if vehicleID != "" {
 		delete(r.byVehicle, vehicleID)
 	}

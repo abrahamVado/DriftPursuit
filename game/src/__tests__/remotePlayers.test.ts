@@ -111,4 +111,30 @@ describe('remote player manager', () => {
     expect(manager.activeVehicleIds()).toEqual([])
     expect(scene.children.some((child) => child.name === 'remote-players-root')).toBe(true)
   })
+
+  it('parses broker vehicle updates that include profile metadata', () => {
+    const manager = createRemotePlayerManager(scene)
+
+    //1.- Feed the JSON payload emitted by the broker into the manager to simulate a live diff broadcast.
+    const payload = JSON.parse(
+      JSON.stringify({
+        type: 'world_diff',
+        tick: 99,
+        vehicles: {
+          updated: [
+            {
+              vehicle_id: 'veh-profiled',
+              profile: { name: 'Sky Racer', vehicle: 'cube' }
+            }
+          ]
+        }
+      })
+    ) as { vehicles?: { updated?: Array<Record<string, unknown>> } }
+
+    manager.ingestDiff(payload.vehicles)
+
+    const group = manager.getVehicleGroup('veh-profiled')
+    expect(group?.userData.remoteProfile).toEqual({ pilotName: 'Sky Racer', vehicleKey: 'cube' })
+    expect(group?.name).toBe('remote-player:Sky Racer (cube)')
+  })
 })

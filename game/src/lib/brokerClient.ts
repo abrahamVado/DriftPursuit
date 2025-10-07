@@ -37,6 +37,10 @@ type WorldDiffListener = (diff: BrokerWorldDiffEnvelope) => void;
 type BrokerClientOptions = {
   clientId?: string;
   reconnectDelayMs?: number;
+  pilotProfile?: {
+    name: string;
+    vehicle: string;
+  };
 };
 
 type ConnectionState = "idle" | "connecting" | "open" | "closed";
@@ -44,6 +48,7 @@ type ConnectionState = "idle" | "connecting" | "open" | "closed";
 class BrokerClientImpl {
   private readonly clientId: string;
   private readonly baseDelay: number;
+  private readonly profile: BrokerClientOptions["pilotProfile"] | null;
   private socket: WebSocket | null = null;
   private listeners = new Set<WorldDiffListener>();
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
@@ -58,6 +63,7 @@ class BrokerClientImpl {
     this.clientId = options.clientId?.trim() || "pilot-local";
     this.baseDelay = Math.max(250, options.reconnectDelayMs ?? 1000);
     this.backoffMs = this.baseDelay;
+    this.profile = options.pilotProfile ?? null;
     this.openSocket();
   }
 
@@ -81,6 +87,7 @@ class BrokerClientImpl {
       this.state = "open";
       this.backoffMs = this.baseDelay;
       this.sendHandshake();
+      this.sendPilotProfile();
       this.flushQueue();
     });
 
@@ -113,8 +120,22 @@ class BrokerClientImpl {
     this.sendRaw(JSON.stringify(handshake));
   }
 
+  private sendPilotProfile() {
+    //6.- Publish the pilot's preferred metadata immediately so the broker can annotate vehicle diffs.
+    if (!this.profile) {
+      return;
+    }
+    const message = {
+      type: "pilot_profile",
+      id: this.clientId,
+      name: this.profile.name,
+      vehicle: this.profile.vehicle,
+    };
+    this.sendRaw(JSON.stringify(message));
+  }
+
   private flushQueue() {
-    //6.- Drain buffered payloads now that the websocket is writable again.
+    //7.- Drain buffered payloads now that the websocket is writable again.
     if (!this.socket || this.socket.readyState !== WebSocket.OPEN) {
       return;
     }
@@ -124,7 +145,7 @@ class BrokerClientImpl {
   }
 
   private scheduleReconnect() {
-    //7.- Apply exponential backoff to avoid thundering herds when reconnecting after broker restarts.
+    //8.- Apply exponential backoff to avoid thundering herds when reconnecting after broker restarts.
     this.clearTimer();
     this.reconnectTimer = setTimeout(() => {
       this.backoffMs = Math.min(this.backoffMs * 2, 16000);
@@ -133,7 +154,7 @@ class BrokerClientImpl {
   }
 
   private clearTimer() {
-    //8.- Cancel any queued reconnect attempt prior to opening a fresh socket.
+    //9.- Cancel any queued reconnect attempt prior to opening a fresh socket.
     if (this.reconnectTimer) {
       clearTimeout(this.reconnectTimer);
       this.reconnectTimer = null;
@@ -141,7 +162,7 @@ class BrokerClientImpl {
   }
 
   private handleMessage(raw: unknown) {
-    //9.- Parse inbound JSON payloads and forward recognised world diffs to subscribers.
+    //10.- Parse inbound JSON payloads and forward recognised world diffs to subscribers.
     if (typeof raw !== "string") {
       return;
     }
@@ -159,7 +180,7 @@ class BrokerClientImpl {
   }
 
   private sendRaw(payload: string) {
-    //10.- Transmit immediately when connected or queue for delivery once the broker handshake completes.
+    //11.- Transmit immediately when connected or queue for delivery once the broker handshake completes.
     if (this.socket && this.socket.readyState === WebSocket.OPEN) {
       this.socket.send(payload);
       return;
@@ -168,13 +189,13 @@ class BrokerClientImpl {
   }
 
   onWorldDiff(listener: WorldDiffListener): () => void {
-    //11.- Register subscribers so gameplay systems can react to authoritative state updates.
+    //12.- Register subscribers so gameplay systems can react to authoritative state updates.
     this.listeners.add(listener);
     return () => this.listeners.delete(listener);
   }
 
   sendIntent(snapshot: BrokerIntentSnapshot) {
-    //12.- Increment the intent sequence and forward the latest control frame to the broker.
+    //13.- Increment the intent sequence and forward the latest control frame to the broker.
     this.sequenceId += 1;
     const envelope = {
       type: "intent",
@@ -193,12 +214,12 @@ class BrokerClientImpl {
   }
 
   connectionState(): ConnectionState {
-    //13.- Expose lifecycle status for diagnostics overlays or tests.
+    //14.- Expose lifecycle status for diagnostics overlays or tests.
     return this.state;
   }
 
   close() {
-    //14.- Terminate the websocket regardless of whether the handshake completed while suppressing future reconnect attempts during teardown.
+    //15.- Terminate the websocket regardless of whether the handshake completed while suppressing future reconnect attempts during teardown.
     this.shouldReconnect = false;
     this.clearTimer();
     this.listeners.clear();
