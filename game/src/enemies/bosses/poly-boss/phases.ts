@@ -298,7 +298,8 @@ export function createPolyBoss(scene: THREE.Scene, position: THREE.Vector3, opti
       scene.remove(bossGroup)
       disposeObject(bossGroup)
       unsubscribe?.()
-      unsubscribe = undefined
+      //2.- Replace the listener reference with a no-op to avoid accidental double-unsubscribe attempts.
+      unsubscribe = () => {}
       applyBossDefeat(stage)
     }
   }
