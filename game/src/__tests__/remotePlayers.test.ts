@@ -137,4 +137,51 @@ describe('remote player manager', () => {
     expect(group?.userData.remoteProfile).toEqual({ pilotName: 'Sky Racer', vehicleKey: 'cube' })
     expect(group?.name).toBe('remote-player:Sky Racer (cube)')
   })
+
+  it('refreshes occupant overlays with nameplates and health bars', () => {
+    const manager = createRemotePlayerManager(scene)
+
+    //1.- Spawn a remote craft so occupant overlays have a target vehicle to bind to.
+    manager.ingestDiff({
+      updated: [
+        {
+          vehicle_id: 'veh-occupant',
+          profile: { name: 'Fallback Pilot', vehicle: 'arrowhead' }
+        }
+      ]
+    })
+
+    const group = manager.getVehicleGroup('veh-occupant')
+    expect(group).toBeDefined()
+    expect(group?.name).toBe('remote-player:Fallback Pilot (arrowhead)')
+    const healthGroup = group?.children.find((child) => child.name === 'remote-health-bar') as THREE.Group | undefined
+    expect(healthGroup?.visible).toBe(false)
+
+    //2.- Broadcast the occupant diff so the nameplate adopts the occupant name and health bar reflects life_pct.
+    manager.ingestDiff(undefined, {
+      updated: [
+        {
+          vehicle_id: 'veh-occupant',
+          player_name: 'Nova Commander',
+          life_pct: 0.25
+        }
+      ]
+    })
+
+    expect(group?.name).toBe('remote-player:Nova Commander (arrowhead)')
+    expect(group?.userData.remoteOccupant).toEqual({ playerName: 'Nova Commander', lifePct: 0.25 })
+    const fill = healthGroup?.children.find((child) => child.name === 'remote-health-bar-fill') as THREE.Mesh | undefined
+    expect(healthGroup?.visible).toBe(true)
+    expect(fill?.scale.x).toBeCloseTo(0.25)
+    const material = fill?.material as THREE.MeshBasicMaterial | undefined
+    expect(material?.color.r).toBeCloseTo(0.75)
+    expect(material?.color.g).toBeCloseTo(0.25)
+
+    //3.- Remove the occupant to ensure the overlay falls back to the vehicle profile metadata.
+    manager.ingestDiff(undefined, { removed: ['veh-occupant'] })
+
+    expect(group?.name).toBe('remote-player:Fallback Pilot (arrowhead)')
+    expect(group?.userData.remoteOccupant).toBeNull()
+    expect(healthGroup?.visible).toBe(false)
+  })
 })

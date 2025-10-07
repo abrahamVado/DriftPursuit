@@ -193,8 +193,8 @@ export function initGame(
       }
 
       //3.- Mirror authoritative vehicle transforms so remote pilots appear alongside the local craft.
-      if (diff.vehicles) {
-        remotePlayers.ingestDiff(diff.vehicles)
+      if (diff.vehicles || diff.occupants) {
+        remotePlayers.ingestDiff(diff.vehicles, diff.occupants)
       }
     },
     sampleIntent: () => {

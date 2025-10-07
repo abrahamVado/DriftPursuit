@@ -9,6 +9,21 @@ export type BrokerGameEvent = {
   type?: string;
 };
 
+export type BrokerOccupantSnapshot = {
+  vehicle_id: string;
+  player_name?: string;
+  player_id?: string;
+  vehicle_key?: string;
+  life_pct?: number;
+  updated_at_ms?: number;
+  [key: string]: unknown;
+};
+
+export type BrokerOccupantDiff = {
+  updated?: BrokerOccupantSnapshot[];
+  removed?: string[];
+};
+
 export type BrokerWorldDiffEnvelope = {
   type: "world_diff";
   tick: number;
@@ -20,6 +35,7 @@ export type BrokerWorldDiffEnvelope = {
     updated?: Array<Record<string, unknown>>;
     removed?: string[];
   };
+  occupants?: BrokerOccupantDiff;
   events?: BrokerGameEvent[];
 };
 
