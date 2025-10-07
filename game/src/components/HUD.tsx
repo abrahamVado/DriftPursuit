@@ -1,5 +1,7 @@
 'use client'
 import { useEffect, useState } from 'react'
+import { Minimap } from '@/components/minimap/Minimap'
+import type { MinimapSnapshot } from '@/engine/bootstrap'
 
 type HudState = {
   speed: number
@@ -16,6 +18,7 @@ type HudState = {
 export function HUD({
   getState,
   actions,
+  getMinimapSnapshot,
 }: {
   getState: () => HudState | undefined
   actions: () => {
@@ -29,6 +32,7 @@ export function HUD({
     dash?: () => void
     ultimate?: () => void
   }
+  getMinimapSnapshot?: () => MinimapSnapshot | null | undefined
 }) {
   const [state, setState] = useState<HudState | undefined>(undefined)
 
@@ -92,6 +96,13 @@ export function HUD({
   // ---------- UI ----------
   return (
     <div style={{ position:'absolute', inset:0, pointerEvents:'none' }}>
+      <div
+        style={{ position:'absolute', right:24, bottom:24, width:160, height:160, pointerEvents:'none' }}
+      >
+        {/* //1.- Mount the minimap overlay as a passive HUD element so it never intercepts gameplay input. */}
+        <Minimap getSnapshot={() => getMinimapSnapshot?.() ?? null} size={160} range={600} />
+      </div>
+
       {/* TL stats */}
       <div style={{ position:'absolute', left:16, top:12, display:'grid', gap:6, fontFamily:'monospace' }}>
         <div>SPD: <b>{state?.speed?.toFixed?.(0) ?? '--'}</b> m/s</div>
