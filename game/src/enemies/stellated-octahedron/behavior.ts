@@ -1,5 +1,13 @@
 import * as THREE from 'three'
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js'
+import { applyEnvironmentVectorAttenuation, getDifficultyState } from '@/engine/difficulty'
+
+export type EnemyDifficultyContext = ReturnType<typeof getDifficultyState>
+
+export type EnemyOptions = {
+  difficulty?: EnemyDifficultyContext
+  variant?: 'pursuer' | 'strafer' | 'sentry'
+}
 
 function disposeMeshLike(object: THREE.Object3D){
   //1.- Traverse any composed mesh tree and release GPU buffers and materials.
@@ -39,22 +47,32 @@ function buildStellatedOctahedron(size=6){
   return new THREE.Mesh(merged, new THREE.MeshStandardMaterial({ color: 0xff5533, metalness: 0.2, roughness: 0.6, emissive: 0x220000 }))
 }
 
-export function createEnemy(scene: THREE.Scene, position: THREE.Vector3){
+export function createEnemy(scene: THREE.Scene, position: THREE.Vector3, options: EnemyOptions = {}){
   //1.- Materialise the mesh, position it, and append it to the active scene graph.
   const mesh = buildStellatedOctahedron(5)
   mesh.position.copy(position)
   scene.add(mesh)
   const vel = new THREE.Vector3()
   const dir = new THREE.Vector3()
+  const difficulty = options.difficulty ?? getDifficultyState()
+  const hpBase = 40 * difficulty.enemyHpMultiplier
+  const acceleration = 18 + difficulty.enemyDpsMultiplier * 6 + (options.variant === 'strafer' ? 4 : 0)
+  const maxSpeed = 36 + difficulty.enemyDpsMultiplier * 8 + (options.variant === 'strafer' ? 10 : 0)
   const obj = {
     mesh,
-    hp: 40,
+    hp: hpBase,
+    difficulty,
     target: undefined as THREE.Object3D | undefined,
     update(dt:number){
       if (this.target){
-        dir.copy(this.target.position).sub(mesh.position).normalize()
-        vel.addScaledVector(dir, 20*dt)
-        vel.clampLength(0, 40)
+        dir.copy(this.target.position).sub(mesh.position)
+        const distance = dir.length() || 1
+        dir.normalize()
+        const aimAssist = THREE.MathUtils.lerp(0.6, 1, difficulty.enemyAccuracy)
+        vel.addScaledVector(dir, acceleration * aimAssist * dt)
+        applyEnvironmentVectorAttenuation(vel)
+        const clamped = Math.min(maxSpeed, maxSpeed * (distance > 180 ? 1.1 : 1))
+        vel.clampLength(0, clamped)
         mesh.position.addScaledVector(vel, dt)
         mesh.lookAt(this.target.position)
       }
@@ -70,9 +88,12 @@ export function createEnemy(scene: THREE.Scene, position: THREE.Vector3){
   return obj
 }
 
-export function updateEnemies(scene: THREE.Scene, dt:number){
+export function updateEnemies(scene: THREE.Scene, dt:number, difficulty: EnemyDifficultyContext){
   //1.- Advance each tracked enemy AI using the shared scene registry.
   const arr = (scene as any).__enemies as any[] | undefined
   if (!arr) return
-  for (const e of arr) e.update(dt)
+  for (const e of arr) {
+    e.difficulty = difficulty
+    e.update(dt)
+  }
 }

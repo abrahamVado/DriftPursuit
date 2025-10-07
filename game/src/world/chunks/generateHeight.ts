@@ -1,3 +1,5 @@
+import { getDifficultyState, onDifficultyChange } from '@/engine/difficulty'
+
 // Tiny FBM noise to get hills/mountains
 function hash(x:number, z:number) { return Math.sin(x*127.1 + z*311.7)*43758.5453 % 1 }
 function lerp(a:number,b:number,t:number){return a+(b-a)*t}
@@ -20,11 +22,22 @@ export function fbm(x:number,z:number, octaves=5, lacunarity=2, gain=0.5){
   return sum
 }
 
+let envCache = getDifficultyState().environment
+onDifficultyChange((state) => {
+  //1.- Keep a cached environment reference so repeated height lookups avoid redundant allocations.
+  envCache = state.environment
+})
+
 export function heightAt(x:number,z:number){
-  const hills = fbm(x,z,4,2.0,0.5) * 40
-  const mountains = Math.pow(fbm(x+1000,z+1000,5,2.1,0.45), 3) * 120
-  const base = hills + mountains
-  const waterline = 8
+  //1.- Derive canyon width and vertical richness modifiers from the cached difficulty state.
+  const width = Math.max(0.6, envCache.canyonWidth)
+  const richness = 0.8 + envCache.propDensity * 0.1
+  const scaledX = x / width
+  const scaledZ = z / width
+  const hills = fbm(scaledX,scaledZ,4,2.0,0.5) * 40 * richness
+  const mountains = Math.pow(fbm(scaledX+1000,scaledZ+1000,5,2.1,0.45), 3) * 120 * (1 + envCache.windStrength * 0.05)
+  const base = (hills + mountains) / Math.max(1, width * 0.9)
+  const waterline = 8 - envCache.windStrength * 0.4
   return Math.max(base, waterline)
 }
 
