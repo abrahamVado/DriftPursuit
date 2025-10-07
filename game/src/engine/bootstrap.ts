@@ -8,6 +8,7 @@ import { createCorridor } from '@/spawn/corridor'
 import { createSpawner } from '@/spawn/spawnTable'
 import { applyBossDefeat, getDifficultyState, onDifficultyChange } from '@/engine/difficulty'
 import type { BrokerIntentSnapshot, BrokerWorldDiffEnvelope } from '@/lib/brokerClient'
+import { DEFAULT_VEHICLE_KEY, type VehicleKey } from '@/lib/pilotProfile'
 
 export type GameAPI = {
   actions: any
@@ -30,6 +31,12 @@ export type GameAPI = {
   }
   ingestWorldDiff: (diff: BrokerWorldDiffEnvelope) => void
   sampleIntent: () => BrokerIntentSnapshot
+  pilotId: string
+}
+
+export type InitGameOptions = {
+  initialVehicle?: VehicleKey
+  pilotId?: string
 }
 
 export const DEFAULT_SCENE_OPTS = {
@@ -41,7 +48,12 @@ export const DEFAULT_SCENE_OPTS = {
   hemiGround: 0x101418
 }
 
-export function initGame(container: HTMLDivElement, opts = DEFAULT_SCENE_OPTS, onReady?: () => void) {
+export function initGame(
+  container: HTMLDivElement,
+  opts = DEFAULT_SCENE_OPTS,
+  onReady?: () => void,
+  options?: InitGameOptions
+) {
   const scene = new THREE.Scene()
   scene.fog = new THREE.Fog(opts.fogColor, opts.fogNear, opts.fogFar)
 
@@ -67,8 +79,10 @@ export function initGame(container: HTMLDivElement, opts = DEFAULT_SCENE_OPTS, o
   const chase = createChaseCam(camera)
   const streamer = createStreamer(scene)
 
-  // Player (Arrowhead by default)
-  const player = createPlayer('arrowhead', scene)
+  //1.- Spawn the player with the requested vehicle or gracefully fall back to the Arrowhead chassis.
+  const startingVehicle = options?.initialVehicle ?? DEFAULT_VEHICLE_KEY
+  const player = createPlayer(startingVehicle, scene)
+  const pilotId = options?.pilotId ?? 'pilot-local'
 
   // Spawn corridor and spawner
   const corridor = createCorridor(scene)
@@ -183,7 +197,8 @@ export function initGame(container: HTMLDivElement, opts = DEFAULT_SCENE_OPTS, o
         gear: 1,
         boost
       }
-    }
+    },
+    pilotId
   }
 
   function dispose() {

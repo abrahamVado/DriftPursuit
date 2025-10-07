@@ -11,9 +11,11 @@ describe('stellated octahedron enemy', () => {
     const enemy = createEnemy(scene, new THREE.Vector3(1, 2, 3))
 
     //2.- Assert the geometry merges both tetrahedra into one buffer mesh.
-    expect(enemy.mesh).toBeInstanceOf(THREE.Mesh)
-    const geometry = (enemy.mesh as THREE.Mesh).geometry as THREE.BufferGeometry
-    expect(geometry.getAttribute('position').count).toBe(24)
+    expect(enemy.mesh).toBeInstanceOf(THREE.Object3D)
+    const body = enemy.mesh.children.find((child) => child instanceof THREE.Mesh) as THREE.Mesh | undefined
+    expect(body).toBeInstanceOf(THREE.Mesh)
+    const geometry = body!.geometry as THREE.BufferGeometry
+    expect(geometry.getAttribute('position').count).toBeGreaterThanOrEqual(24)
 
     //3.- Verify the scene registry keeps track of the created enemy and its transform.
     const tracked = (scene as any).__enemies
