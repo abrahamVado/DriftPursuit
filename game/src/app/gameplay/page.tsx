@@ -12,6 +12,13 @@ export default function GameplayPage() {
   const mountRef = useRef<HTMLDivElement>(null)
   const apiRef = useRef<GameAPI | null>(null)
   const [ready, setReady] = useState(false)
+  const [clientId] = useState(() => {
+    //1.- Derive a stable yet unique identifier so parallel browser sessions do not collide on the broker bus.
+    const uuid = typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
+      ? crypto.randomUUID()
+      : Math.random().toString(36).slice(2)
+    return `pilot-${uuid}`
+  })
 
   useEffect(() => {
     if (!mountRef.current) return
@@ -21,7 +28,7 @@ export default function GameplayPage() {
     apiRef.current = api
 
     //2.- Connect to the broker so authoritative world diffs can steer the HUD and server-side actors.
-    const broker = createBrokerClient({ clientId: 'pilot-local' })
+    const broker = createBrokerClient({ clientId })
     const unsubscribe = broker.onWorldDiff((diff) => {
       apiRef.current?.ingestWorldDiff(diff)
     })
