@@ -12,8 +12,9 @@ export default defineConfig({
     }
   },
   test: {
-    include: ['game/src/__tests__/remotePlayers.test.ts'],
+    include: ['game/src/__tests__/remotePlayers.test.ts', 'game/src/__tests__/minimap.test.tsx'],
     environment: 'node',
+    environmentMatchGlobs: [['**/*.test.tsx', 'jsdom']],
     coverage: {
       provider: 'v8',
       reporter: ['text', 'json-summary'],

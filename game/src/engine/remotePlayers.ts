@@ -57,11 +57,18 @@ const VEHICLE_BUILDERS: Record<VehicleKey, () => THREE.Object3D> = {
   transformer: buildTransformer
 }
 
+export type RemoteVehicleTransform = {
+  vehicleId: string
+  position: { x: number; y: number; z: number }
+  rotation: { pitch: number; yaw: number; roll: number }
+}
+
 export type RemotePlayersManager = {
   ingestDiff: (diff?: VehicleDiffPayload | null, occupants?: OccupantDiffPayload | null) => void
   dispose: () => void
   getVehicleGroup: (vehicleId: string) => THREE.Group | undefined
   activeVehicleIds: () => string[]
+  snapshotTransforms: () => RemoteVehicleTransform[]
 }
 
 function parseNumber(value: unknown, fallback: number): number {
@@ -510,5 +517,20 @@ export function createRemotePlayerManager(scene: THREE.Scene): RemotePlayersMana
     return Array.from(registry.keys()).sort()
   }
 
-  return { ingestDiff, dispose, getVehicleGroup, activeVehicleIds }
+  function snapshotTransforms(): RemoteVehicleTransform[] {
+    //1.- Clone positional and rotational data so callers cannot mutate the live Three.js vectors.
+    const entries: RemoteVehicleTransform[] = []
+    for (const [vehicleId, vessel] of registry.entries()) {
+      const { position, rotation } = vessel.group
+      entries.push({
+        vehicleId,
+        position: { x: position.x, y: position.y, z: position.z },
+        rotation: { pitch: rotation.x, yaw: rotation.y, roll: rotation.z }
+      })
+    }
+    //2.- Return a fresh array every call to preserve the read-only contract described by the HUD minimap.
+    return entries
+  }
+
+  return { ingestDiff, dispose, getVehicleGroup, activeVehicleIds, snapshotTransforms }
 }

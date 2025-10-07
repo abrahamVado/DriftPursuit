@@ -3,7 +3,7 @@ import * as THREE from 'three'
 import { createStreamer } from '@/world/chunks/streamer'
 import { createChaseCam } from '@/camera/chaseCam'
 import { createPlayer } from '@/vehicles/shared/player'
-import { createRemotePlayerManager } from '@/engine/remotePlayers'
+import { createRemotePlayerManager, type RemoteVehicleTransform } from '@/engine/remotePlayers'
 import { createInput } from '@/ui/inputMap'
 import { createCorridor } from '@/spawn/corridor'
 import { createSpawner } from '@/spawn/spawnTable'
@@ -36,12 +36,22 @@ export type GameAPI = {
     hull: number
     difficulty: ReturnType<typeof getDifficultyState>
   }
+  sampleTransforms: () => MinimapSnapshot
   ingestWorldDiff: (diff: BrokerWorldDiffEnvelope) => void
   sampleIntent: () => BrokerIntentSnapshot
   samplePresence: () => PresenceSnapshot | null
   ingestPresenceSnapshot: (snapshot: PresenceSnapshot) => void
   removeRemoteVehicle: (vehicleId: string) => void
   pilotId: string
+}
+
+export type MinimapSnapshot = {
+  local: {
+    vehicleId: string
+    position: { x: number; y: number; z: number }
+    rotation: { pitch: number; yaw: number; roll: number }
+  }
+  remotes: RemoteVehicleTransform[]
 }
 
 export type InitGameOptions = {
@@ -167,6 +177,19 @@ export function initGame(
       hull: player.controller.hull,
       difficulty: difficultyState
     }),
+    sampleTransforms: () => {
+      //1.- Capture immutable vectors for the minimap overlay so UI consumers cannot mutate scene graph nodes.
+      const { position, rotation } = player.group
+      const local = {
+        vehicleId: pilotId,
+        position: { x: position.x, y: position.y, z: position.z },
+        rotation: { pitch: rotation.x, yaw: rotation.y, roll: rotation.z }
+      }
+      return {
+        local,
+        remotes: remotePlayers.snapshotTransforms()
+      }
+    },
     ingestWorldDiff: (diff) => {
       //1.- Ignore stale or unrelated payloads so the local scene only reacts to advancing authoritative ticks.
       if (!diff || diff.type !== 'world_diff' || typeof diff.tick !== 'number' || diff.tick <= latestTick) {

@@ -153,7 +153,11 @@ export default function GameplayPage() {
     <div style={{ position: 'fixed', inset: 0, overflow: 'hidden' }}>
       <div ref={mountRef} style={{ position: 'absolute', inset: 0 }} />
       {!ready && <LoadingOverlay />}
-      <HUD getState={() => apiRef.current?.getState()} actions={() => apiRef.current?.actions} />
+      <HUD
+        getState={() => apiRef.current?.getState()}
+        actions={() => apiRef.current?.actions}
+        getMinimapSnapshot={() => apiRef.current?.sampleTransforms?.() ?? null}
+      />
     </div>
   )
 }
