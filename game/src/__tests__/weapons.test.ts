@@ -78,6 +78,9 @@ describe('meteor missile system', () => {
       detonationRadius: 5,
       smokeTrailIntervalMs: 50,
       maxLifetimeMs: 8000,
+      clearanceDistance: 20,
+      swayAmplitude: 15,
+      swayFrequency: 1.3,
     })
 
     const alpha: WeaponTarget = {
@@ -110,7 +113,7 @@ describe('meteor missile system', () => {
     expect(burning?.targetId).toBe('alpha')
   })
 
-  it('self-destructs when ignition finds no enemies to pursue', () => {
+  it('continues straight when ignition finds no enemies to pursue', () => {
     const system = createMeteorMissileSystem({
       maxConcurrent: 1,
       cooldownMs: 0,
@@ -122,6 +125,9 @@ describe('meteor missile system', () => {
       detonationRadius: 5,
       smokeTrailIntervalMs: 50,
       maxLifetimeMs: 8000,
+      clearanceDistance: 20,
+      swayAmplitude: 14,
+      swayFrequency: 1.1,
     })
 
     const context = makeContext({ dt: 0.5, targets: [] })
@@ -133,8 +139,12 @@ describe('meteor missile system', () => {
       system.update(context)
     }
 
-    //2.- Without a contact to chase the missile should be removed once ignition completes.
-    expect(system.activeCount).toBe(0)
+    const lone = system.missiles[0]
+    //2.- A lonely missile should keep burning forward instead of despawning mid-flight.
+    expect(lone?.stage).toBe('burning')
+    expect(lone?.targetId).toBeNull()
+    const forwardDir = context.forward.clone().normalize()
+    expect(lone?.velocity.clone().normalize().distanceTo(forwardDir)).toBeLessThan(1e-3)
   })
 
   it('supports unlimited ammunition when configured with infinity', () => {
@@ -149,6 +159,9 @@ describe('meteor missile system', () => {
       detonationRadius: 5,
       smokeTrailIntervalMs: 50,
       maxLifetimeMs: 4000,
+      clearanceDistance: 15,
+      swayAmplitude: 12,
+      swayFrequency: 1.25,
     })
 
     const target: WeaponTarget = {
@@ -164,6 +177,96 @@ describe('meteor missile system', () => {
     expect(fired.fired).toBe(true)
     //3.- Firing should not reduce the ammo counter when using an infinite pool.
     expect(system.ammo).toBe(Number.POSITIVE_INFINITY)
+  })
+
+  it('records explosion impacts and ignites destroyed targets', () => {
+    const system = createMeteorMissileSystem({
+      maxConcurrent: 1,
+      cooldownMs: 0,
+      ammo: 2,
+      ejectionDurationMs: 400,
+      ejectionSpeed: 60,
+      burnSpeed: 240,
+      navigationConstant: 3.5,
+      detonationRadius: 12,
+      smokeTrailIntervalMs: 40,
+      maxLifetimeMs: 8000,
+      clearanceDistance: 15,
+      swayAmplitude: 18,
+      swayFrequency: 1.4,
+    })
+
+    const target: WeaponTarget = {
+      id: 'charlie',
+      position: new THREE.Vector3(9, 0, -140),
+      velocity: new THREE.Vector3(),
+      alive: true,
+    }
+
+    const context = makeContext({ dt: 0.1, targets: [target] })
+    const fired = system.tryFire(context)
+    expect(fired.fired).toBe(true)
+
+    let impacted = false
+    for (let i = 0; i < 80; i++){
+      system.update(context)
+      if (system.impacts.length > 0){
+        impacted = true
+        break
+      }
+    }
+
+    //3.- Impact should record telemetry and leave the victim falling in flames.
+    expect(impacted).toBe(true)
+    expect(target.alive).toBe(false)
+    expect(target.onFire).toBe(true)
+    expect(target.falling).toBe(true)
+  })
+
+  it('weaves in an S-pattern while tracking a contact in front', () => {
+    const system = createMeteorMissileSystem({
+      maxConcurrent: 1,
+      cooldownMs: 0,
+      ammo: 1,
+      ejectionDurationMs: 500,
+      ejectionSpeed: 55,
+      burnSpeed: 230,
+      navigationConstant: 3.2,
+      detonationRadius: 5,
+      smokeTrailIntervalMs: 40,
+      maxLifetimeMs: 8000,
+      clearanceDistance: 18,
+      swayAmplitude: 22,
+      swayFrequency: 1.6,
+    })
+
+    const target: WeaponTarget = {
+      id: 'delta',
+      position: new THREE.Vector3(0, 0, -260),
+      velocity: new THREE.Vector3(),
+      alive: true,
+    }
+
+    const context = makeContext({ dt: 0.1, targets: [target] })
+    const fired = system.tryFire(context)
+    expect(fired.fired).toBe(true)
+
+    const lateralSamples: number[] = []
+    for (let i = 0; i < 80; i++){
+      system.update(context)
+      const missile = system.missiles[0]
+      if (missile && missile.stage === 'burning'){
+        const lateral = missile.velocity.clone().sub(missile.referenceForward.clone().multiplyScalar(missile.velocity.dot(missile.referenceForward)))
+        lateralSamples.push(Math.sign(lateral.dot(missile.swayAxis)))
+      }
+      if (system.impacts.length > 0) break
+    }
+
+    const hasPositive = lateralSamples.some(value => value > 0)
+    const hasNegative = lateralSamples.some(value => value < 0)
+    //4.- The S-pattern should generate alternating lateral directions while homing in.
+    expect(hasPositive).toBe(true)
+    expect(hasNegative).toBe(true)
   })
 })
 

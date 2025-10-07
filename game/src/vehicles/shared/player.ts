@@ -23,12 +23,14 @@ export function createPlayer(initial:'arrowhead'|'octahedron'|'pyramid'|'icosahe
   group.add(currentMesh)
 
   const controller = createController(group, scene)
+  controller.refreshVehicleClearance?.()
 
   function setVehicle(key: keyof typeof builders){
     if (currentMesh) group.remove(currentMesh)
     currentKey = key
     currentMesh = builders[currentKey]()
     group.add(currentMesh)
+    controller.refreshVehicleClearance?.()
   }
 
   function cycleVehicle(){
