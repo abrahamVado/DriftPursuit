@@ -47,6 +47,8 @@ export type GameAPI = {
 export type InitGameOptions = {
   initialVehicle?: VehicleKey
   pilotId?: string
+  worldId?: string
+  mapId?: string
 }
 
 export const DEFAULT_SCENE_OPTS = {
@@ -87,7 +89,7 @@ export function initGame(
   // Systems
   const input = createInput(container)
   const chase = createChaseCam(camera)
-  const streamer = createStreamer(scene)
+  const streamer = createStreamer(scene, { worldId: options?.worldId, mapId: options?.mapId })
   const remotePlayers = createRemotePlayerManager(scene)
 
   //1.- Spawn the player with the requested vehicle or gracefully fall back to the Arrowhead chassis.

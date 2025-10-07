@@ -2,6 +2,7 @@
 import * as THREE from 'three'
 import { heightAt, normalAt } from './generateHeight'
 import { getDifficultyState, onDifficultyChange } from '@/engine/difficulty'
+import { configureWorldSeeds, getWorldSeedSnapshot } from './worldSeed'
 
 // ✅ merge helper must be imported from examples utils (not THREE namespace)
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js'
@@ -215,7 +216,8 @@ function decorateChunk(mesh: THREE.Mesh) {
   if (propCount === 0) return
 
   // Deterministic scatter per chunk
-  const seed = hash2i(mesh.userData.ix, mesh.userData.iz)
+  const { decorationSeed } = getWorldSeedSnapshot()
+  const seed = hash2i(mesh.userData.ix ^ decorationSeed, mesh.userData.iz ^ (decorationSeed >>> 1))
   const rand = mulberry32(seed)
 
   const inst = new THREE.InstancedMesh(shared.rockGeo, shared.rockMat, propCount)
@@ -279,6 +281,7 @@ function buildChunk(ix: number, iz: number, textureMap: THREE.Texture | null) {
     decorations: [] as THREE.Object3D[],
     fade: { t: 0, from: 0, to: 1, start: 0 }, // per-chunk fade state
     removing: false,                           // when true, fade to 0 then dispose
+    seedSignature: getWorldSeedSnapshot().decorationSeed,
   }
 
   // start invisible; we’ll fade in from 0 → 1
@@ -290,7 +293,15 @@ function buildChunk(ix: number, iz: number, textureMap: THREE.Texture | null) {
 /* ──────────────────────────────────────────────────────────────────────────
    STREAMER
    ────────────────────────────────────────────────────────────────────────── */
-export function createStreamer(scene: THREE.Scene) {
+type StreamerOptions = {
+  worldId?: string
+  mapId?: string
+}
+
+export function createStreamer(scene: THREE.Scene, options: StreamerOptions = {}) {
+  //1.- Persist the negotiated identifiers so procedural noise and decoration RNG stay in lockstep across clients.
+  configureWorldSeeds({ worldId: options.worldId, mapId: options.mapId })
+
   const chunks = new Map<string, THREE.Mesh>()
   const tmp = new THREE.Vector3()
   const clock = new THREE.Clock()

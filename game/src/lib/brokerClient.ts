@@ -39,6 +39,13 @@ export type BrokerWorldDiffEnvelope = {
   events?: BrokerGameEvent[];
 };
 
+export type BrokerWorldStatusEnvelope = {
+  type: "world_status";
+  world_id?: string;
+  map_id?: string;
+  [key: string]: unknown;
+};
+
 export type BrokerIntentSnapshot = {
   throttle: number;
   brake: number;
@@ -49,6 +56,7 @@ export type BrokerIntentSnapshot = {
 };
 
 type WorldDiffListener = (diff: BrokerWorldDiffEnvelope) => void;
+type WorldStatusListener = (status: { worldId: string; mapId: string }) => void;
 
 type BrokerClientOptions = {
   clientId?: string;
@@ -67,6 +75,7 @@ class BrokerClientImpl {
   private readonly profile: BrokerClientOptions["pilotProfile"] | null;
   private socket: WebSocket | null = null;
   private listeners = new Set<WorldDiffListener>();
+  private worldStatusListeners = new Set<WorldStatusListener>();
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private backoffMs: number;
   private shouldReconnect = true;
@@ -178,25 +187,44 @@ class BrokerClientImpl {
   }
 
   private handleMessage(raw: unknown) {
-    //10.- Parse inbound JSON payloads and forward recognised world diffs to subscribers.
+    //10.- Parse inbound JSON payloads and forward recognised envelopes to the matching subscriber sets.
     if (typeof raw !== "string") {
       return;
     }
     try {
-      const parsed = JSON.parse(raw) as Partial<BrokerWorldDiffEnvelope>;
-      if (parsed?.type !== "world_diff" || typeof parsed.tick !== "number") {
+      const parsed = JSON.parse(raw) as Partial<BrokerWorldDiffEnvelope | BrokerWorldStatusEnvelope>;
+      if (parsed?.type === "world_diff" && typeof (parsed as BrokerWorldDiffEnvelope).tick === "number") {
+        for (const listener of this.listeners) {
+          listener(parsed as BrokerWorldDiffEnvelope);
+        }
         return;
       }
-      for (const listener of this.listeners) {
-        listener(parsed as BrokerWorldDiffEnvelope);
+      if (parsed?.type === "world_status") {
+        const status = this.parseWorldStatus(parsed as BrokerWorldStatusEnvelope);
+        if (!status) {
+          return;
+        }
+        for (const listener of this.worldStatusListeners) {
+          listener(status);
+        }
       }
     } catch {
       // Ignore malformed payloads.
     }
   }
 
+  private parseWorldStatus(envelope: BrokerWorldStatusEnvelope): { worldId: string; mapId: string } | null {
+    //11.- Normalise the broker-provided identifiers so downstream systems can seed deterministic world generation.
+    const worldId = typeof envelope.world_id === "string" ? envelope.world_id.trim() : "";
+    const mapId = typeof envelope.map_id === "string" ? envelope.map_id.trim() : "";
+    if (!worldId || !mapId) {
+      return null;
+    }
+    return { worldId, mapId };
+  }
+
   private sendRaw(payload: string) {
-    //11.- Transmit immediately when connected or queue for delivery once the broker handshake completes.
+    //12.- Transmit immediately when connected or queue for delivery once the broker handshake completes.
     if (this.socket && this.socket.readyState === WebSocket.OPEN) {
       this.socket.send(payload);
       return;
@@ -205,13 +233,19 @@ class BrokerClientImpl {
   }
 
   onWorldDiff(listener: WorldDiffListener): () => void {
-    //12.- Register subscribers so gameplay systems can react to authoritative state updates.
+    //13.- Register subscribers so gameplay systems can react to authoritative state updates.
     this.listeners.add(listener);
     return () => this.listeners.delete(listener);
   }
 
+  onWorldStatus(listener: WorldStatusListener): () => void {
+    //14.- Allow consumers to react to deterministic world identifiers delivered after session negotiation completes.
+    this.worldStatusListeners.add(listener);
+    return () => this.worldStatusListeners.delete(listener);
+  }
+
   sendIntent(snapshot: BrokerIntentSnapshot) {
-    //13.- Increment the intent sequence and forward the latest control frame to the broker.
+    //15.- Increment the intent sequence and forward the latest control frame to the broker.
     this.sequenceId += 1;
     const envelope = {
       type: "intent",
@@ -230,12 +264,12 @@ class BrokerClientImpl {
   }
 
   connectionState(): ConnectionState {
-    //14.- Expose lifecycle status for diagnostics overlays or tests.
+    //16.- Expose lifecycle status for diagnostics overlays or tests.
     return this.state;
   }
 
   close() {
-    //15.- Terminate the websocket regardless of whether the handshake completed while suppressing future reconnect attempts during teardown.
+    //17.- Terminate the websocket regardless of whether the handshake completed while suppressing future reconnect attempts during teardown.
     this.shouldReconnect = false;
     this.clearTimer();
     this.listeners.clear();
@@ -253,16 +287,18 @@ class BrokerClientImpl {
 
 export type BrokerClient = {
   onWorldDiff: (listener: WorldDiffListener) => () => void;
+  onWorldStatus: (listener: WorldStatusListener) => () => void;
   sendIntent: (snapshot: BrokerIntentSnapshot) => void;
   connectionState: () => ConnectionState;
   close: () => void;
 };
 
 export function createBrokerClient(options: BrokerClientOptions = {}): BrokerClient {
-  //15.- Provide a lightweight facade so React hooks receive a stable API surface.
+  //18.- Provide a lightweight facade so React hooks receive a stable API surface.
   const impl = new BrokerClientImpl(options);
   return {
     onWorldDiff: (listener) => impl.onWorldDiff(listener),
+    onWorldStatus: (listener) => impl.onWorldStatus(listener),
     sendIntent: (snapshot) => impl.sendIntent(snapshot),
     connectionState: () => impl.connectionState(),
     close: () => impl.close(),
