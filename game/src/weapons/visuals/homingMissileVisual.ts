@@ -1,6 +1,12 @@
 import * as THREE from 'three'
 import type { HomingMissileState } from '@/weapons/homingMissile'
 
+export type MissilePalette = {
+  body: number
+  emissive: number
+  trail: number
+}
+
 const BASE_FORWARD = new THREE.Vector3(0, 0, 1)
 const TMP_FORWARD = new THREE.Vector3()
 
@@ -15,20 +21,24 @@ type MissileRenderState = {
   trail: THREE.Line
 }
 
-export function createHomingMissileVisual(scene: THREE.Scene): HomingMissileVisual {
+export function createHomingMissileVisual(scene: THREE.Scene, palette: MissilePalette = {
+  body: 0xd36f39,
+  emissive: 0xff6b2f,
+  trail: 0xffc48a,
+}): HomingMissileVisual {
   const group = new THREE.Group()
   scene.add(group)
 
   const bodyMaterial = new THREE.MeshStandardMaterial({
-    color: 0xd36f39,
+    color: palette.body,
     metalness: 0.35,
     roughness: 0.4,
-    emissive: new THREE.Color(0xff6b2f),
+    emissive: new THREE.Color(palette.emissive),
     emissiveIntensity: 0.4,
   })
   const finMaterial = new THREE.MeshStandardMaterial({ color: 0x333845, metalness: 0.15, roughness: 0.6 })
   const trailMaterial = new THREE.LineBasicMaterial({
-    color: 0xffc48a,
+    color: palette.trail,
     transparent: true,
     opacity: 0.55,
     blending: THREE.AdditiveBlending,

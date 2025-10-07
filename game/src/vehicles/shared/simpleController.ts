@@ -1,12 +1,24 @@
 import * as THREE from 'three'
 import { createGatlingSystem } from '@/weapons/gatling'
-import { createHomingMissileSystem } from '@/weapons/homingMissile'
 import { createNeonLaserSystem } from '@/weapons/neonLaser'
 import { createBombSystem } from '@/weapons/bomb'
 import { createHomingMissileVisual } from '@/weapons/visuals/homingMissileVisual'
 import { createNeonLaserVisual } from '@/weapons/visuals/neonLaserVisual'
 import { createMeteorMissileSystem } from '@/weapons/meteorMissile'
 import type { WeaponContext, WeaponTarget } from '@/weapons/types'
+import { createSupportAbilitySystem } from '@/vehicles/shared/supportAbilities'
+import { createAbilityVisuals } from '@/vehicles/shared/abilityVisuals'
+
+type AbilitySlot =
+  | 'METEOR_RED'
+  | 'METEOR_VIOLET'
+  | 'LASER'
+  | 'BOMB'
+  | 'GATLING'
+  | 'SHIELD'
+  | 'HEAL'
+  | 'DASH'
+  | 'ULTIMATE'
 
 export function createController(group: THREE.Group, scene: THREE.Scene){
   const vel = new THREE.Vector3(0,0,60)
@@ -30,24 +42,10 @@ export function createController(group: THREE.Group, scene: THREE.Scene){
     overheatThreshold: 120,
   })
 
-  const missilesSystem = createHomingMissileSystem({
-    maxConcurrent: 4,
-    cooldownMs: 1200,
-    ammo: 4,
-    speed: 180,
-    navigationConstant: 3,
-    lockConeDeg: 45,
-    smokeTrailIntervalMs: 80,
-    detonationRadius: 4,
-    maxLifetimeMs: 12000,
-  })
-
-  const missileVisuals = createHomingMissileVisual(scene)
-
-  const meteorSystem = createMeteorMissileSystem({
+  const meteorRedSystem = createMeteorMissileSystem({
     maxConcurrent: 2,
-    cooldownMs: 2500,
-    ammo: 2,
+    cooldownMs: 2200,
+    ammo: Number.POSITIVE_INFINITY,
     ejectionDurationMs: 1000,
     ejectionSpeed: 40,
     burnSpeed: 220,
@@ -57,7 +55,30 @@ export function createController(group: THREE.Group, scene: THREE.Scene){
     maxLifetimeMs: 15000,
   })
 
-  const meteorVisuals = createHomingMissileVisual(scene)
+  const meteorVioletSystem = createMeteorMissileSystem({
+    maxConcurrent: 2,
+    cooldownMs: 2200,
+    ammo: Number.POSITIVE_INFINITY,
+    ejectionDurationMs: 900,
+    ejectionSpeed: 42,
+    burnSpeed: 225,
+    navigationConstant: 3.6,
+    detonationRadius: 6,
+    smokeTrailIntervalMs: 70,
+    maxLifetimeMs: 15000,
+  })
+
+  const meteorRedVisual = createHomingMissileVisual(scene, {
+    body: 0xff4d4f,
+    emissive: 0xff826a,
+    trail: 0xffc2a1,
+  })
+
+  const meteorVioletVisual = createHomingMissileVisual(scene, {
+    body: 0x8c54ff,
+    emissive: 0xca8dff,
+    trail: 0xd8b4ff,
+  })
 
   const laserSystem = createNeonLaserSystem({
     cooldownMs: 2000,
@@ -66,7 +87,7 @@ export function createController(group: THREE.Group, scene: THREE.Scene){
     attenuation: 0.002,
   })
 
-  const laserVisual = createNeonLaserVisual(scene)
+  const laserVisual = createNeonLaserVisual(scene, { color: 0x61f6ff })
 
   const bombSystem = createBombSystem({
     maxConcurrent: 2,
@@ -79,18 +100,34 @@ export function createController(group: THREE.Group, scene: THREE.Scene){
     gravity: 30,
   })
 
-  let speed = 60
-  let weaponName = 'GATLING'
+  const abilitySystem = createSupportAbilitySystem()
+  const abilityVisuals = createAbilityVisuals(group)
+
+  let baseSpeed = 60
+  let effectiveSpeed = baseSpeed
+  let activeSlot: AbilitySlot = 'METEOR_RED'
   let ammo = gatling.ammo
-  let missiles = missilesSystem.ammo
-  let meteorAmmo = meteorSystem.ammo
+  let missiles = Number.POSITIVE_INFINITY
   let laserCooldownMs = laserSystem.cooldownMs
   let bombArmed = bombSystem.isArmed
+  let hull = abilitySystem.state.heal.hull
+  let shieldActive = abilitySystem.state.shield.active
+  let dashActive = abilitySystem.state.dash.active
+  let ultimateActive = abilitySystem.state.ultimate.active
   let fireHeld = false
   let fireJustPressed = false
   let fireJustReleased = false
-  let meteorHeld = false
-  let meteorJustPressed = false
+  const slotLabels: Record<AbilitySlot, string> = {
+    METEOR_RED: 'METEOR BVRAAM R',
+    METEOR_VIOLET: 'METEOR BVRAAM V',
+    LASER: 'NEON LASER',
+    BOMB: 'GRAV BOMB',
+    GATLING: 'GATLING',
+    SHIELD: 'SHIELD',
+    HEAL: 'HEAL',
+    DASH: 'DASH',
+    ULTIMATE: 'ULTIMATE',
+  }
 
   function update(dt:number, input:any, queryHeight:(x:number,z:number)=>number){
     // Mouse steering: aim reticle in NDC controls yaw/pitch
@@ -100,18 +137,21 @@ export function createController(group: THREE.Group, scene: THREE.Scene){
     group.rotation.x += (targetPitch - group.rotation.x) * (1 - Math.exp(-6*dt))
 
     // Keys
-    if (input.pressed('KeyW')) speed += 40*dt
-    if (input.pressed('KeyS')) speed -= 40*dt
-    if (input.pressed('ShiftLeft')) speed += 80*dt
+    if (input.pressed('KeyW')) baseSpeed += 40*dt
+    if (input.pressed('KeyS')) baseSpeed -= 40*dt
+    if (input.pressed('ShiftLeft')) baseSpeed += 80*dt
     if (input.pressed('KeyQ')) group.rotation.z += 1.2*dt
     if (input.pressed('KeyE')) group.rotation.z -= 1.2*dt
-    speed = Math.max(10, Math.min(160, speed))
+    baseSpeed = Math.max(10, Math.min(160, baseSpeed))
 
     // Integrate
     forward.set(0,0,-1).applyEuler(group.rotation)
-    vel.copy(forward).multiplyScalar(speed)
+    const dashBonus = abilitySystem.state.dash.active ? abilitySystem.state.dash.speedBonus : 0
+    const ultimateBonus = abilitySystem.state.ultimate.active ? abilitySystem.state.dash.speedBonus * 0.5 : 0
+    effectiveSpeed = baseSpeed + dashBonus + ultimateBonus
+    vel.copy(forward).multiplyScalar(effectiveSpeed)
     group.position.addScaledVector(vel, dt)
-    ;(group as any).userData.speed = speed
+    ;(group as any).userData.speed = effectiveSpeed
 
     // Terrain floor constraint
     const floor = queryHeight(group.position.x, group.position.z) + 6
@@ -129,93 +169,118 @@ export function createController(group: THREE.Group, scene: THREE.Scene){
     fireJustPressed = fireHeld && !previouslyHeld
     fireJustReleased = !fireHeld && previouslyHeld
 
-    const previouslyMeteorHeld = meteorHeld
-    meteorHeld = Boolean(input.pressed('Digit1'))
-    meteorJustPressed = meteorHeld && !previouslyMeteorHeld
-
-    // Weapons input (placeholders)
-    if (input.pressed('Digit1')) weaponName = 'GATLING'
-    if (input.pressed('Digit2')) weaponName = 'MISSILE'
-    if (input.pressed('Digit3')) weaponName = 'LASER'
-    if (input.pressed('Digit4')) weaponName = 'BOMB'
+    if (input.pressed('Digit1')) activeSlot = 'METEOR_RED'
+    if (input.pressed('Digit2')) activeSlot = 'METEOR_VIOLET'
+    if (input.pressed('Digit3')) activeSlot = 'LASER'
+    if (input.pressed('Digit4')) activeSlot = 'BOMB'
+    if (input.pressed('Digit5')) activeSlot = 'GATLING'
+    if (input.pressed('Digit6')) activeSlot = 'SHIELD'
+    if (input.pressed('Digit7')) activeSlot = 'HEAL'
+    if (input.pressed('Digit8')) activeSlot = 'DASH'
+    if (input.pressed('Digit9')) activeSlot = 'ULTIMATE'
 
     weaponContext.position.copy(group.position)
     weaponContext.forward.copy(forward)
     weaponContext.dt = dt
     weaponContext.targets = targetProvider()
 
-    if (meteorJustPressed){
-      //1.- Kick the Meteor canister clear of the fuselage when the pilot taps slot one.
-      meteorSystem.tryFire(weaponContext)
+    if (fireJustPressed){
+      switch (activeSlot){
+        case 'METEOR_RED':
+          //1.- Launch a crimson BVRAAM when the red slot is tapped.
+          meteorRedSystem.tryFire(weaponContext)
+          break
+        case 'METEOR_VIOLET':
+          //2.- Dispatch the violet BVRAAM variant with the same keystroke cadence.
+          meteorVioletSystem.tryFire(weaponContext)
+          break
+        case 'LASER':
+          laserSystem.fire(weaponContext)
+          break
+        case 'BOMB':
+          bombSystem.fire({ ...weaponContext, sampleGroundHeight: queryHeight })
+          break
+        case 'GATLING':
+          //3.- Immediate effect handled through the continuous fire branch.
+          break
+        case 'SHIELD':
+          abilitySystem.triggerShield()
+          break
+        case 'HEAL':
+          abilitySystem.triggerHeal()
+          break
+        case 'DASH':
+          abilitySystem.triggerDash()
+          break
+        case 'ULTIMATE':
+          abilitySystem.triggerUltimate()
+          break
+      }
     }
-    meteorSystem.update(weaponContext)
-    //2.- Sync the slow-burn launch visuals so the canister and plume remain authoritative.
-    meteorVisuals.update(meteorSystem.missiles)
 
-    if (weaponName === 'GATLING'){
-      //3.- Advance the hitscan gun and respect trigger state.
+    meteorRedSystem.update(weaponContext)
+    meteorVioletSystem.update(weaponContext)
+    meteorRedVisual.update(meteorRedSystem.missiles)
+    meteorVioletVisual.update(meteorVioletSystem.missiles)
+
+    if (activeSlot === 'GATLING'){
+      //4.- Advance the hitscan gun and respect trigger state when the slot is active.
       gatling.update(weaponContext, fireHeld)
     } else {
       gatling.update(weaponContext, false)
     }
 
-    if (weaponName === 'MISSILE' && fireJustPressed){
-      //4.- Launch homing missiles when ammo and pool constraints allow.
-      missilesSystem.tryFire(weaponContext)
-    }
-    missilesSystem.update(weaponContext)
-    //5.- Mirror the guidance results into the scene so each missile gains a visible shell.
-    missileVisuals.update(missilesSystem.missiles)
-
-    if (weaponName === 'LASER'){
-      if (fireJustPressed){
-        laserSystem.fire(weaponContext)
-      }
+    if (activeSlot === 'LASER'){
       if (fireHeld){
         laserSystem.sustain(weaponContext)
       }
       if (fireJustReleased){
         laserSystem.release()
       }
-    } else {
-      if (laserSystem.state.active){
-        laserSystem.release()
-      }
+    } else if (laserSystem.state.active){
+      laserSystem.release()
     }
     laserSystem.update(weaponContext)
-    //6.- Stretch and orient the neon beam according to the freshly sampled weapon state.
+    //5.- Stretch and orient the neon beam according to the freshly sampled weapon state.
     laserVisual.update(laserSystem.state)
 
-    if (weaponName === 'BOMB' && fireJustPressed){
-      //7.- Drop a bomb while relaying the terrain sampler to trigger ground detonation.
-      bombSystem.fire({ ...weaponContext, sampleGroundHeight: queryHeight })
-    }
     bombSystem.update({ ...weaponContext, sampleGroundHeight: queryHeight })
 
     // Cooldowns
     ammo = gatling.ammo
-    missiles = missilesSystem.ammo
-    meteorAmmo = meteorSystem.ammo
+    missiles = Number.POSITIVE_INFINITY
     laserCooldownMs = laserSystem.cooldownMs
     bombArmed = bombSystem.isArmed
+    abilitySystem.update(dt)
+    abilityVisuals.update(abilitySystem.state, group)
+    hull = abilitySystem.state.heal.hull
+    shieldActive = abilitySystem.state.shield.active
+    dashActive = abilitySystem.state.dash.active
+    ultimateActive = abilitySystem.state.ultimate.active
   }
 
   function dispose(){
-    //8.- Tear down transient weapon meshes so hot swaps between vehicles stay safe.
-    missileVisuals.dispose()
-    meteorVisuals.dispose()
+    //6.- Tear down transient weapon meshes so hot swaps between vehicles stay safe.
+    meteorRedVisual.dispose()
+    meteorVioletVisual.dispose()
     laserVisual.dispose()
+    abilityVisuals.dispose(group)
   }
 
   return {
     update,
-    get speed(){ return speed },
-    get weaponName(){ return weaponName },
+    get speed(){ return effectiveSpeed },
+    get weaponName(){ return slotLabels[activeSlot] },
+    get activeSlot(){ return activeSlot },
     get ammo(){ return ammo },
     get missiles(){ return missiles },
-    get meteorAmmo(){ return meteorAmmo },
     get laserCooldownMs(){ return laserCooldownMs },
     get bombArmed(){ return bombArmed },
+    get abilityState(){ return abilitySystem.state },
+    get hull(){ return hull },
+    get shieldActive(){ return shieldActive },
+    get dashActive(){ return dashActive },
+    get ultimateActive(){ return ultimateActive },
     setTargetProvider(provider: () => WeaponTarget[]){
       targetProvider = provider
     },

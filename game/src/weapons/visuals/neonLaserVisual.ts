@@ -1,6 +1,10 @@
 import * as THREE from 'three'
 import type { NeonLaserState } from '@/weapons/neonLaser'
 
+export type NeonLaserPalette = {
+  color: number
+}
+
 const DEFAULT_FORWARD = new THREE.Vector3(0, 0, 1)
 const TMP_DIRECTION = new THREE.Vector3()
 const TMP_POSITION = new THREE.Vector3()
@@ -12,9 +16,9 @@ export type NeonLaserVisual = {
   readonly beam: THREE.Mesh
 }
 
-export function createNeonLaserVisual(scene: THREE.Scene): NeonLaserVisual {
+export function createNeonLaserVisual(scene: THREE.Scene, palette: NeonLaserPalette = { color: 0x45ffff }): NeonLaserVisual {
   const material = new THREE.MeshBasicMaterial({
-    color: 0x45ffff,
+    color: palette.color,
     transparent: true,
     opacity: 0.75,
     blending: THREE.AdditiveBlending,

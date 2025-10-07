@@ -136,6 +136,35 @@ describe('meteor missile system', () => {
     //2.- Without a contact to chase the missile should be removed once ignition completes.
     expect(system.activeCount).toBe(0)
   })
+
+  it('supports unlimited ammunition when configured with infinity', () => {
+    const system = createMeteorMissileSystem({
+      maxConcurrent: 1,
+      cooldownMs: 0,
+      ammo: Number.POSITIVE_INFINITY,
+      ejectionDurationMs: 200,
+      ejectionSpeed: 30,
+      burnSpeed: 180,
+      navigationConstant: 3,
+      detonationRadius: 5,
+      smokeTrailIntervalMs: 50,
+      maxLifetimeMs: 4000,
+    })
+
+    const target: WeaponTarget = {
+      id: 'alpha',
+      position: new THREE.Vector3(0, 0, -200),
+      velocity: new THREE.Vector3(),
+      alive: true,
+    }
+
+    const context = makeContext({ targets: [target] })
+
+    const fired = system.tryFire(context)
+    expect(fired.fired).toBe(true)
+    //3.- Firing should not reduce the ammo counter when using an infinite pool.
+    expect(system.ammo).toBe(Number.POSITIVE_INFINITY)
+  })
 })
 
 describe('neon laser system', () => {
