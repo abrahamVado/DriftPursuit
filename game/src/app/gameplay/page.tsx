@@ -76,6 +76,7 @@ function GameplayContent() {
         {
           initialVehicle: pilotProfile.vehicle,
           pilotId: pilotProfile.clientId,
+          pilotName: pilotProfile.name,
           worldId: status.worldId,
           mapId: status.mapId
         }
