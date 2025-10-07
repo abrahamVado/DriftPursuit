@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest'
 import * as THREE from 'three'
 import { createEnemy, updateEnemies } from './behavior'
+import { getDifficultyState } from '@/engine/difficulty'
 import { createSpawner } from '@/spawn/spawnTable'
 
 describe('stellated octahedron enemy', () => {
@@ -30,7 +31,7 @@ describe('stellated octahedron enemy', () => {
     enemy.target = target
 
     //2.- Advance the simulation and confirm the enemy drifted towards the target.
-    updateEnemies(scene, 0.5)
+    updateEnemies(scene, 0.5, getDifficultyState())
     expect(enemy.mesh.position.x).toBeGreaterThan(0)
 
     //3.- Invoke the death handler and ensure cleanup removes the mesh from the scene.

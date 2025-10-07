@@ -6,6 +6,7 @@ import { createPlayer } from '@/vehicles/shared/player'
 import { createInput } from '@/ui/inputMap'
 import { createCorridor } from '@/spawn/corridor'
 import { createSpawner } from '@/spawn/spawnTable'
+import { applyBossDefeat, getDifficultyState, onDifficultyChange } from '@/engine/difficulty'
 import type { BrokerIntentSnapshot, BrokerWorldDiffEnvelope } from '@/lib/brokerClient'
 
 export type GameAPI = {
@@ -20,6 +21,7 @@ export type GameAPI = {
     missiles: number
     laserCooldown: number
     bombArmed: boolean
+    difficulty: ReturnType<typeof getDifficultyState>
   }
   ingestWorldDiff: (diff: BrokerWorldDiffEnvelope) => void
   sampleIntent: () => BrokerIntentSnapshot
@@ -81,6 +83,11 @@ export function initGame(container: HTMLDivElement, opts = DEFAULT_SCENE_OPTS, o
   let score = 0
   let latestTick = 0
   let readyFired = false
+  let difficultyState = getDifficultyState()
+  const unsubscribeDifficulty = onDifficultyChange((next) => {
+    //1.- Persist the latest difficulty values so telemetry queries remain in sync with global scaling.
+    difficultyState = next
+  })
 
   function frame(now: number) {
     const dt = Math.min(0.05, (now - last) / 1000)
@@ -120,7 +127,8 @@ export function initGame(container: HTMLDivElement, opts = DEFAULT_SCENE_OPTS, o
       ammo: player.controller.ammo,
       missiles: player.controller.missiles,
       laserCooldown: player.controller.laserCooldownMs,
-      bombArmed: player.controller.bombArmed
+      bombArmed: player.controller.bombArmed,
+      difficulty: difficultyState
     }),
     ingestWorldDiff: (diff) => {
       //1.- Ignore stale or unrelated payloads so the local scene only reacts to advancing authoritative ticks.
@@ -140,6 +148,10 @@ export function initGame(container: HTMLDivElement, opts = DEFAULT_SCENE_OPTS, o
           }
           const stageValue = Number(metadata.stage ?? metadata.stage_index)
           if (!Number.isNaN(stageValue) && stageValue > 0) {
+            if (stageValue > stage) {
+              //1.- Treat forward stage jumps as boss clears and escalate the shared difficulty profile.
+              difficultyState = applyBossDefeat(stageValue)
+            }
             stage = stageValue
           }
         }
@@ -169,6 +181,9 @@ export function initGame(container: HTMLDivElement, opts = DEFAULT_SCENE_OPTS, o
     renderer.dispose()
     container.removeChild(renderer.domElement)
     input.dispose()
+    streamer.dispose?.()
+    spawner.dispose?.()
+    unsubscribeDifficulty?.()
   }
 
   return { api, dispose }
