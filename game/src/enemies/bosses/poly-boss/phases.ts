@@ -167,7 +167,7 @@ export function createPolyBoss(scene: THREE.Scene, position: THREE.Vector3, opti
     difficulty
   }
 
-  let unsubscribe = onDifficultyChange((next) => {
+  let unsubscribe: (() => void) | undefined = onDifficultyChange((next) => {
     //1.- Capture live difficulty adjustments so spawn cadence reacts mid-fight.
     state.difficulty = next
   })
@@ -279,7 +279,8 @@ export function createPolyBoss(scene: THREE.Scene, position: THREE.Vector3, opti
         hp: state.hp,
         shieldStrength: state.shieldStrength,
         timeInPhase: state.timeInPhase,
-        enraged: state.enraged
+        enraged: state.enraged,
+        difficulty: state.difficulty
       }
     },
     takeDamage(amount: number) {
