@@ -176,8 +176,16 @@ export function createEnemy(scene: THREE.Scene, position: THREE.Vector3, options
       userData.pulseTime += dt;
       // Pulse emissive for threat
       const pulse = 0.2 + Math.sin(userData.pulseTime * 3) * 0.1;
-      if (mesh.children[0]?.material) { // Body
-        (mesh.children[0].material as THREE.MeshStandardMaterial).emissiveIntensity = 0.3 + pulse * 0.2;
+      const body = mesh.children[0];
+      if ((body as THREE.Mesh)?.isMesh) { //1.- Safely animate the emissive channel without assuming child typing.
+        const material = (body as THREE.Mesh).material as THREE.MeshStandardMaterial | THREE.MeshStandardMaterial[]
+        if (Array.isArray(material)) {
+          material.forEach((mat) => {
+            mat.emissiveIntensity = 0.3 + pulse * 0.2
+          })
+        } else if (material) {
+          material.emissiveIntensity = 0.3 + pulse * 0.2
+        }
       }
       if (userData.variant === 'sentry') {
         // Sentry: Slow turret rotation only when targeting

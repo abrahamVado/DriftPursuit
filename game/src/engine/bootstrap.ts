@@ -3,6 +3,7 @@ import * as THREE from 'three'
 import { createStreamer } from '@/world/chunks/streamer'
 import { createChaseCam } from '@/camera/chaseCam'
 import { createPlayer } from '@/vehicles/shared/player'
+import { createRemotePlayerManager } from '@/engine/remotePlayers'
 import { createInput } from '@/ui/inputMap'
 import { createCorridor } from '@/spawn/corridor'
 import { createSpawner } from '@/spawn/spawnTable'
@@ -66,6 +67,7 @@ export function initGame(container: HTMLDivElement, opts = DEFAULT_SCENE_OPTS, o
   const input = createInput(container)
   const chase = createChaseCam(camera)
   const streamer = createStreamer(scene)
+  const remotePlayers = createRemotePlayerManager(scene)
 
   // Player (Arrowhead by default)
   const player = createPlayer('arrowhead', scene)
@@ -166,6 +168,11 @@ export function initGame(container: HTMLDivElement, opts = DEFAULT_SCENE_OPTS, o
           }
         }
       }
+
+      //3.- Mirror authoritative vehicle transforms so remote pilots appear alongside the local craft.
+      if (diff.vehicles) {
+        remotePlayers.ingestDiff(diff.vehicles)
+      }
     },
     sampleIntent: () => {
       //3.- Translate the instantaneous input map into the broker intent schema fields.
@@ -193,6 +200,7 @@ export function initGame(container: HTMLDivElement, opts = DEFAULT_SCENE_OPTS, o
     input.dispose()
     streamer.dispose?.()
     spawner.dispose?.()
+    remotePlayers.dispose()
     unsubscribeDifficulty?.()
   }
 
