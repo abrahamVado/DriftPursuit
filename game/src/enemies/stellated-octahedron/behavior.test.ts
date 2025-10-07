@@ -1,6 +1,7 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import * as THREE from 'three'
 import { createEnemy, updateEnemies } from './behavior'
+import { createSpawner } from '@/spawn/spawnTable'
 
 describe('stellated octahedron enemy', () => {
   it('builds a merged enemy mesh and registers it with the scene', () => {
@@ -36,5 +37,34 @@ describe('stellated octahedron enemy', () => {
     const childCountBefore = scene.children.length
     enemy.onDeath()
     expect(scene.children.length).toBe(childCountBefore - 1)
+  })
+
+  it('uses the spawner loop to move newly spawned enemies towards the player', () => {
+    //1.- Prepare the scene, player surrogate, and deterministic randomness for spawn placement.
+    const scene = new THREE.Scene()
+    const playerGroup = new THREE.Object3D()
+    playerGroup.position.set(0, 0, 0)
+    const streamer = { queryHeight: () => 0 }
+    const spawner = createSpawner(scene, { group: playerGroup }, streamer)
+    const randomSpy = vi.spyOn(Math, 'random').mockReturnValue(0.5)
+
+    try {
+      //2.- Run the spawner long enough to instantiate an enemy and capture its initial distance.
+      spawner.update(1, 0)
+      spawner.update(1, 0)
+      spawner.update(1, 0)
+      const enemies = (scene as any).__enemies as any[] | undefined
+      expect(enemies).toBeDefined()
+      expect(enemies!.length).toBeGreaterThan(0)
+      const enemy = enemies![0]
+      const initialDistance = enemy.mesh.position.distanceTo(playerGroup.position)
+
+      //3.- Advance the loop again and confirm the enemy approaches the player target.
+      spawner.update(0.2, 0)
+      const updatedDistance = enemy.mesh.position.distanceTo(playerGroup.position)
+      expect(updatedDistance).toBeLessThan(initialDistance)
+    } finally {
+      randomSpy.mockRestore()
+    }
   })
 })
