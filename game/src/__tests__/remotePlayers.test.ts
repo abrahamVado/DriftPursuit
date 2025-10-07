@@ -14,18 +14,24 @@ describe('remote player manager', () => {
   it('creates and updates remote pilot meshes from vehicle diffs', () => {
     const manager = createRemotePlayerManager(scene)
 
+    //1.- Inject the authoritative snapshot that spawns the remote pilot with its metadata and transform.
     manager.ingestDiff({
       updated: [
         {
           vehicle_id: 'veh-alpha',
           position: { x: 10, y: 5, z: -2 },
           orientation: { yaw_deg: 90, pitch_deg: 15, roll_deg: 5 },
+          profile: { name: 'Nova Prime', vehicle: 'icosahedron' },
         },
       ],
     })
 
     const group = manager.getVehicleGroup('veh-alpha')
     expect(group).toBeDefined()
+    expect(group?.userData.remoteProfile).toEqual({ pilotName: 'Nova Prime', vehicleKey: 'icosahedron' })
+    expect(group?.name).toBe('remote-player:Nova Prime (icosahedron)')
+    expect(group?.children.some((child) => child.name === 'remote-vehicle-icosahedron')).toBe(true)
+
     expect(group?.position.x).toBeCloseTo(10)
     expect(group?.position.y).toBeCloseTo(5)
     expect(group?.position.z).toBeCloseTo(-2)
@@ -33,12 +39,14 @@ describe('remote player manager', () => {
     expect(group?.rotation.x).toBeCloseTo(THREE.MathUtils.degToRad(15))
     expect(group?.rotation.z).toBeCloseTo(THREE.MathUtils.degToRad(5))
 
+    //2.- Apply a follow-up diff to verify incremental transform updates reuse the existing group.
     manager.ingestDiff({
       updated: [
         {
           vehicle_id: 'veh-alpha',
           position: { y: 9 },
           orientation: { roll_deg: 20 },
+          profile: { name: 'Nova Prime', vehicle: 'icosahedron' },
         },
       ],
     })
@@ -48,6 +56,39 @@ describe('remote player manager', () => {
     expect(group?.position.z).toBeCloseTo(-2)
     expect(group?.rotation.z).toBeCloseTo(THREE.MathUtils.degToRad(20))
     expect(manager.activeVehicleIds()).toEqual(['veh-alpha'])
+  })
+
+  it('refreshes vehicle meshes and nameplates when pilot metadata changes', () => {
+    const manager = createRemotePlayerManager(scene)
+
+    //1.- Spawn the initial remote pilot using the arrowhead chassis and placeholder identity.
+    manager.ingestDiff({
+      updated: [
+        {
+          vehicle_id: 'veh-meta',
+          profile: { name: 'Rookie', vehicle: 'arrowhead' },
+        },
+      ],
+    })
+
+    const group = manager.getVehicleGroup('veh-meta')
+    expect(group).toBeDefined()
+    expect(group?.children.some((child) => child.name === 'remote-vehicle-arrowhead')).toBe(true)
+
+    //2.- Deliver a metadata update that swaps both the pilot name and the selected vehicle.
+    manager.ingestDiff({
+      updated: [
+        {
+          vehicle_id: 'veh-meta',
+          profile: { name: 'Ace Pilot', vehicle: 'cube' },
+        },
+      ],
+    })
+
+    expect(group?.userData.remoteProfile).toEqual({ pilotName: 'Ace Pilot', vehicleKey: 'cube' })
+    expect(group?.name).toBe('remote-player:Ace Pilot (cube)')
+    expect(group?.children.some((child) => child.name === 'remote-vehicle-cube')).toBe(true)
+    expect(group?.children.some((child) => child.name === 'remote-vehicle-arrowhead')).toBe(false)
   })
 
   it('removes remote pilot meshes when vehicle ids disappear', () => {
