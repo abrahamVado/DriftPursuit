@@ -88,6 +88,7 @@ type worldDiffEnvelope struct {
 	Vehicles    *vehicleDiffEnvelope    `json:"vehicles,omitempty"`
 	Projectiles *projectileDiffEnvelope `json:"projectiles,omitempty"`
 	Events      []*pb.GameEvent         `json:"events,omitempty"`
+	Occupants   *occupantDiffEnvelope   `json:"occupants,omitempty"`
 }
 
 type timeSyncEnvelope struct {
@@ -142,6 +143,7 @@ type Broker struct {
 	intentValidator *input.Validator
 
 	world              *state.WorldState
+	worldID            string
 	tickCounter        uint64
 	simulatedElapsedNs int64
 
@@ -153,6 +155,8 @@ type Broker struct {
 
 	eventStream  *events.Stream
 	eventEncoder protojson.MarshalOptions
+
+	occupants *vehicleOccupantRegistry
 }
 
 var errRecoveryInProgress = errors.New("state recovery in progress")
@@ -288,11 +292,13 @@ func NewBroker(maxPayloadBytes int64, maxClients int, startedAt time.Time, logge
 		intentStates:        make(map[string]*intentPayload),
 		lastIntentSeqs:      make(map[string]uint64),
 		world:               state.NewWorldState(),
+		worldID:             defaultWorldID,
 		diffSubscribers:     make(map[uint64]chan grpcstream.DiffEvent),
 		replayFrameInterval: time.Second / replayFrameRateHz,
 		tickMonitor:         simulation.NewTickMonitor(),
 		eventStream:         events.NewStream(events.Config{}),
 		eventEncoder:        protojson.MarshalOptions{EmitUnpopulated: true, UseEnumNumbers: true},
+		occupants:           newVehicleOccupantRegistry(),
 	}
 	for _, opt := range opts {
 		if opt != nil {
@@ -362,12 +368,16 @@ func NewBroker(maxPayloadBytes int64, maxClients int, startedAt time.Time, logge
 	return broker
 }
 
-func (b *Broker) storeVehicleState(state *pb.VehicleState) {
+func (b *Broker) storeVehicleState(ownerID string, state *pb.VehicleState) {
 	if b == nil || state == nil || state.VehicleId == "" {
 		return
 	}
 	//1.- Delegate to the world state container to record and mark the update.
 	b.world.Vehicles.Upsert(state)
+	if b.occupants != nil {
+		//2.- Mirror the pilot identity so HUD overlays can render nameplates.
+		b.occupants.Record(ownerID, ownerID, state.VehicleId, state.GetEnergyRemainingPct(), state.GetUpdatedAtMs())
+	}
 }
 
 func (b *Broker) vehicleState(vehicleID string) *pb.VehicleState {
@@ -857,6 +867,8 @@ func (b *Broker) serveWS(w http.ResponseWriter, r *http.Request) {
 		//1.- Immediately inform the client of the persistent match context and roster.
 		b.enqueueMatchStatus(client, joinSnapshot)
 	}
+	//2.- Advertise the authoritative world identifier so every client binds to the same instance.
+	b.enqueueWorldStatus(client)
 
 	// Keepalive: read deadline & pong handler
 	waitDuration := time.Duration(pongWaitMultiplier) * pingInterval
@@ -1022,6 +1034,47 @@ func (b *Broker) enqueueMatchStatus(client *Client, snapshot match.Snapshot) {
 	}
 }
 
+func (b *Broker) enqueueWorldStatus(client *Client) {
+	if b == nil || client == nil {
+		return
+	}
+	payload := struct {
+		Type     string `json:"type"`
+		WorldID  string `json:"world_id"`
+		PlayerID string `json:"player_id"`
+	}{
+		Type:     "world_status",
+		WorldID:  b.worldIdentifier(),
+		PlayerID: client.id,
+	}
+	data, err := json.Marshal(payload)
+	if err != nil {
+		if client.log != nil {
+			client.log.Error("failed to marshal world status", logging.Error(err))
+		}
+		return
+	}
+	//1.- Best-effort enqueue so join handshakes never block the accept loop.
+	select {
+	case client.send <- data:
+	default:
+		if client.log != nil {
+			client.log.Warn("dropping world status message: client buffer full")
+		}
+	}
+}
+
+func (b *Broker) worldIdentifier() string {
+	if b == nil {
+		return defaultWorldID
+	}
+	trimmed := strings.TrimSpace(b.worldID)
+	if trimmed == "" {
+		return defaultWorldID
+	}
+	return trimmed
+}
+
 func (b *Broker) finishRecovery() {
 	if b.snapshotter == nil {
 		b.setStartupError(nil)
@@ -1097,6 +1150,15 @@ func (b *Broker) publishWorldDiff(tick uint64, diff state.TickDiff) {
 		envelope.Vehicles = &vehicleDiffEnvelope{
 			Updated: diff.Vehicles.Updated,
 			Removed: diff.Vehicles.Removed,
+		}
+	}
+
+	if b.occupants != nil {
+		//1.- Refresh occupant overlays so clients can render player nameplates and health bars.
+		updated := b.occupants.SnapshotFor(diff.Vehicles.Updated)
+		removed := b.occupants.ForgetVehicles(diff.Vehicles.Removed)
+		if len(updated) > 0 || len(removed) > 0 {
+			envelope.Occupants = &occupantDiffEnvelope{Updated: updated, Removed: removed}
 		}
 	}
 
@@ -1473,7 +1535,11 @@ func (b *Broker) handleStructuredMessage(client *Client, envelope inboundEnvelop
 		if state.VehicleId == "" {
 			state.VehicleId = envelope.ID
 		}
-		b.storeVehicleState(&state)
+		ownerID := ""
+		if client != nil {
+			ownerID = client.id
+		}
+		b.storeVehicleState(ownerID, &state)
 		return true
 	case "projectile_state":
 		var payload struct {
