@@ -462,7 +462,7 @@ func drainInitialMatchStatus(t *testing.T, ch <-chan wsReadResult) {
 	}
 }
 
-func drainInitialWorldStatus(t *testing.T, ch <-chan wsReadResult) {
+func drainInitialWorldStatus(t *testing.T, ch <-chan wsReadResult) []byte {
 	t.Helper()
 	select {
 	case res := <-ch:
@@ -480,10 +480,12 @@ func drainInitialWorldStatus(t *testing.T, ch <-chan wsReadResult) {
 		if envelope.Type != "world_status" {
 			t.Fatalf("unexpected world status message: %s", res.msg)
 		}
+		return res.msg
 	case <-time.After(time.Second):
 		//3.- Fail fast to avoid leaking goroutines waiting on the initial handshake.
 		t.Fatal("timed out waiting for initial world status")
 	}
+	return nil
 }
 
 func waitForBrokerRecovery(t *testing.T, broker *Broker) {
@@ -511,11 +513,11 @@ func TestServeWSDropsInvalidMessages(t *testing.T) {
 	sender := dialTestWebSocket(t, server.URL)
 	defer sender.Close()
 	drainInitialMatchStatus(t, listenOnce(sender))
-	drainInitialWorldStatus(t, listenOnce(sender))
+	_ = drainInitialWorldStatus(t, listenOnce(sender))
 
 	pending := listenOnce(receiver)
 	drainInitialMatchStatus(t, pending)
-	drainInitialWorldStatus(t, listenOnce(receiver))
+	_ = drainInitialWorldStatus(t, listenOnce(receiver))
 	pending = listenOnce(receiver)
 
 	// Send invalid (non-JSON) message; should be dropped and not broadcast.
@@ -569,11 +571,11 @@ func TestServeWSRejectsOversizedMessages(t *testing.T) {
 	defer sender.Close()
 
 	drainInitialMatchStatus(t, listenOnce(receiver))
-	drainInitialWorldStatus(t, listenOnce(receiver))
+	_ = drainInitialWorldStatus(t, listenOnce(receiver))
 	pending := listenOnce(receiver)
 
 	drainInitialMatchStatus(t, listenOnce(sender))
-	drainInitialWorldStatus(t, listenOnce(sender))
+	_ = drainInitialWorldStatus(t, listenOnce(sender))
 
 	// Build an envelope that exceeds the 64-byte limit.
 	oversized := []byte(fmt.Sprintf(`{"type":"big","id":"%s"}`, strings.Repeat("x", 80)))
@@ -654,6 +656,50 @@ func TestServeWSRejectsOversizedMessages(t *testing.T) {
 		}
 	case <-time.After(time.Second):
 		t.Fatal("timed out waiting for broadcast after oversized message")
+	}
+}
+
+func TestServeWSReportsSharedMapID(t *testing.T) {
+	upgrader.CheckOrigin = func(*http.Request) bool { return true }
+	broker := NewBroker(configpkg.DefaultMaxPayloadBytes, 0, time.Now(), logging.NewTestLogger(), WithMapID("arena-main"))
+
+	server := httptest.NewServer(http.HandlerFunc(broker.serveWS))
+	defer server.Close()
+
+	first := dialTestWebSocket(t, server.URL)
+	defer first.Close()
+	//1.- Let the first pilot complete the handshake so we can capture the announced map identifier.
+	drainInitialMatchStatus(t, listenOnce(first))
+	firstStatus := drainInitialWorldStatus(t, listenOnce(first))
+
+	second := dialTestWebSocket(t, server.URL)
+	defer second.Close()
+	//2.- Establish a second pilot connection to confirm the map announcement stays consistent.
+	drainInitialMatchStatus(t, listenOnce(second))
+	secondStatus := drainInitialWorldStatus(t, listenOnce(second))
+
+	type worldStatus struct {
+		WorldID string `json:"world_id"`
+		MapID   string `json:"map_id"`
+	}
+
+	var firstEnvelope worldStatus
+	if err := json.Unmarshal(firstStatus, &firstEnvelope); err != nil {
+		t.Fatalf("decode first world status: %v", err)
+	}
+	if firstEnvelope.MapID != "arena-main" {
+		t.Fatalf("unexpected map id for first client: %#v", firstEnvelope)
+	}
+
+	var secondEnvelope worldStatus
+	if err := json.Unmarshal(secondStatus, &secondEnvelope); err != nil {
+		t.Fatalf("decode second world status: %v", err)
+	}
+	if secondEnvelope.MapID != firstEnvelope.MapID {
+		t.Fatalf("map id mismatch: first=%q second=%q", firstEnvelope.MapID, secondEnvelope.MapID)
+	}
+	if secondEnvelope.WorldID != firstEnvelope.WorldID {
+		t.Fatalf("world id mismatch: first=%q second=%q", firstEnvelope.WorldID, secondEnvelope.WorldID)
 	}
 }
 
