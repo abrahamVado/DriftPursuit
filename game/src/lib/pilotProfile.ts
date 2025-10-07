@@ -4,7 +4,8 @@ export const VEHICLE_KEYS = [
   'octahedron',
   'pyramid',
   'icosahedron',
-  'cube'
+  'cube',
+  'transformer'
 ] as const
 
 //1.- Expose the vehicle key union for type-safe interactions throughout the game loop.

@@ -4,9 +4,10 @@ import { buildOctahedron } from '@/vehicles/octahedron/build'
 import { buildPyramid } from '@/vehicles/pyramid/build'
 import { buildIcosahedron } from '@/vehicles/icosahedron/build'
 import { buildCube } from '@/vehicles/cube/build'
+import { buildTransformer } from '@/vehicles/transformer/build'
 import { createController } from '@/vehicles/shared/simpleController'
 
-type VehicleKey = 'arrowhead' | 'octahedron' | 'pyramid' | 'icosahedron' | 'cube'
+type VehicleKey = 'arrowhead' | 'octahedron' | 'pyramid' | 'icosahedron' | 'cube' | 'transformer'
 
 export function createPlayer(initial: VehicleKey, scene: THREE.Scene) {
   //1.- Instantiate the player anchor group and populate the builder registry keyed by vehicle ids.
@@ -17,7 +18,8 @@ export function createPlayer(initial: VehicleKey, scene: THREE.Scene) {
     octahedron: buildOctahedron,
     pyramid: buildPyramid,
     icosahedron: buildIcosahedron,
-    cube: buildCube
+    cube: buildCube,
+    transformer: buildTransformer
   }
 
   const resolveVehicle = (key: VehicleKey) => {

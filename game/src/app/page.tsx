@@ -17,7 +17,8 @@ const VEHICLE_LABELS: Record<VehicleKey, string> = {
   octahedron: 'Octahedron',
   pyramid: 'Pyramid',
   icosahedron: 'Icosahedron',
-  cube: 'Cube'
+  cube: 'Cube',
+  transformer: 'Transformer'
 }
 
 export default function LobbyPage() {
