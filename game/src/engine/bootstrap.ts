@@ -137,6 +137,7 @@ export function initGame(
     last = now
 
     // Input → player control
+    player.updateVehicle(dt, input)
     player.controller.update(dt, input, streamer.queryHeight)
 
     //1.- Stream world around the player and refresh chunk fades using the elapsed frame delta.
