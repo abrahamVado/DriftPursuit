@@ -70,8 +70,12 @@ describe("broker client", () => {
     MockWebSocket.reset();
   });
 
-  it("sends a handshake and dispatches world diffs", () => {
-    const client = createBrokerClient({ clientId: "test-pilot", reconnectDelayMs: 0 });
+  it("sends a handshake, pilot profile, and dispatches world diffs", () => {
+    const client = createBrokerClient({
+      clientId: "test-pilot",
+      reconnectDelayMs: 0,
+      pilotProfile: { name: "Test Pilot", vehicle: "arrowhead" },
+    });
     const socket = MockWebSocket.instances[0];
     if (!socket) {
       throw new Error("expected websocket to be constructed");
@@ -83,12 +87,20 @@ describe("broker client", () => {
     });
 
     socket.simulateOpen();
-    expect(socket.sent.length).toBeGreaterThan(0);
+    expect(socket.sent.length).toBeGreaterThan(1);
     const handshake = JSON.parse(socket.sent[0]);
     expect(handshake).toMatchObject({
       type: "observer_state",
       id: "test-pilot",
       schema_version: OBSERVER_SCHEMA_VERSION,
+    });
+
+    const profile = JSON.parse(socket.sent[1]);
+    expect(profile).toMatchObject({
+      type: "pilot_profile",
+      id: "test-pilot",
+      name: "Test Pilot",
+      vehicle: "arrowhead",
     });
 
     socket.simulateMessage(JSON.stringify({ type: "world_diff", tick: 42 }));
@@ -99,7 +111,11 @@ describe("broker client", () => {
   });
 
   it("queues intents until the socket opens", () => {
-    const client = createBrokerClient({ clientId: "queued-pilot", reconnectDelayMs: 0 });
+    const client = createBrokerClient({
+      clientId: "queued-pilot",
+      reconnectDelayMs: 0,
+      pilotProfile: { name: "Queued Pilot", vehicle: "octahedron" },
+    });
     const socket = MockWebSocket.instances[0];
     if (!socket) {
       throw new Error("expected websocket to be constructed");

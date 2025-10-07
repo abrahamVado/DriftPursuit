@@ -74,9 +74,19 @@ type Client struct {
 	eventSub *events.Subscription
 }
 
+type vehicleProfileEnvelope struct {
+	Name    string `json:"name,omitempty"`
+	Vehicle string `json:"vehicle,omitempty"`
+}
+
+type vehicleUpdateEnvelope struct {
+	*pb.VehicleState
+	Profile *vehicleProfileEnvelope `json:"profile,omitempty"`
+}
+
 type vehicleDiffEnvelope struct {
-	Updated []*pb.VehicleState `json:"updated,omitempty"`
-	Removed []string           `json:"removed,omitempty"`
+	Updated []*vehicleUpdateEnvelope `json:"updated,omitempty"`
+	Removed []string                 `json:"removed,omitempty"`
 }
 
 type projectileDiffEnvelope struct {
@@ -395,7 +405,8 @@ func (b *Broker) storeVehicleState(ownerID string, state *pb.VehicleState) {
 	b.world.Vehicles.Upsert(state)
 	if b.occupants != nil {
 		//2.- Mirror the pilot identity so HUD overlays can render nameplates.
-		b.occupants.Record(ownerID, ownerID, state.VehicleId, state.GetEnergyRemainingPct(), state.GetUpdatedAtMs())
+		profile := b.occupants.ProfileForPlayer(ownerID)
+		b.occupants.Record(ownerID, profile.DisplayName, profile.VehicleKey, state.VehicleId, state.GetEnergyRemainingPct(), state.GetUpdatedAtMs())
 	}
 }
 
@@ -1180,8 +1191,28 @@ func (b *Broker) publishWorldDiff(tick uint64, diff state.TickDiff) {
 
 	//1.- Attach vehicle changes when they exist.
 	if len(diff.Vehicles.Updated) > 0 || len(diff.Vehicles.Removed) > 0 {
+		updates := make([]*vehicleUpdateEnvelope, 0, len(diff.Vehicles.Updated))
+		for _, state := range diff.Vehicles.Updated {
+			if state == nil {
+				continue
+			}
+			entry := &vehicleUpdateEnvelope{VehicleState: state}
+			if b.occupants != nil {
+				if profile, ok := b.occupants.ProfileForVehicle(state.GetVehicleId()); ok {
+					name := strings.TrimSpace(profile.DisplayName)
+					vehicleKey := strings.TrimSpace(profile.VehicleKey)
+					if name != "" || vehicleKey != "" {
+						entry.Profile = &vehicleProfileEnvelope{Name: name}
+						if vehicleKey != "" {
+							entry.Profile.Vehicle = vehicleKey
+						}
+					}
+				}
+			}
+			updates = append(updates, entry)
+		}
 		envelope.Vehicles = &vehicleDiffEnvelope{
-			Updated: diff.Vehicles.Updated,
+			Updated: updates,
 			Removed: diff.Vehicles.Removed,
 		}
 	}
@@ -1544,6 +1575,28 @@ func (b *Broker) handleStructuredMessage(client *Client, envelope inboundEnvelop
 			state.ObserverId = envelope.ID
 		}
 		b.tierManager.UpdateObserver(client.id, &state)
+		return true
+	case "pilot_profile":
+		var payload struct {
+			Name    string `json:"name"`
+			Vehicle string `json:"vehicle"`
+		}
+		if err := json.Unmarshal(raw, &payload); err != nil {
+			if client != nil && client.log != nil {
+				client.log.Debug("failed to decode pilot_profile", logging.Error(err))
+			}
+			return true
+		}
+		pilotID := envelope.ID
+		if pilotID == "" && client != nil {
+			pilotID = client.id
+		}
+		if pilotID == "" {
+			return true
+		}
+		if b.occupants != nil {
+			b.occupants.RememberProfile(pilotID, payload.Name, payload.Vehicle)
+		}
 		return true
 	case "entity_snapshot":
 		var snapshot pb.EntitySnapshot
