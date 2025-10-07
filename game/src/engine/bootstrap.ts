@@ -139,7 +139,7 @@ export function initGame(
     player.controller.update(dt, input, streamer.queryHeight)
 
     // Stream world around the player
-    streamer.update(player.group.position)
+    streamer.update(player.group.position, dt)
 
     // Spawning / encounters
     spawner.update(dt, stage)
