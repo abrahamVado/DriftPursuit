@@ -184,4 +184,36 @@ describe('remote player manager', () => {
     expect(group?.userData.remoteOccupant).toBeNull()
     expect(healthGroup?.visible).toBe(false)
   })
+
+  it('swaps the remote chassis when the occupant vehicle key changes', () => {
+    const manager = createRemotePlayerManager(scene)
+
+    //1.- Establish the baseline mesh using the pilot profile before the occupant arrives.
+    manager.ingestDiff({
+      updated: [
+        {
+          vehicle_id: 'veh-chassis',
+          profile: { name: 'Host Pilot', vehicle: 'arrowhead' }
+        }
+      ]
+    })
+
+    const group = manager.getVehicleGroup('veh-chassis')
+    expect(group?.children.some((child) => child.name === 'remote-vehicle-arrowhead')).toBe(true)
+
+    //2.- Apply the occupant diff that overrides the chassis selection through vehicle_key metadata.
+    manager.ingestDiff(undefined, {
+      updated: [
+        {
+          vehicle_id: 'veh-chassis',
+          player_name: 'Co-Driver',
+          vehicle_key: 'transformer'
+        }
+      ]
+    })
+
+    expect(group?.children.some((child) => child.name === 'remote-vehicle-transformer')).toBe(true)
+    expect(group?.children.some((child) => child.name === 'remote-vehicle-arrowhead')).toBe(false)
+    expect(group?.name).toBe('remote-player:Co-Driver (transformer)')
+  })
 })

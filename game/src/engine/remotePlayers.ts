@@ -24,6 +24,7 @@ type OccupantDiffPayload = BrokerOccupantDiff
 type OccupantState = {
   playerName: string | null
   lifePct: number | null
+  vehicleKey?: VehicleKey
 }
 
 type HealthBar = {
@@ -424,7 +425,14 @@ export function createRemotePlayerManager(scene: THREE.Scene): RemotePlayersMana
         : typeof (entry as Record<string, unknown>).lifePct === 'number' && Number.isFinite((entry as Record<string, unknown>).lifePct)
           ? THREE.MathUtils.clamp((entry as Record<string, unknown>).lifePct as number, 0, 1)
           : null
-    return { id: vehicleId, state: { playerName, lifePct } }
+    const rawVehicleKey =
+      typeof entry.vehicle_key === 'string'
+        ? entry.vehicle_key
+        : typeof (entry as Record<string, unknown>).vehicleKey === 'string'
+          ? String((entry as Record<string, unknown>).vehicleKey)
+          : null
+    const vehicleKey = rawVehicleKey ? normalizeVehicleChoice(rawVehicleKey) : undefined
+    return { id: vehicleId, state: { playerName, lifePct, vehicleKey } }
   }
 
   function ingestOccupants(diff?: OccupantDiffPayload | null) {
@@ -460,10 +468,15 @@ export function createRemotePlayerManager(scene: THREE.Scene): RemotePlayersMana
         if (!parsed) {
           continue
         }
-        const previous = occupantRegistry.get(parsed.id) ?? { playerName: null, lifePct: null }
+        const previous = occupantRegistry.get(parsed.id) ?? { playerName: null, lifePct: null, vehicleKey: undefined }
         const next: OccupantState = {
           playerName: parsed.state.playerName ?? previous.playerName,
-          lifePct: parsed.state.lifePct ?? previous.lifePct
+          lifePct: parsed.state.lifePct ?? previous.lifePct,
+          vehicleKey: parsed.state.vehicleKey ?? previous.vehicleKey
+        }
+        const vessel = registry.get(parsed.id)
+        if (vessel && next.vehicleKey && next.vehicleKey !== vessel.profile.vehicleKey) {
+          updateRemoteVehicle(vessel, { ...vessel.profile, vehicleKey: next.vehicleKey })
         }
         occupantRegistry.set(parsed.id, next)
         applyOccupantToVehicle(parsed.id)
