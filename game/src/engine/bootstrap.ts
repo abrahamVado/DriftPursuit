@@ -138,7 +138,7 @@ export function initGame(
     // Input → player control
     player.controller.update(dt, input, streamer.queryHeight)
 
-    // Stream world around the player
+    //1.- Stream world around the player and refresh chunk fades using the elapsed frame delta.
     streamer.update(player.group.position, dt)
 
     // Spawning / encounters
