@@ -1,12 +1,12 @@
 //1.- Define the canonical set of vehicle options that the lobby and engine agree on.
 export const VEHICLE_KEYS = [
+  'tank',
   'arrowhead',
   'octahedron',
   'pyramid',
   'icosahedron',
   'cube',
-  'transformer',
-  'tank'
+  'transformer'
 ] as const
 
 //1.- Expose the vehicle key union for type-safe interactions throughout the game loop.

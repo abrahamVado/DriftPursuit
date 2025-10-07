@@ -53,4 +53,16 @@ describe('LobbyPage validation', () => {
     const values = options.map((option) => option.getAttribute('value'))
     expect(values).toContain('tank')
   })
+
+  it('presents the tank as the leading vehicle option', () => {
+    //1.- Render the lobby to expose the vehicle dropdown in its initial ordering.
+    render(<LobbyPage />)
+
+    //2.- Collect the ordered option values so we can verify the hangar promotes the tank first.
+    const options = screen.getAllByRole('option')
+    const values = options.map((option) => option.getAttribute('value'))
+
+    //3.- Confirm the first entry corresponds to the tank so pilots encounter it at the top of the list.
+    expect(values[0]).toBe('tank')
+  })
 })
