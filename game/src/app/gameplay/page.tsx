@@ -7,6 +7,7 @@ import { createBrokerClient } from '@/lib/brokerClient'
 import { HUD } from '@/components/HUD'
 import { LoadingOverlay } from '@/components/LoadingOverlay'
 import { createPilotProfile } from '@/lib/pilotProfile'
+import { createPresenceChannel } from '@/lib/presenceChannel'
 
 export const dynamic = 'force-dynamic'
 
@@ -53,11 +54,42 @@ export default function GameplayPage() {
     }
     pumpIntent()
 
+    //4.- Mirror the local pilot over a BroadcastChannel so parallel tabs manifest as remote players.
+    const presence = createPresenceChannel({ clientId: pilotProfile.clientId })
+    const unsubscribePresence = presence.subscribe((message) => {
+      if (message.type === 'update') {
+        apiRef.current?.ingestPresenceSnapshot(message.snapshot)
+      } else if (message.type === 'leave') {
+        apiRef.current?.removeRemoteVehicle(message.vehicleId)
+      }
+    })
+    let presenceTimer: ReturnType<typeof setTimeout> | null = null
+    const pumpPresence = () => {
+      if (stopped) return
+      const snapshot = apiRef.current?.samplePresence()
+      if (snapshot) {
+        presence.publish(snapshot)
+      }
+      presenceTimer = setTimeout(pumpPresence, 150)
+    }
+    pumpPresence()
+
+    const announceDeparture = () => {
+      const snapshot = apiRef.current?.samplePresence()
+      presence.announceDeparture(snapshot?.vehicle_id ?? pilotProfile.clientId)
+    }
+    window.addEventListener('beforeunload', announceDeparture)
+
     return () => {
       stopped = true
       if (intentTimer) clearTimeout(intentTimer)
+      if (presenceTimer) clearTimeout(presenceTimer)
       unsubscribe()
       broker.close()
+      announceDeparture()
+      unsubscribePresence()
+      presence.close()
+      window.removeEventListener('beforeunload', announceDeparture)
       dispose()
     }
   }, [pilotProfile.clientId, pilotProfile.vehicle])
