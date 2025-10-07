@@ -150,8 +150,8 @@ export function createController(group: THREE.Group, scene: THREE.Scene){
   computeLauncherClearance()
 
   function update(dt:number, input:any, queryHeight:(x:number,z:number)=>number){
-    // Mouse steering: aim reticle in NDC controls yaw/pitch
-    const targetYaw = input.mouse.x * 0.6
+    //1.- Mouse steering: aim reticle in NDC controls yaw/pitch with inverted horizontal response.
+    const targetYaw = input.mouse.x * -0.6
     const targetPitch = input.mouse.y * 0.4
     group.rotation.y += (targetYaw - group.rotation.y) * (1 - Math.exp(-6*dt))
     group.rotation.x += (targetPitch - group.rotation.x) * (1 - Math.exp(-6*dt))
