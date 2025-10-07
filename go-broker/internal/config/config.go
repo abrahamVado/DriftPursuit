@@ -74,6 +74,7 @@ type Config struct {
 	ReplayRetentionMatches int
 	ReplayRetentionDays    int
 	MatchSeed              string
+	MapID                  string
 	TerrainParams          map[string]float64
 	Logging                LoggingConfig
 	StateSnapshotPath      string
@@ -118,6 +119,7 @@ func Load() (*Config, error) {
 		ReplayRetentionMatches: DefaultReplayRetentionMatches,
 		ReplayRetentionDays:    DefaultReplayRetentionDays,
 		MatchSeed:              strings.TrimSpace(os.Getenv("BROKER_MATCH_SEED")),
+		MapID:                  strings.TrimSpace(os.Getenv("BROKER_MAP_ID")),
 		Logging: LoggingConfig{
 			Level:      strings.TrimSpace(getString("BROKER_LOG_LEVEL", DefaultLogLevel)),
 			Path:       strings.TrimSpace(getString("BROKER_LOG_PATH", DefaultLogPath)),

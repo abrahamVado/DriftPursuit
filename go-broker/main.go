@@ -54,6 +54,8 @@ const (
 	hudEventBuffer      = 64
 )
 
+const defaultMapID = "map-1"
+
 var pingInterval = configpkg.DefaultPingInterval
 var timeSyncInterval = time.Second
 
@@ -144,6 +146,7 @@ type Broker struct {
 
 	world              *state.WorldState
 	worldID            string
+	mapID              string
 	tickCounter        uint64
 	simulatedElapsedNs int64
 
@@ -167,6 +170,21 @@ type BrokerOption func(*Broker)
 func WithSnapshotter(snapshotter *StateSnapshotter) BrokerOption {
 	return func(b *Broker) {
 		b.snapshotter = snapshotter
+	}
+}
+
+// WithMapID overrides the default map identifier broadcast during handshake so all pilots load the same arena layout.
+func WithMapID(mapID string) BrokerOption {
+	return func(b *Broker) {
+		if b == nil {
+			return
+		}
+		//1.- Persist the caller supplied map identifier after trimming surrounding whitespace.
+		trimmed := strings.TrimSpace(mapID)
+		if trimmed == "" {
+			return
+		}
+		b.mapID = trimmed
 	}
 }
 
@@ -293,6 +311,7 @@ func NewBroker(maxPayloadBytes int64, maxClients int, startedAt time.Time, logge
 		lastIntentSeqs:      make(map[string]uint64),
 		world:               state.NewWorldState(),
 		worldID:             defaultWorldID,
+		mapID:               defaultMapID,
 		diffSubscribers:     make(map[uint64]chan grpcstream.DiffEvent),
 		replayFrameInterval: time.Second / replayFrameRateHz,
 		tickMonitor:         simulation.NewTickMonitor(),
@@ -1041,10 +1060,12 @@ func (b *Broker) enqueueWorldStatus(client *Client) {
 	payload := struct {
 		Type     string `json:"type"`
 		WorldID  string `json:"world_id"`
+		MapID    string `json:"map_id"`
 		PlayerID string `json:"player_id"`
 	}{
 		Type:     "world_status",
 		WorldID:  b.worldIdentifier(),
+		MapID:    b.mapIdentifier(),
 		PlayerID: client.id,
 	}
 	data, err := json.Marshal(payload)
@@ -1071,6 +1092,18 @@ func (b *Broker) worldIdentifier() string {
 	trimmed := strings.TrimSpace(b.worldID)
 	if trimmed == "" {
 		return defaultWorldID
+	}
+	return trimmed
+}
+
+func (b *Broker) mapIdentifier() string {
+	if b == nil {
+		return defaultMapID
+	}
+	//1.- Strip whitespace so equivalent map identifiers collapse to the canonical token.
+	trimmed := strings.TrimSpace(b.mapID)
+	if trimmed == "" {
+		return defaultMapID
 	}
 	return trimmed
 }
@@ -1809,6 +1842,10 @@ func main() {
 	}
 
 	brokerOptions = append(brokerOptions, WithMatchMetadata(cfg.MatchSeed, replay.TerrainParameters(cfg.TerrainParams)))
+	if strings.TrimSpace(cfg.MapID) != "" {
+		//1.- Surface the configured map identifier so every client binds to the shared arena.
+		brokerOptions = append(brokerOptions, WithMapID(cfg.MapID))
+	}
 
 	switch cfg.WSAuthMode {
 	case configpkg.WSAuthModeHMAC:
