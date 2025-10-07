@@ -123,6 +123,8 @@ export function createController(group: THREE.Group, scene: THREE.Scene){
 
   let baseSpeed = 60
   let effectiveSpeed = baseSpeed
+  let yaw = group.rotation.y
+  let pitch = group.rotation.x
   let activeSlot: AbilitySlot = 'METEOR_RED'
   let ammo = gatling.ammo
   let missiles = Number.POSITIVE_INFINITY
@@ -150,11 +152,27 @@ export function createController(group: THREE.Group, scene: THREE.Scene){
   computeLauncherClearance()
 
   function update(dt:number, input:any, queryHeight:(x:number,z:number)=>number){
-    //1.- Mouse steering: aim reticle in NDC controls yaw/pitch with inverted horizontal response.
-    const targetYaw = input.mouse.x * -0.6
-    const targetPitch = input.mouse.y * 0.4
-    group.rotation.y += (targetYaw - group.rotation.y) * (1 - Math.exp(-6*dt))
-    group.rotation.x += (targetPitch - group.rotation.x) * (1 - Math.exp(-6*dt))
+    //1.- Mouse steering: accumulate pointer-lock deltas for yaw while clamping pitch and fall back to NDC when unlocked.
+    const pointer = input.pointer as undefined | { locked: boolean; deltaX: number; deltaY: number; yaw: number; pitch: number }
+    const pitchLimit = THREE.MathUtils.degToRad(35)
+    if (pointer?.locked){
+      yaw += pointer.deltaX * -0.0025
+      pitch += pointer.deltaY * 0.002
+      pitch = THREE.MathUtils.clamp(pitch, -pitchLimit, pitchLimit)
+      pointer.yaw = yaw
+      pointer.pitch = pitch
+      pointer.deltaX = 0
+      pointer.deltaY = 0
+    } else {
+      const targetYaw = input.mouse.x * -0.6
+      const targetPitch = input.mouse.y * 0.4
+      yaw += (targetYaw - yaw) * (1 - Math.exp(-6*dt))
+      pitch += (targetPitch - pitch) * (1 - Math.exp(-6*dt))
+      pitch = THREE.MathUtils.clamp(pitch, -pitchLimit, pitchLimit)
+    }
+
+    group.rotation.y = yaw
+    group.rotation.x = pitch
 
     // Keys
     if (input.pressed('KeyW')) baseSpeed += 40*dt
