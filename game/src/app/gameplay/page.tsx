@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useMemo, useRef, useState } from 'react'
+import React, { Suspense, useEffect, useMemo, useRef, useState } from 'react'
 import { useSearchParams } from 'next/navigation'
 import { initGame, type GameAPI, DEFAULT_SCENE_OPTS } from '@/engine/bootstrap'
 import { createBrokerClient } from '@/lib/brokerClient'
@@ -11,7 +11,7 @@ import { createPresenceChannel } from '@/lib/presenceChannel'
 
 export const dynamic = 'force-dynamic'
 
-export default function GameplayPage() {
+function GameplayContent() {
   const mountRef = useRef<HTMLDivElement>(null)
   const apiRef = useRef<GameAPI | null>(null)
   const [ready, setReady] = useState(false)
@@ -28,7 +28,7 @@ export default function GameplayPage() {
 
     setReady(false)
 
-    //1.- Maintain lifecycle guards so timers, subscriptions, and the scene graph unwind cleanly during teardown.
+    //2.- Maintain lifecycle guards so timers, subscriptions, and the scene graph unwind cleanly during teardown.
     let started = false
     let stopped = false
     let intentTimer: ReturnType<typeof setTimeout> | null = null
@@ -41,7 +41,7 @@ export default function GameplayPage() {
     let beforeUnloadBound = false
     let announceDeparture: () => void = () => {}
 
-    //2.- Establish the broker connection immediately so the world status handshake can arrive before the scene spins up.
+    //3.- Establish the broker connection immediately so the world status handshake can arrive before the scene spins up.
     const broker = createBrokerClient({
       clientId: pilotProfile.clientId,
       pilotProfile: { name: pilotProfile.name, vehicle: pilotProfile.vehicle }
@@ -68,7 +68,7 @@ export default function GameplayPage() {
       unsubscribeWorldStatus?.()
       unsubscribeWorldStatus = null
 
-      //3.- Bootstrap the local scene graph once the broker reveals the deterministic world identifiers.
+      //4.- Bootstrap the local scene graph once the broker reveals the deterministic world identifiers.
       const { api, dispose } = initGame(
         mountRef.current,
         DEFAULT_SCENE_OPTS,
@@ -83,7 +83,7 @@ export default function GameplayPage() {
       apiRef.current = api
       disposeGame = dispose
 
-      //4.- Mirror authoritative world diffs and intention frames through the freshly initialised API surface.
+      //5.- Mirror authoritative world diffs and intention frames through the freshly initialised API surface.
       unsubscribeWorldDiff = broker.onWorldDiff((diff) => {
         apiRef.current?.ingestWorldDiff(diff)
       })
@@ -98,7 +98,7 @@ export default function GameplayPage() {
       }
       pumpIntent()
 
-      //5.- Broadcast local pilot presence so sibling tabs can project this client as a remote craft.
+      //6.- Broadcast local pilot presence so sibling tabs can project this client as a remote craft.
       presence = createPresenceChannel({ clientId: pilotProfile.clientId })
       unsubscribePresence = presence.subscribe((message) => {
         if (message.type === 'update') {
@@ -159,5 +159,14 @@ export default function GameplayPage() {
         getMinimapSnapshot={() => apiRef.current?.sampleTransforms?.() ?? null}
       />
     </div>
+  )
+}
+
+export default function GameplayPage() {
+  //1.- Guarantee the suspense boundary wraps the search-param consumer so Next.js can hydrate safely.
+  return (
+    <Suspense fallback={<div data-testid="gameplay-suspense-fallback" />}> 
+      <GameplayContent />
+    </Suspense>
   )
 }
