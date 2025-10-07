@@ -48,5 +48,9 @@ describe('LobbyPage validation', () => {
     const options = screen.getAllByRole('option')
     const labels = options.map((option) => option.textContent)
     expect(labels).toContain('Tank (Planetform)')
+
+    //3.- Assert the select element exposes the explicit tank value so gameplay receives the correct key.
+    const values = options.map((option) => option.getAttribute('value'))
+    expect(values).toContain('tank')
   })
 })
